@@ -66,7 +66,8 @@ GATE_FNS = (
 )
 
 # Una funcion que ES el gate puede lanzar 42501; una de negocio, no.
-ES_GATE = re.compile(r"^fn_(assert_|puede_)|_gate_|_puede_|_alcanza$|^fn_planeador_alcanza$", re.I)
+# fn_<dominio>_assert_* es el assert de fila que llama el wrapper (autoria, carga).
+ES_GATE = re.compile(r"^fn_(assert_|puede_)|^fn_\w+_assert_|_gate_|_puede_|_alcanza$|^fn_planeador_alcanza$", re.I)
 # Cualquier helper de permisos, no solo los de GATE_FNS (que existen para
 # GATE-TILDES porque reciben un CODIGO de menu literal).
 LLAMA_A_GATE = re.compile(r"\bfn_(assert_\w+|\w*_gate_\w+|planeador_assert_alcance|"
@@ -410,7 +411,8 @@ def version_of(path: Path) -> float:
     if not m:
         return -1.0
     parts = m.group(1).split(".")
-    return float(parts[0]) + (float("0." + "".join(parts[1:])) if len(parts) > 1 else 0.0)
+    # Orden de Flyway: V496.15 va despues de V496.6; cada parte decimal ocupa 3 cifras.
+    return float(parts[0]) + sum(int(p) / 1000 ** i for i, p in enumerate(parts[1:], 1))
 
 
 def main() -> int:

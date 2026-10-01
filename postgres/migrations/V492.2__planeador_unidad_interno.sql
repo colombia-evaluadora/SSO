@@ -6,12 +6,19 @@
 -- los wrappers de V492.3 y fn_actividad_actualizar_interno (V479).
 -- p_pk_usuario_solicitante solo firma CREATED_BY/MODIFIED_BY.
 -- Reemplaza fn_unidad_rubrica_asegurar (V222), que llevaba el gate dentro.
+-- Contenidos con título (§4), cesión (27), Ponderar→Sumatoria (18), listado
+-- de actividades por autor (25c) y resumen de afectadas (28).
 -- Depende de: V492.1, V223 (reparto por Sumatoria), V451 (referente
 -- aplicable), V455 (escala de la unidad), V483 (mínimos diferidos).
 
 SET search_path TO academico_test, public;
 
 DROP FUNCTION IF EXISTS academico_test.fn_unidad_rubrica_asegurar(BIGINT, BIGINT);
+-- Cambian de aridad o de tipo de retorno (§4, títulos de sección).
+DROP FUNCTION IF EXISTS academico_test.fn_unidad_contenidos_reemplazar_interno(BIGINT, BIGINT, VARCHAR[]);
+DROP FUNCTION IF EXISTS academico_test.fn_unidad_contenidos_listar_interno(BIGINT);
+DROP FUNCTION IF EXISTS academico_test.fn_unidad_crear_interno(BIGINT, VARCHAR, BIGINT, BIGINT, BIGINT, BIGINT, VARCHAR, BIGINT, VARCHAR[], VARCHAR[], BIGINT[], NUMERIC);
+DROP FUNCTION IF EXISTS academico_test.fn_unidad_actualizar_interno(BIGINT, BIGINT, VARCHAR, VARCHAR, BIGINT, BIGINT, BIGINT, BIGINT, BIGINT, BOOLEAN, VARCHAR[], VARCHAR[], NUMERIC, BOOLEAN, BIGINT[]);
 
 -- ---------------------------------------------------------------------------
 -- Referente efectivo de la unidad
@@ -92,7 +99,8 @@ $$;
 CREATE OR REPLACE FUNCTION academico_test.fn_unidad_contenidos_reemplazar_interno(
     p_pk_usuario_solicitante BIGINT,
     p_pk_tunidad             BIGINT,
-    p_contenidos             VARCHAR[]
+    p_contenidos             VARCHAR[],
+    p_titulos                VARCHAR[]
 )
 RETURNS VOID
 LANGUAGE plpgsql
@@ -105,11 +113,10 @@ BEGIN
        SET ACTIVE = FALSE, MODIFIED_BY = p_pk_usuario_solicitante::VARCHAR, MODIFIED_AT = CURRENT_TIMESTAMP
      WHERE FK_TUNIDAD = p_pk_tunidad AND ACTIVE = TRUE;
 
-    INSERT INTO academico_test.TUNIDAD_CONTENIDO (FK_TUNIDAD, ORDEN, DESCRIPCION, CREATED_BY, CREATED_AT, ACTIVE)
-    SELECT p_pk_tunidad, ROW_NUMBER() OVER (ORDER BY c.pos), TRIM(c.txt),
+    INSERT INTO academico_test.TUNIDAD_CONTENIDO (FK_TUNIDAD, ORDEN, TITULO, DESCRIPCION, CREATED_BY, CREATED_AT, ACTIVE)
+    SELECT p_pk_tunidad, c.pos, TRIM(p_titulos[c.pos]), TRIM(c.txt),
            p_pk_usuario_solicitante::VARCHAR, CURRENT_TIMESTAMP, TRUE
-      FROM unnest(p_contenidos) WITH ORDINALITY AS c(txt, pos)
-     WHERE NULLIF(TRIM(c.txt), '') IS NOT NULL;
+      FROM unnest(p_contenidos) WITH ORDINALITY AS c(txt, pos);
 END;
 $$;
 
@@ -308,6 +315,52 @@ BEGIN
 END;
 $$;
 
+-- Regla 18, Ponderar → Sumatoria: xᵢ = Pᵢ/100 × Eₘₐₓ. Eₘₐₓ (escala máxima de
+-- puntos del grupo) aún no es configurable; 100 lo fija el documento y
+-- este es el único sitio a cambiar.
+CREATE OR REPLACE FUNCTION academico_test.fn_unidad_sumatoria_puntaje_maximo(
+    p_pk_tunidad BIGINT,
+    p_fk_tgrupo  BIGINT
+)
+RETURNS NUMERIC
+LANGUAGE sql
+STABLE
+AS $$
+    SELECT 100::NUMERIC;
+$$;
+
+-- Entero (NOTA_MAXIMA es NUMERIC(3)); el residuo del redondeo va a la de mayor
+-- peso (la última si empatan). Si la unidad sumaba 80 %, los puntos suman
+-- 0,8 × Eₘₐₓ: no se completa a 100.
+CREATE OR REPLACE FUNCTION academico_test.fn_unidad_sumatoria_desde_ponderacion_interno(
+    p_pk_usuario_solicitante BIGINT,
+    p_pk_tunidad             BIGINT
+)
+RETURNS VOID
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    WITH base AS (
+        SELECT a.PK_TACTIVIDAD, a.FK_TGRUPO,
+               a.PONDERACION / 100 * academico_test.fn_unidad_sumatoria_puntaje_maximo(p_pk_tunidad, a.FK_TGRUPO) AS exacto
+          FROM academico_test.TACTIVIDAD a
+         WHERE a.FK_TUNIDAD = p_pk_tunidad AND a.ACTIVE = TRUE AND a.PONDERACION IS NOT NULL
+    ), ajuste AS (
+        SELECT b.PK_TACTIVIDAD, ROUND(b.exacto) AS puntos,
+               ROUND(SUM(b.exacto) OVER w) - SUM(ROUND(b.exacto)) OVER w AS delta,
+               row_number() OVER (PARTITION BY b.FK_TGRUPO ORDER BY b.exacto DESC, b.PK_TACTIVIDAD DESC) AS rn
+          FROM base b
+        WINDOW w AS (PARTITION BY b.FK_TGRUPO)
+    )
+    UPDATE academico_test.TACTIVIDAD a
+       SET NOTA_MAXIMA = aj.puntos + CASE WHEN aj.rn = 1 THEN aj.delta ELSE 0 END,
+           MODIFIED_BY = p_pk_usuario_solicitante::VARCHAR,
+           MODIFIED_AT = CURRENT_TIMESTAMP
+      FROM ajuste aj
+     WHERE a.PK_TACTIVIDAD = aj.PK_TACTIVIDAD;
+END;
+$$;
+
 -- ---------------------------------------------------------------------------
 -- Unidad: crear / actualizar / eliminar
 -- ---------------------------------------------------------------------------
@@ -324,7 +377,8 @@ CREATE OR REPLACE FUNCTION academico_test.fn_unidad_crear_interno(
     p_objetivos                 VARCHAR[] DEFAULT NULL,
     p_contenidos                VARCHAR[] DEFAULT NULL,
     p_enunciados                BIGINT[]  DEFAULT NULL,
-    p_ponderacion               NUMERIC   DEFAULT NULL
+    p_ponderacion               NUMERIC   DEFAULT NULL,
+    p_contenidos_titulos        VARCHAR[] DEFAULT NULL
 )
 RETURNS BIGINT
 LANGUAGE plpgsql
@@ -336,10 +390,12 @@ BEGIN
     PERFORM academico_test.fn_unidad_validar_campos(
         NULL, p_nombre, p_descripcion, p_fk_tasignatura, p_fk_tgrado, p_fk_tfuncionario,
         p_fk_tlv_calculo_definitiva, p_objetivos, p_contenidos, p_ponderacion);
+    PERFORM academico_test.fn_unidad_validar_contenidos_titulos(p_contenidos, p_contenidos_titulos);
 
     v_referente := academico_test.fn_unidad_referente_efectivo_interno(
         NULL, p_fk_tgrado, p_fk_tasignatura, p_fk_referente_curricular);
 
+    PERFORM academico_test.fn_unidad_validar_calculo_requerido(p_fk_tlv_calculo_definitiva, v_referente);
     PERFORM academico_test.fn_unidad_validar_coherencia(
         NULL, TRIM(p_nombre), p_fk_tasignatura, p_fk_tgrado, v_referente, p_ponderacion, TRUE);
 
@@ -355,7 +411,8 @@ BEGIN
     RETURNING PK_TUNIDAD INTO v_pk;
 
     PERFORM academico_test.fn_unidad_objetivos_reemplazar_interno(p_pk_usuario_solicitante, v_pk, p_objetivos);
-    PERFORM academico_test.fn_unidad_contenidos_reemplazar_interno(p_pk_usuario_solicitante, v_pk, p_contenidos);
+    PERFORM academico_test.fn_unidad_contenidos_reemplazar_interno(
+        p_pk_usuario_solicitante, v_pk, p_contenidos, p_contenidos_titulos);
     PERFORM academico_test.fn_unidad_enunciados_reemplazar_interno(p_pk_usuario_solicitante, v_pk, p_enunciados);
 
     RETURN v_pk;
@@ -378,7 +435,8 @@ CREATE OR REPLACE FUNCTION academico_test.fn_unidad_actualizar_interno(
     p_contenidos                VARCHAR[] DEFAULT NULL,
     p_ponderacion               NUMERIC   DEFAULT NULL,
     p_limpiar_ponderacion       BOOLEAN   DEFAULT FALSE,
-    p_enunciados                BIGINT[]  DEFAULT NULL
+    p_enunciados                BIGINT[]  DEFAULT NULL,
+    p_contenidos_titulos        VARCHAR[] DEFAULT NULL
 )
 RETURNS BIGINT
 LANGUAGE plpgsql
@@ -399,6 +457,7 @@ BEGIN
     PERFORM academico_test.fn_unidad_validar_campos(
         p_pk_tunidad, p_nombre, p_descripcion, p_fk_tasignatura, p_fk_tgrado, p_fk_tfuncionario,
         p_fk_tlv_calculo_definitiva, p_objetivos, p_contenidos, p_ponderacion);
+    PERFORM academico_test.fn_unidad_validar_contenidos_titulos(p_contenidos, p_contenidos_titulos);
 
     SELECT * INTO v_actual FROM academico_test.TUNIDAD WHERE PK_TUNIDAD = p_pk_tunidad;
     v_nombre      := COALESCE(NULLIF(TRIM(p_nombre), ''), v_actual.NOMBRE);
@@ -410,8 +469,11 @@ BEGIN
     v_referente   := academico_test.fn_unidad_referente_efectivo_interno(
                          p_pk_tunidad, v_grado, v_asig, p_fk_referente_curricular, p_limpiar_referente);
 
+    PERFORM academico_test.fn_unidad_validar_calculo_requerido(
+        COALESCE(p_fk_tlv_calculo_definitiva, v_actual.FK_TLV_CALCULO_DEFINITIVA), v_referente);
     PERFORM academico_test.fn_unidad_validar_coherencia(
         p_pk_tunidad, v_nombre, v_asig, v_grado, v_referente, v_ponderacion, p_ponderacion IS NOT NULL);
+    PERFORM academico_test.fn_unidad_validar_cesion(p_pk_tunidad, p_fk_tfuncionario, v_asig, v_grado);
 
     v_modo_previo := academico_test.fn_unidad_calculo_definitiva_modo(p_pk_tunidad);
 
@@ -430,18 +492,23 @@ BEGIN
      WHERE PK_TUNIDAD = p_pk_tunidad;
 
     PERFORM academico_test.fn_unidad_objetivos_reemplazar_interno(p_pk_usuario_solicitante, p_pk_tunidad, p_objetivos);
-    PERFORM academico_test.fn_unidad_contenidos_reemplazar_interno(p_pk_usuario_solicitante, p_pk_tunidad, p_contenidos);
+    PERFORM academico_test.fn_unidad_contenidos_reemplazar_interno(
+        p_pk_usuario_solicitante, p_pk_tunidad, p_contenidos, p_contenidos_titulos);
 
     IF v_referente IS DISTINCT FROM v_actual.FK_REFERENTE_CURRICULAR THEN
         PERFORM academico_test.fn_unidad_enunciados_depurar_interno(p_pk_usuario_solicitante, p_pk_tunidad);
     END IF;
     PERFORM academico_test.fn_unidad_enunciados_reemplazar_interno(p_pk_usuario_solicitante, p_pk_tunidad, p_enunciados);
 
-    -- Regla 18: el peso que las actividades traían del criterio anterior no
-    -- significa lo mismo en el nuevo. Promediar no lleva peso; Sumatoria lo
-    -- deriva del puntaje; Ponderar conserva el reparto si venía de Sumatoria.
+    -- Regla 18: Promediar no lleva peso; Sumatoria lo deriva del puntaje, que
+    -- viniendo de Ponderar se calcula antes de borrar los pesos; Ponderar
+    -- conserva el reparto si venía de Sumatoria.
     v_modo_nuevo := academico_test.fn_unidad_calculo_definitiva_modo(p_pk_tunidad);
     IF v_modo_nuevo IS DISTINCT FROM v_modo_previo THEN
+        IF v_modo_nuevo = 'SUMATORIA' AND v_modo_previo = 'PONDERAR' THEN
+            PERFORM academico_test.fn_unidad_sumatoria_desde_ponderacion_interno(p_pk_usuario_solicitante, p_pk_tunidad);
+        END IF;
+
         UPDATE academico_test.TACTIVIDAD
            SET PONDERACION = NULL, MODIFIED_BY = p_pk_usuario_solicitante::VARCHAR, MODIFIED_AT = CURRENT_TIMESTAMP
          WHERE FK_TUNIDAD = p_pk_tunidad AND ACTIVE = TRUE AND PONDERACION IS NOT NULL;
@@ -460,8 +527,8 @@ BEGIN
 END;
 $$;
 
--- Baja lógica de la unidad y de lo que es solo suyo (rúbrica, objetivos,
--- contenidos, enunciados). Las actividades bloquean: no se arrastran.
+-- Baja lógica de la unidad y de lo que es solo suyo. Las actividades de
+-- colegas bloquean (Regla 27); las del dueño se desvinculan, no se borran.
 CREATE OR REPLACE FUNCTION academico_test.fn_unidad_eliminar_interno(
     p_pk_usuario_solicitante BIGINT,
     p_pk_tunidad             BIGINT
@@ -475,6 +542,10 @@ BEGIN
     PERFORM academico_test.fn_unidad_validar_existente(p_pk_tunidad);
     PERFORM academico_test.fn_unidad_validar_activa(p_pk_tunidad);
     PERFORM academico_test.fn_unidad_validar_eliminable(p_pk_tunidad);
+
+    PERFORM academico_test.fn_unidad_actividad_desvincular_interno(p_pk_usuario_solicitante, a.PK_TACTIVIDAD)
+       FROM academico_test.TACTIVIDAD a
+      WHERE a.FK_TUNIDAD = p_pk_tunidad AND a.ACTIVE = TRUE;
 
     UPDATE academico_test.TUNIDAD
        SET ACTIVE = FALSE, MODIFIED_BY = v_usuario, MODIFIED_AT = CURRENT_TIMESTAMP
@@ -798,14 +869,121 @@ AS $$
 $$;
 
 CREATE OR REPLACE FUNCTION academico_test.fn_unidad_contenidos_listar_interno(p_pk_tunidad BIGINT)
-RETURNS TABLE(pk_tunidad_contenido BIGINT, orden NUMERIC, descripcion VARCHAR)
+RETURNS TABLE(pk_tunidad_contenido BIGINT, orden NUMERIC, descripcion VARCHAR, titulo VARCHAR)
 LANGUAGE sql
 STABLE
 AS $$
-    SELECT c.PK_TUNIDAD_CONTENIDO, c.ORDEN, c.DESCRIPCION
+    SELECT c.PK_TUNIDAD_CONTENIDO, c.ORDEN, c.DESCRIPCION, c.TITULO
       FROM academico_test.TUNIDAD_CONTENIDO c
      WHERE c.FK_TUNIDAD = p_pk_tunidad AND c.ACTIVE = TRUE
      ORDER BY c.ORDEN;
+$$;
+
+-- Regla 28: las actividades cuyo peso o puntaje convierte un cambio de criterio.
+CREATE OR REPLACE FUNCTION academico_test.fn_unidad_actividades_resumen_interno(p_pk_tunidad BIGINT)
+RETURNS JSONB
+LANGUAGE sql
+STABLE
+AS $$
+    SELECT COALESCE(jsonb_agg(jsonb_build_object('pk', a.PK_TACTIVIDAD, 'titulo', a.TITULO)
+                              ORDER BY a.TITULO, a.PK_TACTIVIDAD), '[]'::jsonb)
+      FROM academico_test.TACTIVIDAD a
+     WHERE a.FK_TUNIDAD = p_pk_tunidad AND a.ACTIVE = TRUE;
+$$;
+
+-- p_solo_autor: usuario cuyas actividades (CREATED_BY) se listan; NULL = todas.
+CREATE OR REPLACE FUNCTION academico_test.fn_unidad_actividades_listar_interno(
+    p_pk_tunidad               BIGINT,
+    p_search                   VARCHAR   DEFAULT NULL,
+    p_fk_tgrupo                BIGINT    DEFAULT NULL,
+    p_incluir_inactivas        BOOLEAN   DEFAULT FALSE,
+    p_orden_por                VARCHAR   DEFAULT 'actividad',
+    p_orden_asc                BOOLEAN   DEFAULT TRUE,
+    p_limite                   INT       DEFAULT 50,
+    p_offset                   INT       DEFAULT 0,
+    p_solo_autor               BIGINT    DEFAULT NULL
+)
+RETURNS TABLE (
+    pk_tactividad                   BIGINT,
+    titulo                          VARCHAR,
+    fk_tasignatura                  BIGINT,
+    asignatura                      VARCHAR,
+    fk_tlv_tipo_actividad           BIGINT,
+    tipo_actividad                  VARCHAR,
+    fk_tlv_instrumento_evaluacion   BIGINT,
+    instrumento_evaluacion          VARCHAR,
+    fk_tgrupo                       BIGINT,
+    grupo                           VARCHAR,
+    fk_tlv_jerarquia                BIGINT,
+    jerarquia                       VARCHAR,
+    ponderacion                     NUMERIC,
+    nota_maxima                     NUMERIC,
+    influencia                      NUMERIC,
+    es_evaluativa                   VARCHAR,
+    fecha_inicio                    DATE,
+    fecha_cierre                    DATE,
+    active                          BOOLEAN,
+    total_count                     BIGINT
+)
+LANGUAGE sql
+STABLE
+AS $$
+    SELECT a.PK_TACTIVIDAD,
+           a.TITULO,
+           a.FK_TASIGNATURA,
+           asig.NOMBRE,
+           a.FK_TLV_TIPO_ACTIVIDAD,
+           lvt.NOMBRE,
+           a.FK_TLV_INSTRUMENTO_EVALUACION,
+           lvi.NOMBRE,
+           a.FK_TGRUPO,
+           g.NOMBRE,
+           a.FK_TLV_JERARQUIA,
+           lvj.NOMBRE,
+           a.PONDERACION,
+           a.NOTA_MAXIMA,
+           a.INFLUENCIA,
+           a.ES_EVALUATIVA::VARCHAR,
+           a.FECHA_INICIO,
+           a.FECHA_CIERRE,
+           a.ACTIVE,
+           COUNT(*) OVER()
+      FROM academico_test.TACTIVIDAD a
+      LEFT JOIN academico_test.TASIGNATURA asig ON asig.PK_TASIGNATURA = a.FK_TASIGNATURA
+      LEFT JOIN academico_test.TLISTA_VALOR lvt ON lvt.PK_LISTA_VALOR = a.FK_TLV_TIPO_ACTIVIDAD
+      LEFT JOIN academico_test.TLISTA_VALOR lvi ON lvi.PK_LISTA_VALOR = a.FK_TLV_INSTRUMENTO_EVALUACION
+      LEFT JOIN academico_test.TLISTA_VALOR lvj ON lvj.PK_LISTA_VALOR = a.FK_TLV_JERARQUIA
+      LEFT JOIN academico_test.TGRUPO g         ON g.PK_TGRUPO = a.FK_TGRUPO
+     WHERE a.FK_TUNIDAD = p_pk_tunidad
+       AND (p_incluir_inactivas OR a.ACTIVE = TRUE)
+       AND (p_search IS NULL OR a.TITULO ILIKE '%' || p_search || '%')
+       AND (p_fk_tgrupo IS NULL OR a.FK_TGRUPO = p_fk_tgrupo)
+       AND (p_solo_autor IS NULL OR a.CREATED_BY = p_solo_autor::VARCHAR)
+     ORDER BY
+       CASE WHEN p_orden_asc THEN
+           CASE LOWER(TRIM(COALESCE(p_orden_por, 'actividad')))
+               WHEN 'actividad'   THEN a.TITULO
+               WHEN 'tipo'         THEN lvt.NOMBRE
+               WHEN 'instrumento'  THEN lvi.NOMBRE
+               WHEN 'grupo'        THEN g.NOMBRE
+               ELSE a.TITULO
+           END
+       END ASC,
+       CASE WHEN p_orden_asc AND LOWER(TRIM(COALESCE(p_orden_por, 'actividad'))) = 'porcentaje'
+            THEN a.PONDERACION END ASC,
+       CASE WHEN NOT p_orden_asc THEN
+           CASE LOWER(TRIM(COALESCE(p_orden_por, 'actividad')))
+               WHEN 'actividad'   THEN a.TITULO
+               WHEN 'tipo'         THEN lvt.NOMBRE
+               WHEN 'instrumento'  THEN lvi.NOMBRE
+               WHEN 'grupo'        THEN g.NOMBRE
+               ELSE a.TITULO
+           END
+       END DESC,
+       CASE WHEN NOT p_orden_asc AND LOWER(TRIM(COALESCE(p_orden_por, 'actividad'))) = 'porcentaje'
+            THEN a.PONDERACION END DESC
+     LIMIT GREATEST(p_limite, 1)
+    OFFSET GREATEST(p_offset, 0);
 $$;
 
 CREATE OR REPLACE FUNCTION academico_test.fn_unidad_criterio_listar_interno(
@@ -927,3 +1105,15 @@ AS $$
 $$;
 COMMENT ON FUNCTION academico_test.fn_unidad_aviso_peso_liberado(BIGINT, BIGINT, NUMERIC, VARCHAR)
     IS 'INTERNO: Reglas 38a/39. En una unidad que pondera, el % que queda libre en (unidad, grupo) tras eliminar o desvincular una actividad con peso, y el aviso para el docente; NULL si no aplica. No redistribuye. La usan fn_unidad_actividad_desvincular y fn_actividad_eliminar.';
+COMMENT ON FUNCTION academico_test.fn_unidad_contenidos_reemplazar_interno(BIGINT, BIGINT, VARCHAR[], VARCHAR[])
+    IS 'INTERNO: reemplazo completo de los contenidos con su título de sección (contenidos NULL = no tocar; títulos NULL = sin título), ya validados con fn_unidad_validar_contenidos_titulos. La usan fn_unidad_crear_interno y fn_unidad_actualizar_interno.';
+COMMENT ON FUNCTION academico_test.fn_unidad_contenidos_listar_interno(BIGINT)
+    IS 'INTERNO: contenidos activos de la unidad por ORDEN, con el título de sección como última columna (NULL si no lo tiene). La usa fn_unidad_contenidos_listar.';
+COMMENT ON FUNCTION academico_test.fn_unidad_sumatoria_puntaje_maximo(BIGINT, BIGINT)
+    IS 'INTERNO: Eₘₐₓ de la Regla 18 para (unidad, grupo); hoy 100 fijo. La usa fn_unidad_sumatoria_desde_ponderacion_interno.';
+COMMENT ON FUNCTION academico_test.fn_unidad_sumatoria_desde_ponderacion_interno(BIGINT, BIGINT)
+    IS 'INTERNO: Regla 18, de Ponderar a Sumatoria: NOTA_MAXIMA = PONDERACION/100 × Eₘₐₓ por grupo, entero, residuo a la de mayor peso. La usa fn_unidad_actualizar_interno antes de anular los pesos.';
+COMMENT ON FUNCTION academico_test.fn_unidad_actividades_resumen_interno(BIGINT)
+    IS 'INTERNO: [{pk, titulo}] de las actividades activas de la unidad (Regla 28). La usa fn_unidad_actualizar al cambiar el criterio de cálculo.';
+COMMENT ON FUNCTION academico_test.fn_unidad_actividades_listar_interno(BIGINT, VARCHAR, BIGINT, BOOLEAN, VARCHAR, BOOLEAN, INT, INT, BIGINT)
+    IS 'INTERNO: actividades de la unidad con peso (PONDERACION) y puntaje (NOTA_MAXIMA), filtros, orden y total_count; p_solo_autor restringe a las creadas por ese usuario (Regla 25c). La usa fn_unidad_actividades_listar.';

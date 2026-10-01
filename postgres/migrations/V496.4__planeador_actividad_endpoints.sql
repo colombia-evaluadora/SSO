@@ -4,8 +4,8 @@
 -- /planeador/actividades* (upsert que conserva el id y con él los role_query
 -- de cada servidor) y sus roles: DOCENTE y SUPER_ADMINISTRADOR, los que ya
 -- tenían. Las consultas no cambian; el detail describe el contrato vigente.
--- También las dos lecturas del formulario (pantalla-edicion y configuracion),
--- tal cual estaban, para que re-aplicar V452 no les pise el detail.
+-- También las lecturas del formulario (pantalla-edicion y configuracion, tal
+-- cual estaban, para que re-aplicar V452 no les pise el detail) y escala-precarga.
 -- Las filas de archivo y pantalla-edicion nacen aquí; las demás, en V246/V247,
 -- que se conservan porque otras migraciones copian de ellas sus roles.
 -- Depende de: V496.3 (funciones), V246/V247 (filas).
@@ -141,7 +141,7 @@ INSERT INTO public.query (uuid, microservice_id, path_template, http_method, typ
 SELECT '90edaeb1-71ca-45aa-9b12-91bb8400c8ff', m.id_microservice, '/planeador/actividades/:ID/adaptaciones', 'PUT', 'postgres', 'SELECT', NULL,
        'f', 'f', 'f', '60', NULL, NULL,
        '{"PARAM.ID": "BIGINT", "BODY.ADAPTACIONES": "JSONB"}'::jsonb,
-       'Reemplaza las adaptaciones curriculares de la actividad :ID (fn_actividad_adaptacion_reemplazar, Bloque 6). BODY.ADAPTACIONES = [{tipoAdaptacion, descripcion (máx. 500), usaVersionModificada S/N, formatoAdaptacion?, fkTarchivo?, url?, aplicaA?, estudiantes?}]: los estudiantes deben ser de la actividad (Regla 47). Arreglo vacío = sin adaptaciones. Errores: 404 (P0002) si no existe; 400 (22023) si ya fue eliminada o el dato no cumple una regla; 403 (42501) sin permiso o si un docente toca una actividad que no creó (Regla 25); 409 (23503) si ya tiene resultados registrados o es la original de una recuperación (Regla 37).',
+       'Reemplaza las adaptaciones curriculares de la actividad :ID (fn_actividad_adaptacion_reemplazar, Bloque 6). BODY.ADAPTACIONES = [{tipoAdaptacion, especificacionTipo (obligatoria si el tipo es Otro, máx. 150), descripcion (máx. 500), usaVersionModificada S/N, formatoAdaptacion?, archivos? [fkTarchivo, ...] (hasta 3; con ARCHIVO: pdf, doc, docx, jpg o png de máx. 10 MB), fkTarchivo? (contrato anterior, se suma a archivos), url?, nombrePlantilla? (máx. 100, el nombre en la biblioteca del docente), aplicaA?, estudiantes?}]. BIBLIOTECA referencia el archivo o enlace elegido en GET /planeador/adaptaciones-reutilizables. Los estudiantes deben ser de la actividad (Regla 47). Arreglo vacío = sin adaptaciones. Errores: 404 (P0002) si no existe; 400 (22023) si ya fue eliminada o el dato no cumple una regla; 403 (42501) sin permiso o si un docente toca una actividad que no creó (Regla 25); 409 (23503) si ya tiene resultados registrados o es la original de una recuperación (Regla 37).',
        $q$SELECT academico_test.fn_actividad_adaptacion_reemplazar(
     public.fn_get_academico_usuario_id(:CONTEXT.USER_ID::BIGINT),
     CAST(:PARAM.ID AS BIGINT),
@@ -198,13 +198,14 @@ INSERT INTO public.query (uuid, microservice_id, path_template, http_method, typ
 SELECT 'eval-col-planeador-actividad-estudiantes-set-001', m.id_microservice, '/planeador/actividades/:ID/estudiantes', 'PUT', 'postgres', 'SELECT', NULL,
        'f', 'f', 'f', '60', NULL, NULL,
        '{"PARAM.ID": "BIGINT", "BODY.FK_TMATRICULAS": "BIGINT[]", "BODY.ASIGNAR_TODO_EL_GRUPO": "BOOLEAN"}'::jsonb,
-       'Fija los estudiantes de la actividad :ID con semántica de reemplazo (fn_actividad_estudiantes_set). BODY.FK_TMATRICULAS: matrículas activas del grupo de la actividad; BODY.ASIGNAR_TODO_EL_GRUPO=true asigna a todo el grupo. Debe quedar al menos un estudiante; quien sale, sale también de sus adaptaciones. Devuelve el total asignado. Errores: 404 (P0002) si no existe; 400 (22023) si ya fue eliminada o el dato no cumple una regla; 403 (42501) sin permiso o si un docente toca una actividad que no creó (Regla 25); 409 (23503) si ya tiene resultados registrados o es la original de una recuperación (Regla 37).',
-       $q$SELECT academico_test.fn_actividad_estudiantes_set(
+       'Fija los estudiantes de la actividad :ID con semántica de reemplazo (fn_actividad_estudiantes_set_detalle). BODY.FK_TMATRICULAS: matrículas activas del grupo de la actividad; BODY.ASIGNAR_TODO_EL_GRUPO=true asigna a todo el grupo. Debe quedar al menos un estudiante; quien sale, sale también de sus adaptaciones. Devuelve total_asignados, afectados_adaptacion ([{pkTmatricula, estudiante, adaptaciones:[{pkTactividadAdaptacion, tipoAdaptacion}]}], los que salieron de alguna adaptación, Regla 46) y avisos_piar ([{pkTmatricula, fkTestudiante, estudiante, discapacidad}], estudiantes del grupo con discapacidad registrada que no quedaron en la actividad; informativo, Regla 48). Errores: 404 (P0002) si no existe; 400 (22023) si ya fue eliminada o el dato no cumple una regla; 403 (42501) sin permiso o si un docente toca una actividad que no creó (Regla 25); 409 (23503) si ya tiene resultados registrados o es la original de una recuperación (Regla 37).',
+       $q$SELECT r.total AS total_asignados, r.afectados_adaptacion, r.avisos_piar
+  FROM academico_test.fn_actividad_estudiantes_set_detalle(
     public.fn_get_academico_usuario_id(:CONTEXT.USER_ID::BIGINT),
     CAST(:PARAM.ID AS BIGINT),
     CAST(:BODY.FK_TMATRICULAS AS BIGINT[]),
     COALESCE(CAST(:BODY.ASIGNAR_TODO_EL_GRUPO AS BOOLEAN), FALSE)
-) AS total_asignados;$q$
+) r;$q$
   FROM public.microservice m WHERE m.serviceid = 'eval-col'
 ON CONFLICT (microservice_id, path_template, http_method) WHERE path_template IS NOT NULL DO UPDATE
    SET type = EXCLUDED.type, execution_mode = EXCLUDED.execution_mode, out_param_names = EXCLUDED.out_param_names,
@@ -370,6 +371,27 @@ ON CONFLICT (microservice_id, path_template, http_method) WHERE path_template IS
        cache_ttl_seconds = EXCLUDED.cache_ttl_seconds, action = EXCLUDED.action, style = EXCLUDED.style,
        param_types = EXCLUDED.param_types, detail = EXCLUDED.detail, query = EXCLUDED.query;
 
+-- GET /planeador/actividades/escala-precarga
+INSERT INTO public.query (uuid, microservice_id, path_template, http_method, type, execution_mode, out_param_names,
+                          public_end, captcha, cacheable, cache_ttl_seconds, action, style, param_types, detail, query)
+SELECT 'eval-col-planeador-actividad-escala-precarga-001', m.id_microservice, '/planeador/actividades/escala-precarga', 'GET', 'postgres', 'SELECT', NULL,
+       'f', 'f', 'f', '60', NULL, NULL,
+       '{"QUERY.ACTIVIDAD": "BIGINT", "QUERY.UNIDAD": "BIGINT", "QUERY.GRUPO": "BIGINT", "QUERY.ASIGNATURA": "BIGINT"}'::jsonb,
+       'Valores iniciales del constructor Escala de valoración (Regla 40), para el contexto de la actividad: ?ACTIVIDAD=, ?UNIDAD= o ?GRUPO= con ?ASIGNATURA=. Devuelve {contexto {fkTasignatura, fkTgrado, fkTescala, escala}, formato {valor, nombre, esNumerico, notaMaxima, decimales}, tipoSugerido NUMERICA|CUALITATIVA, valorMaximo (nota máxima del formato; 100 si el formato no es numérico), niveles [{fkTescalaValoracion, orden, codigo, etiqueta, descriptor, tipoValoracion, limiteInferior, limiteSuperior, puntaje}]}. La escala sale del criterio de evaluación vigente de (asignatura, grado), si no del periodo académico, si no del nivel de enseñanza; sin escala, niveles = []. El docente puede editar todo después. Errores: 400 (22023) sin contexto suficiente, 404 (P0002) si la actividad, unidad o grupo no existe, 403 (42501) sin alcance VER sobre PLANEADOR.',
+       $q$SELECT academico_test.fn_actividad_escala_precarga(
+    public.fn_get_academico_usuario_id(:CONTEXT.USER_ID::BIGINT),
+    CAST(:QUERY.GRUPO AS BIGINT),
+    CAST(:QUERY.ASIGNATURA AS BIGINT),
+    CAST(:QUERY.UNIDAD AS BIGINT),
+    CAST(:QUERY.ACTIVIDAD AS BIGINT)
+) AS precarga;$q$
+  FROM public.microservice m WHERE m.serviceid = 'eval-col'
+ON CONFLICT (microservice_id, path_template, http_method) WHERE path_template IS NOT NULL DO UPDATE
+   SET type = EXCLUDED.type, execution_mode = EXCLUDED.execution_mode, out_param_names = EXCLUDED.out_param_names,
+       public_end = EXCLUDED.public_end, captcha = EXCLUDED.captcha, cacheable = EXCLUDED.cacheable,
+       cache_ttl_seconds = EXCLUDED.cache_ttl_seconds, action = EXCLUDED.action, style = EXCLUDED.style,
+       param_types = EXCLUDED.param_types, detail = EXCLUDED.detail, query = EXCLUDED.query;
+
 -- Roles: el docente planea sus actividades; el super admin administra.
 -- configuracion va aquí porque V422 ya no crea la fila.
 INSERT INTO public.role_query (role_id, query_id)
@@ -403,4 +425,16 @@ SELECT rq.role_id, q.id_query
                      AND d.path_template = '/planeador/actividades/:ID' AND d.http_method = 'GET'
   JOIN public.role_query rq ON rq.query_id = d.id_query
  WHERE q.path_template = '/planeador/actividades/:ID/pantalla-edicion' AND q.http_method = 'GET'
+ON CONFLICT DO NOTHING;
+
+-- La precarga de escala la ve quien ve la configuración del formulario.
+INSERT INTO public.role_query (role_id, query_id)
+SELECT rq.role_id, q.id_query
+  FROM public.query q
+  JOIN public.microservice m ON m.id_microservice = q.microservice_id AND m.serviceid = 'eval-col'
+  JOIN public.query hermano ON hermano.microservice_id = q.microservice_id
+                           AND hermano.path_template = '/planeador/actividades/configuracion'
+                           AND hermano.http_method = 'GET'
+  JOIN public.role_query rq ON rq.query_id = hermano.id_query
+ WHERE q.path_template = '/planeador/actividades/escala-precarga' AND q.http_method = 'GET'
 ON CONFLICT DO NOTHING;

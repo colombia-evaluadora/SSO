@@ -1,16 +1,245 @@
--- V496.5 - Instrumentos y calificación de actividades: validaciones (una por
--- regla), los validadores centrales de definición y de calificación, y el
--- assert de propiedad de resultados (Regla 54). Mensajes con nombres, nunca
--- con pk. Sustituye a fn_actividad_instrumento_assert y
--- fn_actividad_nota_asistencia_assert (V227).
+-- V496.5 - Instrumentos, calificación y resultados de actividades:
+-- validaciones (una por regla), los validadores centrales de definición y de
+-- calificación, el assert de propiedad de resultados (Regla 54) y las reglas
+-- del registro narrativo (Regla 61). Crea los catálogos ESTADO_RESULTADO y
+-- MOMENTO_REGISTRO y el estado, momento y enlace de TACTIVIDAD_NOTA (Reglas
+-- 58 y 62), y el redondeo institucional de la nota (Regla 30). La
+-- asistencia de la actividad (primer día, congelada al calificar) decide el
+-- No asistido; No asistido y No presentó bloquean calificar y observar.
 -- Depende de: V496.1 (etiquetas, validar_existente/activa, catálogo,
--- propietario), V479 (tipo de evaluación), V458 (instrumento permitido),
--- V226 (método de Otro), V475 (es_formativa), V450 (asistencia válida).
+-- archivos, URL), V479, V458, V226, V475 (es_formativa), V461 (soportes),
+-- V450 (fn_actividad_asistencia_dia).
 
 SET search_path TO academico_test, public;
 
 DROP FUNCTION IF EXISTS academico_test.fn_actividad_instrumento_assert(BIGINT, VARCHAR);
 DROP FUNCTION IF EXISTS academico_test.fn_actividad_nota_asistencia_assert(BIGINT, DATE);
+-- Reglas 62/73: la reemplaza fn_actividad_validar_permite_calificar, por estado.
+DROP FUNCTION IF EXISTS academico_test.fn_actividad_validar_asistencia_calificar(BIGINT, DATE);
+DROP FUNCTION IF EXISTS academico_test.fn_actividad_observacion_validar_formativa(BIGINT);
+DROP FUNCTION IF EXISTS academico_test.fn_actividad_validar_evidencia_archivo(BIGINT);
+
+-- ---------------------------------------------------------------------------
+-- Estados de resultado y momento del registro narrativo (Reglas 58, 61, 62)
+-- ---------------------------------------------------------------------------
+SELECT setval(pg_get_serial_sequence('academico_test.tlista_valor', 'pk_lista_valor'),
+              GREATEST((SELECT COALESCE(MAX(PK_LISTA_VALOR), 0) FROM academico_test.TLISTA_VALOR), 1));
+
+INSERT INTO academico_test.TLISTA_VALOR (CATEGORIA, NOMBRE, VALOR, CREATED_BY)
+SELECT v.categoria, v.nombre, v.valor, 'seed_estado_resultado'
+  FROM (VALUES
+    ('ESTADO_RESULTADO', 'Calificado', 'CALIFICADO'),
+    ('ESTADO_RESULTADO', 'Pendiente de calificar', 'PENDIENTE'),
+    ('ESTADO_RESULTADO', 'No presentó', 'NO_PRESENTO'),
+    ('ESTADO_RESULTADO', 'No asistido - Justificada', 'NO_ASISTIO_JUSTIFICADA'),
+    ('ESTADO_RESULTADO', 'No asistido - No justificada', 'NO_ASISTIO_NO_JUSTIFICADA'),
+    ('MOMENTO_REGISTRO', 'Inicio', 'INICIO'),
+    ('MOMENTO_REGISTRO', 'Proceso', 'PROCESO'),
+    ('MOMENTO_REGISTRO', 'Cierre', 'CIERRE')
+  ) AS v(categoria, nombre, valor)
+ WHERE NOT EXISTS (SELECT 1 FROM academico_test.TLISTA_VALOR lv
+                    WHERE lv.CATEGORIA = v.categoria AND lv.VALOR = v.valor);
+
+ALTER TABLE academico_test.TACTIVIDAD_NOTA ADD COLUMN IF NOT EXISTS FK_TLV_ESTADO_RESULTADO BIGINT;
+ALTER TABLE academico_test.TACTIVIDAD_NOTA ADD COLUMN IF NOT EXISTS FK_TLV_MOMENTO BIGINT;
+ALTER TABLE academico_test.TACTIVIDAD_NOTA ADD COLUMN IF NOT EXISTS EVIDENCIA_ENLACE VARCHAR(1000);
+ALTER TABLE academico_test.TACTIVIDAD_NOTA ADD COLUMN IF NOT EXISTS FK_TLV_TIPO_ASISTENCIA BIGINT;
+ALTER TABLE academico_test.TACTIVIDAD_NOTA ADD COLUMN IF NOT EXISTS ASISTENCIA_JUSTIFICADA BOOLEAN;
+ALTER TABLE academico_test.TACTIVIDAD_NOTA ADD COLUMN IF NOT EXISTS ASISTENCIA_ORIGEN VARCHAR(20);
+
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_tactividad_nota_estado_resultado') THEN
+        ALTER TABLE academico_test.TACTIVIDAD_NOTA ADD CONSTRAINT fk_tactividad_nota_estado_resultado
+            FOREIGN KEY (FK_TLV_ESTADO_RESULTADO) REFERENCES academico_test.TLISTA_VALOR (PK_LISTA_VALOR);
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_tactividad_nota_momento') THEN
+        ALTER TABLE academico_test.TACTIVIDAD_NOTA ADD CONSTRAINT fk_tactividad_nota_momento
+            FOREIGN KEY (FK_TLV_MOMENTO) REFERENCES academico_test.TLISTA_VALOR (PK_LISTA_VALOR);
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_tactividad_nota_tipo_asistencia') THEN
+        ALTER TABLE academico_test.TACTIVIDAD_NOTA ADD CONSTRAINT fk_tactividad_nota_tipo_asistencia
+            FOREIGN KEY (FK_TLV_TIPO_ASISTENCIA) REFERENCES academico_test.TLISTA_VALOR (PK_LISTA_VALOR);
+    END IF;
+END;
+$$;
+
+COMMENT ON COLUMN academico_test.TACTIVIDAD_NOTA.FK_TLV_ESTADO_RESULTADO
+    IS 'Regla 62: TLISTA_VALOR ESTADO_RESULTADO. Solo CALIFICADO lleva CALIFICACION; los demás la dejan NULL (fn_actividad_validar_estado_coherente).';
+COMMENT ON COLUMN academico_test.TACTIVIDAD_NOTA.FK_TLV_MOMENTO
+    IS 'Momento del registro narrativo (TLISTA_VALOR MOMENTO_REGISTRO: Inicio, Proceso, Cierre).';
+COMMENT ON COLUMN academico_test.TACTIVIDAD_NOTA.FK_TLV_TIPO_ASISTENCIA
+    IS 'Asistencia de la actividad fijada para este estudiante (TIPO_ASISTENCIA 1/2/5): la marcada en el Planeador o la copia congelada al registrar el primer resultado. NULL = vale la tomada ese día (fn_actividad_asistencia_dia). Nunca cambia TASISTENCIA de la Vista.';
+COMMENT ON COLUMN academico_test.TACTIVIDAD_NOTA.ASISTENCIA_JUSTIFICADA
+    IS 'Con FK_TLV_TIPO_ASISTENCIA: TRUE si la inasistencia tiene excusa (archivo en algún bloque de la Vista). El docente nunca la elige.';
+COMMENT ON COLUMN academico_test.TACTIVIDAD_NOTA.ASISTENCIA_ORIGEN
+    IS 'Con FK_TLV_TIPO_ASISTENCIA: PLANEADOR si la marcó el docente en la tabla de calificaciones; ASISTENCIA si es la copia congelada de la Vista.';
+COMMENT ON COLUMN academico_test.TACTIVIDAD_NOTA.EVIDENCIA_ENLACE
+    IS 'Regla 61: enlace externo de la evidencia narrativa, alternativo a los hasta 3 archivos de TACTIVIDAD_SOPORTE.';
+
+CREATE OR REPLACE FUNCTION academico_test.fn_tlv_estado_resultado_pk(p_valor TEXT)
+RETURNS BIGINT
+LANGUAGE sql
+STABLE
+AS $$
+    SELECT PK_LISTA_VALOR FROM academico_test.TLISTA_VALOR
+     WHERE CATEGORIA = 'ESTADO_RESULTADO' AND VALOR = upper(TRIM(p_valor)) AND ACTIVE = TRUE
+     LIMIT 1;
+$$;
+
+CREATE OR REPLACE FUNCTION academico_test.fn_tlv_momento_registro_pk(p_valor TEXT)
+RETURNS BIGINT
+LANGUAGE sql
+STABLE
+AS $$
+    SELECT PK_LISTA_VALOR FROM academico_test.TLISTA_VALOR
+     WHERE CATEGORIA = 'MOMENTO_REGISTRO' AND VALOR = upper(TRIM(p_valor)) AND ACTIVE = TRUE
+     LIMIT 1;
+$$;
+
+-- Backfill: una nota capturada, o el texto/evidencias de una formativa, es un resultado.
+UPDATE academico_test.TACTIVIDAD_NOTA n
+   SET FK_TLV_ESTADO_RESULTADO = academico_test.fn_tlv_estado_resultado_pk(
+           CASE WHEN n.CALIFICACION IS NOT NULL
+                  OR (n.CALIFICABLE = 'N' AND (NULLIF(TRIM(n.OBSERVACION), '') IS NOT NULL
+                       OR EXISTS (SELECT 1 FROM academico_test.TACTIVIDAD_SOPORTE so
+                                   WHERE so.FK_TACTIVIDAD_ESTUDIANTE = n.FK_TACTIVIDAD_ESTUDIANTE
+                                     AND so.ACTIVE = TRUE AND so.FK_TARCHIVO IS NOT NULL)))
+                THEN 'CALIFICADO' ELSE 'PENDIENTE' END)
+ WHERE n.FK_TLV_ESTADO_RESULTADO IS NULL;
+
+CREATE OR REPLACE FUNCTION academico_test.fn_tactividad_nota_estado_default()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    -- El pk del catálogo difiere entre ambientes: no cabe en un DEFAULT de columna.
+    IF NEW.FK_TLV_ESTADO_RESULTADO IS NULL THEN
+        NEW.FK_TLV_ESTADO_RESULTADO := academico_test.fn_tlv_estado_resultado_pk(
+            CASE WHEN NEW.CALIFICACION IS NOT NULL THEN 'CALIFICADO' ELSE 'PENDIENTE' END);
+    END IF;
+    RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_tactividad_nota_estado_default ON academico_test.TACTIVIDAD_NOTA;
+CREATE TRIGGER trg_tactividad_nota_estado_default
+    BEFORE INSERT ON academico_test.TACTIVIDAD_NOTA
+    FOR EACH ROW EXECUTE FUNCTION academico_test.fn_tactividad_nota_estado_default();
+
+CREATE OR REPLACE FUNCTION academico_test.fn_actividad_estado_resultado(p_pk_tactividad_nota BIGINT)
+RETURNS VARCHAR
+LANGUAGE sql
+STABLE
+AS $$
+    SELECT COALESCE(lv.VALOR, CASE WHEN n.CALIFICACION IS NOT NULL THEN 'CALIFICADO' ELSE 'PENDIENTE' END)::VARCHAR
+      FROM academico_test.TACTIVIDAD_NOTA n
+      LEFT JOIN academico_test.TLISTA_VALOR lv ON lv.PK_LISTA_VALOR = n.FK_TLV_ESTADO_RESULTADO
+     WHERE n.PK_TACTIVIDAD_NOTA = p_pk_tactividad_nota;
+$$;
+
+-- Asistencia de la actividad para un estudiante: la fijada en su resultado
+-- (marcada en el Planeador o congelada al calificar) o la tomada ese día.
+CREATE OR REPLACE FUNCTION academico_test.fn_actividad_asistencia_estudiante(p_pk_tactividad_estudiante BIGINT)
+RETURNS TABLE (fecha DATE, tipo_valor VARCHAR, fk_tlv_tipo_asistencia BIGINT, ausente BOOLEAN,
+               justificada BOOLEAN, origen VARCHAR, pk_tasistencia BIGINT, fk_soporte_archivo BIGINT,
+               observacion VARCHAR)
+LANGUAGE sql
+STABLE
+AS $$
+    SELECT COALESCE(d.fecha, academico_test.fn_actividad_fecha_asistencia(ae.FK_TACTIVIDAD)),
+           COALESCE(lv.VALOR, d.tipo_valor)::VARCHAR,
+           COALESCE(n.FK_TLV_TIPO_ASISTENCIA, d.fk_tlv_tipo_asistencia),
+           CASE WHEN n.FK_TLV_TIPO_ASISTENCIA IS NOT NULL THEN lv.VALOR = '2' ELSE d.ausente END,
+           CASE WHEN n.FK_TLV_TIPO_ASISTENCIA IS NOT NULL THEN COALESCE(n.ASISTENCIA_JUSTIFICADA, FALSE) ELSE d.justificada END,
+           COALESCE(n.ASISTENCIA_ORIGEN, d.origen)::VARCHAR,
+           d.pk_tasistencia, d.fk_soporte_archivo, d.observacion
+      FROM academico_test.TACTIVIDAD_ESTUDIANTE ae
+      LEFT JOIN academico_test.TACTIVIDAD_NOTA n
+             ON n.FK_TACTIVIDAD_ESTUDIANTE = ae.PK_TACTIVIDAD_ESTUDIANTE AND n.ACTIVE = TRUE
+      LEFT JOIN academico_test.TLISTA_VALOR lv ON lv.PK_LISTA_VALOR = n.FK_TLV_TIPO_ASISTENCIA
+      LEFT JOIN LATERAL academico_test.fn_actividad_asistencia_dia(ae.FK_TMATRICULA, ae.FK_TACTIVIDAD) d ON TRUE
+     WHERE ae.PK_TACTIVIDAD_ESTUDIANTE = p_pk_tactividad_estudiante
+       AND (n.FK_TLV_TIPO_ASISTENCIA IS NOT NULL OR d.tipo_valor IS NOT NULL);
+$$;
+
+-- Regla 73: Asistió y Llegó tarde no cambian el resultado; No asistió lo
+-- marca No asistido, Justificada solo si hay excusa.
+CREATE OR REPLACE FUNCTION academico_test.fn_actividad_estado_por_asistencia(p_ausente BOOLEAN, p_justificada BOOLEAN)
+RETURNS VARCHAR
+LANGUAGE sql
+IMMUTABLE
+AS $$
+    SELECT (CASE WHEN NOT COALESCE(p_ausente, FALSE) THEN NULL
+                 WHEN COALESCE(p_justificada, FALSE) THEN 'NO_ASISTIO_JUSTIFICADA'
+                 ELSE 'NO_ASISTIO_NO_JUSTIFICADA' END)::VARCHAR;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_actividad_asistencia_estudiante(BIGINT)
+    IS 'Asistencia de la actividad para un estudiante (PK_TACTIVIDAD_ESTUDIANTE): la fijada en TACTIVIDAD_NOTA (marcada en el Planeador o congelada al registrar el resultado) o, si no hay, la tomada el primer día (fn_actividad_asistencia_dia, la Vista predomina). Sin ninguna no devuelve filas. La usan el listado de calificaciones, las validaciones de calificar y la sincronización.';
+COMMENT ON FUNCTION academico_test.fn_actividad_estado_por_asistencia(BOOLEAN, BOOLEAN)
+    IS 'Regla 73: estado de resultado que impone la asistencia: NO_ASISTIO_JUSTIFICADA / NO_ASISTIO_NO_JUSTIFICADA si está ausente (según la excusa), NULL si asistió o llegó tarde (no cambia nada).';
+
+CREATE OR REPLACE FUNCTION academico_test.fn_actividad_resultados_completos(p_pk_tactividad BIGINT)
+RETURNS BOOLEAN
+LANGUAGE sql
+STABLE
+AS $$
+    -- Regla 58: sin fila de nota el estudiante también está Pendiente.
+    SELECT NOT EXISTS (
+        SELECT 1
+          FROM academico_test.TACTIVIDAD_ESTUDIANTE ae
+          LEFT JOIN academico_test.TACTIVIDAD_NOTA n
+                 ON n.FK_TACTIVIDAD_ESTUDIANTE = ae.PK_TACTIVIDAD_ESTUDIANTE AND n.ACTIVE = TRUE
+         WHERE ae.FK_TACTIVIDAD = p_pk_tactividad AND ae.ACTIVE = TRUE
+           AND (n.PK_TACTIVIDAD_NOTA IS NULL
+                OR academico_test.fn_actividad_estado_resultado(n.PK_TACTIVIDAD_NOTA) = 'PENDIENTE'));
+$$;
+
+-- Registrado = observación (texto, enlace o archivos) o un estado distinto de Pendiente.
+CREATE OR REPLACE FUNCTION academico_test.fn_actividad_resultado_registrado(p_pk_tactividad_estudiante BIGINT)
+RETURNS BOOLEAN
+LANGUAGE sql
+STABLE
+AS $$
+    SELECT EXISTS (SELECT 1 FROM academico_test.TACTIVIDAD_NOTA n
+                    WHERE n.FK_TACTIVIDAD_ESTUDIANTE = p_pk_tactividad_estudiante AND n.ACTIVE = TRUE
+                      AND (NULLIF(TRIM(n.OBSERVACION), '') IS NOT NULL OR n.EVIDENCIA_ENLACE IS NOT NULL
+                           OR academico_test.fn_actividad_estado_resultado(n.PK_TACTIVIDAD_NOTA) <> 'PENDIENTE'))
+        OR EXISTS (SELECT 1 FROM academico_test.TACTIVIDAD_SOPORTE so
+                    WHERE so.FK_TACTIVIDAD_ESTUDIANTE = p_pk_tactividad_estudiante
+                      AND so.ACTIVE = TRUE AND so.FK_TARCHIVO IS NOT NULL);
+$$;
+
+CREATE OR REPLACE FUNCTION academico_test.fn_actividad_estudiante_etiqueta(p_pk_tactividad_estudiante BIGINT)
+RETURNS VARCHAR
+LANGUAGE sql
+STABLE
+AS $$
+    SELECT COALESCE(
+        (SELECT academico_test.fn_actividad_estudiante_nombre(ae.FK_TMATRICULA)
+           FROM academico_test.TACTIVIDAD_ESTUDIANTE ae
+          WHERE ae.PK_TACTIVIDAD_ESTUDIANTE = p_pk_tactividad_estudiante),
+        'el estudiante')::VARCHAR;
+$$;
+
+CREATE OR REPLACE FUNCTION academico_test.fn_actividad_observacion_soporte_resolver(p_pk_tactividad_soporte BIGINT)
+RETURNS BIGINT
+LANGUAGE plpgsql
+STABLE
+AS $$
+DECLARE
+    v_pk_ae BIGINT;
+BEGIN
+    SELECT FK_TACTIVIDAD_ESTUDIANTE INTO v_pk_ae
+      FROM academico_test.TACTIVIDAD_SOPORTE
+     WHERE PK_TACTIVIDAD_SOPORTE = p_pk_tactividad_soporte AND ACTIVE = TRUE AND FK_TARCHIVO IS NOT NULL;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'No se encontró la evidencia de la observación (o ya fue retirada)' USING ERRCODE = 'P0002';
+    END IF;
+    RETURN v_pk_ae;
+END;
+$$;
 
 -- ---------------------------------------------------------------------------
 -- Lecturas de apoyo
@@ -398,6 +627,7 @@ STABLE
 AS $$
 BEGIN
     PERFORM academico_test.fn_actividad_validar_activa(p_pk_tactividad);
+    PERFORM academico_test.fn_actividad_validar_referente_calificable(p_pk_tactividad);
     -- Regla 52: con referente formativo el resultado es el registro narrativo.
     IF academico_test.fn_actividad_es_formativa(p_pk_tactividad) THEN
         RAISE EXCEPTION '% se valora con observaciones (referente formativo): registre una observación en lugar de una nota',
@@ -407,43 +637,6 @@ BEGIN
                     WHERE PK_TACTIVIDAD = p_pk_tactividad AND FK_TLV_INSTRUMENTO_EVALUACION IS NOT NULL) THEN
         RAISE EXCEPTION '% no tiene instrumento de evaluación: elíjalo y configúrelo antes de calificar',
             academico_test.fn_actividad_etiqueta(p_pk_tactividad) USING ERRCODE = '22023';
-    END IF;
-END;
-$$;
-
-CREATE OR REPLACE FUNCTION academico_test.fn_actividad_validar_asistencia_calificar(
-    p_pk_tactividad_estudiante BIGINT,
-    p_fecha                    DATE
-)
-RETURNS VOID
-LANGUAGE plpgsql
-STABLE
-AS $$
-DECLARE
-    v_matricula  BIGINT;
-    v_asignatura BIGINT;
-    v_tipo       BIGINT;
-BEGIN
-    SELECT ae.FK_TMATRICULA, a.FK_TASIGNATURA INTO v_matricula, v_asignatura
-      FROM academico_test.TACTIVIDAD_ESTUDIANTE ae
-      JOIN academico_test.TACTIVIDAD a ON a.PK_TACTIVIDAD = ae.FK_TACTIVIDAD
-     WHERE ae.PK_TACTIVIDAD_ESTUDIANTE = p_pk_tactividad_estudiante;
-
-    SELECT s.FK_TLV_TIPO_ASISTENCIA INTO v_tipo
-      FROM academico_test.TASISTENCIA s
-     WHERE s.FK_TMATRICULA = v_matricula AND s.FK_TASIGNATURA = v_asignatura
-       AND s.FECHA = p_fecha AND s.ACTIVE = TRUE
-     LIMIT 1;
-    IF NOT FOUND THEN
-        RAISE EXCEPTION 'No se puede calificar a %: no hay asistencia registrada en la asignatura el %',
-            COALESCE(academico_test.fn_actividad_estudiante_nombre(v_matricula), 'el estudiante'),
-            to_char(p_fecha, 'DD/MM/YYYY') USING ERRCODE = '22023';
-    END IF;
-    -- Solo la inasistencia injustificada bloquea; la justificada deja calificar.
-    IF v_tipo = academico_test.fn_asistencia_tipo_pk(2) THEN
-        RAISE EXCEPTION 'No se puede calificar a %: tiene una inasistencia injustificada el %',
-            COALESCE(academico_test.fn_actividad_estudiante_nombre(v_matricula), 'el estudiante'),
-            to_char(p_fecha, 'DD/MM/YYYY') USING ERRCODE = '22023';
     END IF;
 END;
 $$;
@@ -673,7 +866,255 @@ DECLARE
     v_pk BIGINT := academico_test.fn_actividad_estudiante_actividad(p_pk_tactividad_estudiante);
 BEGIN
     PERFORM academico_test.fn_actividad_validar_calificable(v_pk);
-    PERFORM academico_test.fn_actividad_validar_asistencia_calificar(p_pk_tactividad_estudiante, p_fecha);
+END;
+$$;
+
+-- ---------------------------------------------------------------------------
+-- Estados de resultado (Reglas 59 y 62)
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION academico_test.fn_actividad_validar_estado_resultado_asignable(p_estado VARCHAR)
+RETURNS VOID
+LANGUAGE plpgsql
+STABLE
+AS $$
+BEGIN
+    IF upper(TRIM(p_estado)) = 'CALIFICADO' THEN
+        RAISE EXCEPTION 'El estado Calificado no se marca a mano: se fija al registrar el resultado con el instrumento'
+            USING ERRCODE = '22023';
+    END IF;
+    -- J/NJ no los elige el docente: salen de la asistencia y su excusa.
+    IF upper(TRIM(p_estado)) LIKE 'NO_ASISTIO%' THEN
+        RAISE EXCEPTION 'No asistido no se marca a mano: cambie la asistencia del estudiante en el Planeador; Justificada o No justificada depende de la excusa'
+            USING ERRCODE = '22023';
+    END IF;
+    IF academico_test.fn_tlv_estado_resultado_pk(p_estado) IS NULL THEN
+        RAISE EXCEPTION 'Estado de resultado "%" no reconocido: use %', COALESCE(p_estado, ''),
+            (SELECT string_agg(lv.NOMBRE, ', ' ORDER BY lv.PK_LISTA_VALOR) FROM academico_test.TLISTA_VALOR lv
+              WHERE lv.CATEGORIA = 'ESTADO_RESULTADO' AND lv.ACTIVE = TRUE AND lv.VALOR IN ('PENDIENTE', 'NO_PRESENTO'))
+            USING ERRCODE = '22023';
+    END IF;
+END;
+$$;
+
+-- Regla 62: los estados son excluyentes. No presentó exige que no haya nota ni
+-- inasistencia; salir de No asistido es cambiar la asistencia, no el estado.
+CREATE OR REPLACE FUNCTION academico_test.fn_actividad_validar_estado_transicion(
+    p_pk_tactividad_estudiante BIGINT,
+    p_estado                   VARCHAR
+)
+RETURNS VOID
+LANGUAGE plpgsql
+STABLE
+AS $$
+DECLARE
+    v_actual  VARCHAR;
+    v_nota    NUMERIC;
+    v_ausente BOOLEAN;
+BEGIN
+    SELECT academico_test.fn_actividad_estado_resultado(n.PK_TACTIVIDAD_NOTA), n.CALIFICACION
+      INTO v_actual, v_nota
+      FROM academico_test.TACTIVIDAD_NOTA n
+     WHERE n.FK_TACTIVIDAD_ESTUDIANTE = p_pk_tactividad_estudiante AND n.ACTIVE = TRUE;
+    SELECT a.ausente INTO v_ausente FROM academico_test.fn_actividad_asistencia_estudiante(p_pk_tactividad_estudiante) a;
+    IF COALESCE(v_actual, '') LIKE 'NO_ASISTIO%' OR COALESCE(v_ausente, FALSE) THEN
+        RAISE EXCEPTION '% está No asistido en %: cambie primero su asistencia en el Planeador',
+            academico_test.fn_actividad_estudiante_etiqueta(p_pk_tactividad_estudiante),
+            academico_test.fn_actividad_etiqueta(academico_test.fn_actividad_estudiante_actividad(p_pk_tactividad_estudiante))
+            USING ERRCODE = '22023';
+    END IF;
+    IF upper(TRIM(p_estado)) = 'NO_PRESENTO' AND (v_nota IS NOT NULL OR v_actual = 'CALIFICADO') THEN
+        RAISE EXCEPTION '% ya tiene resultado registrado en %: quite la nota antes de marcar No presentó',
+            academico_test.fn_actividad_estudiante_etiqueta(p_pk_tactividad_estudiante),
+            academico_test.fn_actividad_etiqueta(academico_test.fn_actividad_estudiante_actividad(p_pk_tactividad_estudiante))
+            USING ERRCODE = '22023';
+    END IF;
+END;
+$$;
+
+-- No asistido y No presentó no se califican ni se observan hasta cambiar la
+-- asistencia en el Planeador o quitar el No presentó.
+CREATE OR REPLACE FUNCTION academico_test.fn_actividad_validar_permite_calificar(p_pk_tactividad_estudiante BIGINT)
+RETURNS VOID
+LANGUAGE plpgsql
+STABLE
+AS $$
+DECLARE
+    v_estado  VARCHAR;
+    v_ausente BOOLEAN;
+BEGIN
+    SELECT academico_test.fn_actividad_estado_resultado(n.PK_TACTIVIDAD_NOTA) INTO v_estado
+      FROM academico_test.TACTIVIDAD_NOTA n
+     WHERE n.FK_TACTIVIDAD_ESTUDIANTE = p_pk_tactividad_estudiante AND n.ACTIVE = TRUE;
+    SELECT a.ausente INTO v_ausente FROM academico_test.fn_actividad_asistencia_estudiante(p_pk_tactividad_estudiante) a;
+    IF COALESCE(v_estado, '') LIKE 'NO_ASISTIO%' OR (COALESCE(v_ausente, FALSE) AND COALESCE(v_estado, '') <> 'CALIFICADO') THEN
+        RAISE EXCEPTION '% está No asistido en %: cambie su asistencia en el Planeador para registrar el resultado',
+            academico_test.fn_actividad_estudiante_etiqueta(p_pk_tactividad_estudiante),
+            academico_test.fn_actividad_etiqueta(academico_test.fn_actividad_estudiante_actividad(p_pk_tactividad_estudiante))
+            USING ERRCODE = '22023';
+    END IF;
+    IF v_estado = 'NO_PRESENTO' THEN
+        RAISE EXCEPTION '% está marcado No presentó en %: quítelo (estado Pendiente) para registrar el resultado',
+            academico_test.fn_actividad_estudiante_etiqueta(p_pk_tactividad_estudiante),
+            academico_test.fn_actividad_etiqueta(academico_test.fn_actividad_estudiante_actividad(p_pk_tactividad_estudiante))
+            USING ERRCODE = '22023';
+    END IF;
+END;
+$$;
+
+-- Con resultado registrado la asistencia de la actividad queda congelada.
+CREATE OR REPLACE FUNCTION academico_test.fn_actividad_validar_asistencia_editable(p_pk_tactividad_estudiante BIGINT)
+RETURNS VOID
+LANGUAGE plpgsql
+STABLE
+AS $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM academico_test.TACTIVIDAD_NOTA n
+                WHERE n.FK_TACTIVIDAD_ESTUDIANTE = p_pk_tactividad_estudiante AND n.ACTIVE = TRUE
+                  AND (n.CALIFICACION IS NOT NULL
+                       OR academico_test.fn_actividad_estado_resultado(n.PK_TACTIVIDAD_NOTA) = 'CALIFICADO')) THEN
+        RAISE EXCEPTION '% ya tiene resultado en %: su asistencia en la actividad no se puede cambiar',
+            academico_test.fn_actividad_estudiante_etiqueta(p_pk_tactividad_estudiante),
+            academico_test.fn_actividad_etiqueta(academico_test.fn_actividad_estudiante_actividad(p_pk_tactividad_estudiante))
+            USING ERRCODE = '22023';
+    END IF;
+END;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_actividad_validar_estado_transicion(BIGINT, VARCHAR)
+    IS 'Regla 62: 22023 si el estudiante está No asistido (se corrige cambiando su asistencia en el Planeador) o si se marca No presentó sobre un resultado ya registrado. La usa fn_actividad_resultado_estado_set_interno.';
+COMMENT ON FUNCTION academico_test.fn_actividad_validar_permite_calificar(BIGINT)
+    IS '22023 si el estudiante está No asistido (por estado o por la asistencia de la actividad) o No presentó: no se califica ni se observa. Un resultado ya Calificado no se bloquea (su asistencia quedó congelada). La usan fn_actividad_nota_guardar_interno y fn_actividad_observar_estudiante_interno.';
+COMMENT ON FUNCTION academico_test.fn_actividad_validar_asistencia_editable(BIGINT)
+    IS '22023 si el estudiante ya tiene nota u observación en la actividad: su asistencia de la actividad quedó congelada. La usa fn_actividad_asistencia_planeador_set_interno.';
+
+CREATE OR REPLACE FUNCTION academico_test.fn_actividad_validar_estado_coherente(p_pk_tactividad_nota BIGINT)
+RETURNS VOID
+LANGUAGE plpgsql
+STABLE
+AS $$
+DECLARE
+    v_n RECORD;
+BEGIN
+    SELECT n.CALIFICACION, ae.PK_TACTIVIDAD_ESTUDIANTE, ae.FK_TACTIVIDAD,
+           academico_test.fn_actividad_estado_resultado(n.PK_TACTIVIDAD_NOTA) AS estado
+      INTO v_n
+      FROM academico_test.TACTIVIDAD_NOTA n
+      JOIN academico_test.TACTIVIDAD_ESTUDIANTE ae ON ae.PK_TACTIVIDAD_ESTUDIANTE = n.FK_TACTIVIDAD_ESTUDIANTE
+     WHERE n.PK_TACTIVIDAD_NOTA = p_pk_tactividad_nota;
+    IF FOUND AND v_n.estado <> 'CALIFICADO' AND v_n.CALIFICACION IS NOT NULL THEN
+        RAISE EXCEPTION 'El resultado de % en % no puede tener nota y estar marcado como %',
+            academico_test.fn_actividad_estudiante_etiqueta(v_n.PK_TACTIVIDAD_ESTUDIANTE),
+            academico_test.fn_actividad_etiqueta(v_n.FK_TACTIVIDAD),
+            (SELECT NOMBRE FROM academico_test.TLISTA_VALOR WHERE CATEGORIA = 'ESTADO_RESULTADO' AND VALOR = v_n.estado LIMIT 1)
+            USING ERRCODE = '22023';
+    END IF;
+END;
+$$;
+
+-- Regla 59: un referente inactivo conserva su historia pero ya no recibe resultados.
+CREATE OR REPLACE FUNCTION academico_test.fn_actividad_validar_referente_calificable(p_pk_tactividad BIGINT)
+RETURNS VOID
+LANGUAGE plpgsql
+STABLE
+AS $$
+DECLARE
+    v_nombre VARCHAR;
+BEGIN
+    SELECT rc.NOMBRE INTO v_nombre
+      FROM academico_test.TACTIVIDAD a
+      JOIN academico_test.TUNIDAD u ON u.PK_TUNIDAD = a.FK_TUNIDAD
+      JOIN academico_test.TREFERENTE_CURRICULAR rc ON rc.PK_REFERENTE_CURRICULAR = u.FK_REFERENTE_CURRICULAR
+     WHERE a.PK_TACTIVIDAD = p_pk_tactividad
+       AND (rc.ACTIVE = FALSE OR rc.ESTADO <> 'A');
+    IF FOUND THEN
+        RAISE EXCEPTION '% se rige por el referente curricular "%", que está inactivo: ya no se registran resultados en ella',
+            academico_test.fn_actividad_etiqueta(p_pk_tactividad), v_nombre USING ERRCODE = '22023';
+    END IF;
+END;
+$$;
+
+-- ---------------------------------------------------------------------------
+-- Registro narrativo (§6, Regla 61)
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION academico_test.fn_actividad_validar_formativa(p_pk_tactividad BIGINT)
+RETURNS VOID
+LANGUAGE plpgsql
+STABLE
+AS $$
+BEGIN
+    IF NOT academico_test.fn_actividad_es_formativa(p_pk_tactividad) THEN
+        RAISE EXCEPTION '% tiene referente evaluativo (o no tiene unidad): se califica con su instrumento, no con observaciones',
+            academico_test.fn_actividad_etiqueta(p_pk_tactividad) USING ERRCODE = '22023';
+    END IF;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION academico_test.fn_actividad_validar_observacion_texto(p_observacion TEXT)
+RETURNS VOID
+LANGUAGE plpgsql
+IMMUTABLE
+AS $$
+BEGIN
+    PERFORM academico_test.fn_actividad_validar_texto(p_observacion, 'La observación', 1000);
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION academico_test.fn_actividad_validar_momento(p_momento VARCHAR)
+RETURNS VOID
+LANGUAGE plpgsql
+STABLE
+AS $$
+BEGIN
+    IF NULLIF(TRIM(p_momento), '') IS NOT NULL AND academico_test.fn_tlv_momento_registro_pk(p_momento) IS NULL THEN
+        RAISE EXCEPTION 'Momento "%" no reconocido: use %', p_momento,
+            (SELECT string_agg(lv.NOMBRE, ', ' ORDER BY lv.PK_LISTA_VALOR) FROM academico_test.TLISTA_VALOR lv
+              WHERE lv.CATEGORIA = 'MOMENTO_REGISTRO' AND lv.ACTIVE = TRUE)
+            USING ERRCODE = '22023';
+    END IF;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION academico_test.fn_actividad_validar_evidencias_cantidad(p_archivos INT)
+RETURNS VOID
+LANGUAGE plpgsql
+IMMUTABLE
+AS $$
+BEGIN
+    IF p_archivos > 3 THEN
+        RAISE EXCEPTION 'La evidencia admite hasta 3 archivos por estudiante; quedarían %', p_archivos USING ERRCODE = '22023';
+    END IF;
+END;
+$$;
+
+-- p_evidencias / p_enlace NULL = no se tocan: valen los actuales.
+CREATE OR REPLACE FUNCTION academico_test.fn_actividad_validar_evidencias_narrativas(
+    p_evidencias        BIGINT[],
+    p_enlace            VARCHAR,
+    p_archivos_actuales INT     DEFAULT 0,
+    p_enlace_actual     VARCHAR DEFAULT NULL
+)
+RETURNS VOID
+LANGUAGE plpgsql
+STABLE
+AS $$
+DECLARE
+    v_archivo  BIGINT;
+    v_archivos INT := CASE WHEN p_evidencias IS NULL THEN COALESCE(p_archivos_actuales, 0)
+                           ELSE (SELECT COUNT(DISTINCT x) FROM unnest(p_evidencias) x WHERE x IS NOT NULL) END;
+    v_enlace   VARCHAR := CASE WHEN p_enlace IS NULL THEN NULLIF(TRIM(p_enlace_actual), '')
+                               ELSE NULLIF(TRIM(p_enlace), '') END;
+BEGIN
+    PERFORM academico_test.fn_actividad_validar_evidencias_cantidad(v_archivos);
+    FOREACH v_archivo IN ARRAY COALESCE(p_evidencias, ARRAY[]::BIGINT[]) LOOP
+        PERFORM academico_test.fn_actividad_validar_archivo_existente(v_archivo, 'la evidencia de la observación');
+        PERFORM academico_test.fn_actividad_validar_archivo_formato(
+            v_archivo, 'la evidencia de la observación', ARRAY['pdf', 'doc', 'docx', 'jpg', 'jpeg', 'png'], 10);
+    END LOOP;
+    PERFORM academico_test.fn_actividad_validar_url(v_enlace, 'la evidencia de la observación');
+    IF v_archivos > 0 AND v_enlace IS NOT NULL THEN
+        RAISE EXCEPTION 'La evidencia va en archivos (hasta 3) o en un enlace externo, no en los dos'
+            USING ERRCODE = '22023';
+    END IF;
 END;
 $$;
 
@@ -713,10 +1154,104 @@ COMMENT ON FUNCTION academico_test.fn_actividad_validar_instrumento_permitido(BI
 COMMENT ON FUNCTION academico_test.fn_actividad_validar_instrumento_definicion(BIGINT, JSONB)
     IS 'Validador central de PUT /planeador/actividades/:ID/instrumento: instrumento configurable, permitido por el referente y definición válida según su tipo (en Otro, su propia configuración y la del método elegido). Lo usa fn_actividad_instrumento_definir_interno.';
 COMMENT ON FUNCTION academico_test.fn_actividad_validar_calificable(BIGINT)
-    IS 'Regla 52: 22023 si la actividad está eliminada, es formativa (se registra con observación) o no tiene instrumento.';
-COMMENT ON FUNCTION academico_test.fn_actividad_validar_asistencia_calificar(BIGINT, DATE)
-    IS '22023 si el estudiante no tiene asistencia en la asignatura de la actividad ese día, o si es inasistencia injustificada. La justificada deja calificar.';
+    IS 'Reglas 52 y 59: 22023 si la actividad está eliminada, su referente está inactivo, es formativa (se registra con observación) o no tiene instrumento.';
 COMMENT ON FUNCTION academico_test.fn_actividad_validar_calificacion(BIGINT, DATE)
-    IS 'Validador central de una calificación: la asignación existe (P0002), la actividad es calificable y hay asistencia válida en la fecha. Lo usan fn_actividad_nota_calificar_interno y los _bulk_interno.';
+    IS 'Validador central de una calificación: la asignación existe (P0002) y la actividad es calificable. p_fecha se conserva por contrato: la asistencia ya no bloquea (Reglas 62/73), se refleja en el estado de resultado. Lo usa fn_actividad_nota_calificar_interno.';
 COMMENT ON FUNCTION academico_test.fn_actividad_assert_propietario_resultados(BIGINT, BIGINT)
     IS 'Regla 54: 42501 si un docente de aula ve o registra resultados de una actividad que no creó. Coordinación, rectoría y super admin pasan. Lo usan los wrappers de calificación y de lectura de notas.';
+COMMENT ON FUNCTION academico_test.fn_tlv_estado_resultado_pk(TEXT)
+    IS 'PK_LISTA_VALOR del ESTADO_RESULTADO con ese VALOR (CALIFICADO, PENDIENTE, NO_PRESENTO, NO_ASISTIO_JUSTIFICADA, NO_ASISTIO_NO_JUSTIFICADA), por texto. NULL si no existe.';
+COMMENT ON FUNCTION academico_test.fn_tlv_momento_registro_pk(TEXT)
+    IS 'PK_LISTA_VALOR del MOMENTO_REGISTRO (INICIO, PROCESO, CIERRE) por texto. NULL si no existe.';
+COMMENT ON FUNCTION academico_test.fn_actividad_estado_resultado(BIGINT)
+    IS 'VALOR del estado de resultado de una TACTIVIDAD_NOTA; sin estado, CALIFICADO si tiene CALIFICACION y si no PENDIENTE. Lo usan los listados de calificación y los informes.';
+COMMENT ON FUNCTION academico_test.fn_actividad_resultados_completos(BIGINT)
+    IS 'Regla 58 (derivada, no persistida): TRUE si ningún estudiante activo de la actividad está Pendiente de calificar (sin nota cuenta como Pendiente).';
+COMMENT ON FUNCTION academico_test.fn_actividad_resultado_registrado(BIGINT)
+    IS 'TRUE si el estudiante ya tiene resultado en la actividad: observación con texto, enlace o archivos, o un estado distinto de Pendiente. La usa fn_actividad_observar_grupal_interno para no sobrescribir.';
+COMMENT ON FUNCTION academico_test.fn_actividad_estudiante_etiqueta(BIGINT)
+    IS 'Nombre del estudiante de una asignación actividad-estudiante para mensajes y etiquetas de auditoría; "el estudiante" si no se resuelve.';
+COMMENT ON FUNCTION academico_test.fn_actividad_observacion_soporte_resolver(BIGINT)
+    IS 'TACTIVIDAD_ESTUDIANTE de un soporte de observación activo; P0002 si no existe o ya fue retirado. La usan los wrappers de quitar y favorito.';
+COMMENT ON FUNCTION academico_test.fn_actividad_validar_estado_resultado_asignable(VARCHAR)
+    IS 'Regla 62: 22023 si el estado no existe en ESTADO_RESULTADO, es CALIFICADO (lo fija el registro del resultado) o es No asistido (lo decide la asistencia). Solo PENDIENTE y NO_PRESENTO se marcan a mano.';
+COMMENT ON FUNCTION academico_test.fn_actividad_validar_estado_coherente(BIGINT)
+    IS 'Regla 62: 22023 si la nota está en un estado distinto de Calificado y conserva CALIFICACION.';
+COMMENT ON FUNCTION academico_test.fn_actividad_validar_referente_calificable(BIGINT)
+    IS 'Regla 59: 22023 si la unidad de la actividad se rige por un referente curricular eliminado o inactivo.';
+COMMENT ON FUNCTION academico_test.fn_actividad_validar_formativa(BIGINT)
+    IS 'Regla 52: 22023 si la actividad no es formativa (se califica con su instrumento, no con observaciones). La usan los _interno de observación y soportes, junto a fn_actividad_validar_referente_calificable.';
+COMMENT ON FUNCTION academico_test.fn_actividad_validar_evidencias_narrativas(BIGINT[], VARCHAR, INT, VARCHAR)
+    IS 'Regla 61: hasta 3 archivos pdf/doc/docx/jpg/png de máximo 10 MB (fn_actividad_validar_archivo_formato), o un enlace http(s); no los dos. NULL en p_evidencias/p_enlace = se conservan los actuales.';
+
+-- ---------------------------------------------------------------------------
+-- Regla 30: redondeo institucional, en la ESCALA del formato (1 decimal de
+-- 0-5 es un paso de 2 %), no sobre el porcentaje guardado.
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION academico_test.fn_nota_redondear(
+    p_valor     NUMERIC,
+    p_decimales INT     DEFAULT 1,
+    p_modo      VARCHAR DEFAULT NULL
+)
+RETURNS NUMERIC
+LANGUAGE sql
+IMMUTABLE
+AS $$
+    SELECT CASE
+             WHEN p_valor IS NULL THEN NULL
+             WHEN upper(COALESCE(p_modo, '')) LIKE '%NO RED%' THEN p_valor
+             WHEN upper(COALESCE(p_modo, '')) LIKE '%ARRIBA%'
+                  THEN ceil(p_valor * power(10::NUMERIC, COALESCE(p_decimales, 1))) / power(10::NUMERIC, COALESCE(p_decimales, 1))
+             WHEN upper(COALESCE(p_modo, '')) LIKE '%ABAJO%'
+                  THEN floor(p_valor * power(10::NUMERIC, COALESCE(p_decimales, 1))) / power(10::NUMERIC, COALESCE(p_decimales, 1))
+             ELSE round(p_valor, COALESCE(p_decimales, 1))
+           END;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_nota_redondear(NUMERIC, INT, VARCHAR)
+    IS 'Regla 30, aritmética pura: redondea p_valor a p_decimales (1 por defecto) según el modo MODO_REDONDEAR por texto (Hacia arriba, Hacia abajo, No redondear; cualquier otro, incluido NULL, = al más cercano). La usa fn_criterio_evaluacion_nota_redondear.';
+
+CREATE OR REPLACE FUNCTION academico_test.fn_criterio_evaluacion_nota_redondear(
+    p_pk_criterio BIGINT,
+    p_porcentaje  NUMERIC
+)
+RETURNS NUMERIC
+LANGUAGE sql
+STABLE
+AS $$
+    -- Sin criterio o formato cualitativo, la escala es el propio porcentaje.
+    SELECT CASE WHEN p_porcentaje IS NULL THEN NULL ELSE
+           academico_test.fn_nota_redondear(p_porcentaje * COALESCE(f.nota_maxima, 100) / 100,
+                                            COALESCE(f.decimales, 1), lv.NOMBRE)
+           * 100 / COALESCE(f.nota_maxima, 100) END
+      FROM (SELECT 1) uno
+      LEFT JOIN academico_test.fn_criterio_evaluacion_formato(p_pk_criterio) f ON TRUE
+      LEFT JOIN academico_test.TCRITERIO_EVALUACION ce ON ce.PK_TCRITERIO_EVALUACION = p_pk_criterio
+      LEFT JOIN academico_test.TLISTA_VALOR lv ON lv.PK_LISTA_VALOR = ce.FK_TLV_MODO_REDONDEAR;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_criterio_evaluacion_nota_redondear(BIGINT, NUMERIC)
+    IS 'Regla 30: redondea un porcentaje 0-100 en la escala del formato del criterio (NUMERO_DECIMALES, 1 por defecto, y FK_TLV_MODO_REDONDEAR) y lo devuelve otra vez en porcentaje. La usan fn_actividad_nota_redondear y la consolidación de la recuperación.';
+
+CREATE OR REPLACE FUNCTION academico_test.fn_actividad_criterio_evaluacion(p_pk_tactividad BIGINT)
+RETURNS BIGINT
+LANGUAGE sql
+STABLE
+AS $$
+    SELECT academico_test.fn_asignatura_criterio_evaluacion_vigente(
+               a.FK_TASIGNATURA, academico_test.fn_actividad_grado_resolver(a.PK_TACTIVIDAD))
+      FROM academico_test.TACTIVIDAD a
+     WHERE a.PK_TACTIVIDAD = p_pk_tactividad AND a.FK_TASIGNATURA IS NOT NULL;
+$$;
+
+CREATE OR REPLACE FUNCTION academico_test.fn_actividad_nota_redondear(p_pk_tactividad BIGINT, p_porcentaje NUMERIC)
+RETURNS NUMERIC
+LANGUAGE sql
+STABLE
+AS $$
+    SELECT academico_test.fn_criterio_evaluacion_nota_redondear(
+               academico_test.fn_actividad_criterio_evaluacion(p_pk_tactividad), p_porcentaje);
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_actividad_nota_redondear(BIGINT, NUMERIC)
+    IS 'Regla 30 para la nota de una actividad: resuelve su criterio de evaluación (grado + asignatura) y redondea. La usa fn_actividad_nota_aplicar_interno, punto único donde se escribe TACTIVIDAD_NOTA.CALIFICACION.';

@@ -6,7 +6,8 @@
 -- llega en el formulario) y fn_unidad_validar_coherencia (el estado que va a
 -- quedar). Las usan los núcleos _interno de V492.2; los assert_ de propiedad
 -- (Regla 25) los usa el wrapper de V492.3, porque son permisos, no datos.
--- Mensajes con nombres (nunca PKs) y el rótulo del referente de la unidad.
+-- Incluye §4 (títulos de sección), Reglas 12/19/27 y §2.1 (componente
+-- referenciado alguna vez). Mensajes con nombres, nunca PKs.
 -- Depende de: V212-V214.3 (referente, catálogo GRADOS), V214.1 (puentes),
 -- V239 (peso de la unidad y plan), V455 (escala), V451 (referente aplicable).
 
@@ -126,7 +127,8 @@ BEGIN
 END;
 $$;
 
--- p_campo: 'objetivo' (máx. 250) o 'contenido' (máx. 500), Sección 4.
+-- p_campo: 'objetivo' (máx. 250), 'contenido' (máx. 500) o 'título de sección'
+-- (máx. 200), Sección 4. Un elemento vacío es error: descartarlo corría las posiciones.
 CREATE OR REPLACE FUNCTION academico_test.fn_unidad_validar_textos(p_textos VARCHAR[], p_campo VARCHAR, p_maximo INT)
 RETURNS VOID
 LANGUAGE plpgsql
@@ -136,6 +138,16 @@ DECLARE
     v_pos INT;
     v_len INT;
 BEGIN
+    SELECT t.pos INTO v_pos
+      FROM unnest(p_textos) WITH ORDINALITY AS t(txt, pos)
+     WHERE NULLIF(TRIM(t.txt), '') IS NULL
+     ORDER BY t.pos
+     LIMIT 1;
+    IF v_pos IS NOT NULL THEN
+        RAISE EXCEPTION 'El % número % está vacío: escríbalo o quítelo de la lista', p_campo, v_pos
+            USING ERRCODE = '22023';
+    END IF;
+
     SELECT t.pos, length(TRIM(t.txt)) INTO v_pos, v_len
       FROM unnest(p_textos) WITH ORDINALITY AS t(txt, pos)
      WHERE length(TRIM(t.txt)) > p_maximo
@@ -145,6 +157,36 @@ BEGIN
         RAISE EXCEPTION 'El % número % admite máximo % caracteres (tiene %)', p_campo, v_pos, p_maximo, v_len
             USING ERRCODE = '22023';
     END IF;
+END;
+$$;
+
+-- §4: si llegan títulos de sección, uno por contenido y en la misma posición.
+CREATE OR REPLACE FUNCTION academico_test.fn_unidad_validar_contenidos_titulos(
+    p_contenidos VARCHAR[],
+    p_titulos    VARCHAR[]
+)
+RETURNS VOID
+LANGUAGE plpgsql
+IMMUTABLE
+AS $$
+BEGIN
+    IF p_contenidos IS NULL THEN
+        IF p_titulos IS NOT NULL THEN
+            RAISE EXCEPTION 'Los títulos de sección se envían junto con los contenidos de la unidad'
+                USING ERRCODE = '22023';
+        END IF;
+        RETURN;
+    END IF;
+    -- Clientes anteriores a §4 no mandan títulos: los contenidos quedan sin título.
+    IF p_titulos IS NULL THEN
+        RETURN;
+    END IF;
+    IF COALESCE(cardinality(p_titulos), 0) <> cardinality(p_contenidos) THEN
+        RAISE EXCEPTION 'Cada sección de contenido necesita su título: llegaron % contenidos y % títulos',
+            cardinality(p_contenidos), COALESCE(cardinality(p_titulos), 0)
+            USING ERRCODE = '22023';
+    END IF;
+    PERFORM academico_test.fn_unidad_validar_textos(p_titulos, 'título de sección', 200);
 END;
 $$;
 
@@ -255,7 +297,42 @@ BEGIN
 END;
 $$;
 
--- Regla 1: un grado solo usa referentes cuyo conjunto de niveles lo incluya.
+-- Regla 12: el grado (TGRADO.CODIGO = código MEN del catálogo GRADOS) debe
+-- estar entre los vinculados. [] es "Todos", y un enunciado sin grado sirve a
+-- cualquiera, así que también abre el referente a todos los grados.
+CREATE OR REPLACE FUNCTION academico_test.fn_unidad_validar_referente_cubre_grado(
+    p_fk_referente_curricular BIGINT,
+    p_fk_tgrado               BIGINT
+)
+RETURNS VOID
+LANGUAGE plpgsql
+STABLE
+AS $$
+DECLARE
+    v_vinculados JSONB;
+    v_codigo     VARCHAR;
+BEGIN
+    IF p_fk_referente_curricular IS NULL THEN
+        RETURN;
+    END IF;
+    v_vinculados := academico_test.fn_refcurr_grados_vinculados_interno(p_fk_referente_curricular);
+    SELECT TRIM(CODIGO) INTO v_codigo FROM academico_test.TGRADO WHERE PK_TGRADO = p_fk_tgrado;
+    IF jsonb_array_length(v_vinculados) = 0
+       OR EXISTS (SELECT 1 FROM jsonb_array_elements(v_vinculados) g WHERE TRIM(g->>'codigo') = v_codigo)
+       OR EXISTS (SELECT 1 FROM academico_test.TREFERENTE_ENUNCIADO e
+                   WHERE e.FK_REFERENTE_CURRICULAR = p_fk_referente_curricular
+                     AND e.FK_PADRE IS NULL AND e.FK_TLV_GRADO IS NULL AND e.ACTIVE = TRUE) THEN
+        RETURN;
+    END IF;
+    RAISE EXCEPTION 'El referente curricular "%" no tiene contenido para el grado "%"; cubre: %',
+        (SELECT NOMBRE FROM academico_test.TREFERENTE_CURRICULAR WHERE PK_REFERENTE_CURRICULAR = p_fk_referente_curricular),
+        (SELECT NOMBRE FROM academico_test.TGRADO WHERE PK_TGRADO = p_fk_tgrado),
+        (SELECT string_agg(g->>'nombre', ', ' ORDER BY ord) FROM jsonb_array_elements(v_vinculados) WITH ORDINALITY AS t(g, ord))
+        USING ERRCODE = '23503';
+END;
+$$;
+
+-- Regla 1: un grado solo usa referentes cuyo conjunto de niveles lo incluya; y Regla 12.
 CREATE OR REPLACE FUNCTION academico_test.fn_unidad_validar_referente_aplica_grado(
     p_fk_referente_curricular BIGINT,
     p_fk_tgrado               BIGINT
@@ -265,7 +342,10 @@ LANGUAGE plpgsql
 STABLE
 AS $$
 BEGIN
-    IF p_fk_referente_curricular IS NULL OR EXISTS (
+    IF p_fk_referente_curricular IS NULL THEN
+        RETURN;
+    END IF;
+    IF NOT EXISTS (
         SELECT 1
           FROM academico_test.TREFERENTE_CURRICULAR_NIVEL rcn
           JOIN academico_test.TGRADO g ON g.PK_TGRADO = p_fk_tgrado
@@ -273,15 +353,15 @@ BEGIN
            AND rcn.FK_TNIVEL_ENSENANZA = g.FK_TNIVEL_ENSENANZA
            AND rcn.ACTIVE = TRUE
     ) THEN
-        RETURN;
+        RAISE EXCEPTION 'El referente curricular "%" no cubre el nivel educativo "%" del grado "%"',
+            (SELECT NOMBRE FROM academico_test.TREFERENTE_CURRICULAR WHERE PK_REFERENTE_CURRICULAR = p_fk_referente_curricular),
+            (SELECT ne.NOMBRE FROM academico_test.TGRADO g
+               JOIN academico_test.TNIVEL_ENSENANZA ne ON ne.PK_NIVEL_ENSENANZA = g.FK_TNIVEL_ENSENANZA
+              WHERE g.PK_TGRADO = p_fk_tgrado),
+            (SELECT NOMBRE FROM academico_test.TGRADO WHERE PK_TGRADO = p_fk_tgrado)
+            USING ERRCODE = '23503';
     END IF;
-    RAISE EXCEPTION 'El referente curricular "%" no cubre el nivel educativo "%" del grado "%"',
-        (SELECT NOMBRE FROM academico_test.TREFERENTE_CURRICULAR WHERE PK_REFERENTE_CURRICULAR = p_fk_referente_curricular),
-        (SELECT ne.NOMBRE FROM academico_test.TGRADO g
-           JOIN academico_test.TNIVEL_ENSENANZA ne ON ne.PK_NIVEL_ENSENANZA = g.FK_TNIVEL_ENSENANZA
-          WHERE g.PK_TGRADO = p_fk_tgrado),
-        (SELECT NOMBRE FROM academico_test.TGRADO WHERE PK_TGRADO = p_fk_tgrado)
-        USING ERRCODE = '23503';
+    PERFORM academico_test.fn_unidad_validar_referente_cubre_grado(p_fk_referente_curricular, p_fk_tgrado);
 END;
 $$;
 
@@ -317,27 +397,34 @@ BEGIN
 END;
 $$;
 
--- Borrar no arrastra actividades (pueden seguir vivas desvinculadas), y una
--- unidad que usan otros docentes con criterios propios no se borra: se cede
--- (Regla 27, cambiando el docente autor en el PUT).
+-- Regla 27: solo bloquea el trabajo de los colegas (actividades o criterios
+-- propios); las actividades del dueño se desvinculan al eliminar
+-- (fn_unidad_eliminar_interno). Se cede cambiando el docente autor en el PUT.
 CREATE OR REPLACE FUNCTION academico_test.fn_unidad_validar_eliminable(p_pk_tunidad BIGINT)
 RETURNS VOID
 LANGUAGE plpgsql
 STABLE
 AS $$
 DECLARE
+    v_duenio      VARCHAR;
     v_actividades TEXT;
     v_colegas     TEXT;
 BEGIN
+    SELECT f.FK_TUSUARIO::VARCHAR INTO v_duenio
+      FROM academico_test.TUNIDAD u
+      JOIN academico_test.TFUNCIONARIO f ON f.PK_TFUNCIONARIO = u.FK_TFUNCIONARIO
+     WHERE u.PK_TUNIDAD = p_pk_tunidad;
+
     SELECT string_agg('"' || t.TITULO || '"', ', ' ORDER BY t.TITULO) FILTER (WHERE t.rn <= 5)
            || CASE WHEN count(*) > 5 THEN ' y ' || (count(*) - 5) || ' más' ELSE '' END
       INTO v_actividades
       FROM (SELECT a.TITULO, row_number() OVER (ORDER BY a.TITULO) AS rn
               FROM academico_test.TACTIVIDAD a
-             WHERE a.FK_TUNIDAD = p_pk_tunidad AND a.ACTIVE = TRUE) t
+             WHERE a.FK_TUNIDAD = p_pk_tunidad AND a.ACTIVE = TRUE
+               AND a.CREATED_BY IS DISTINCT FROM v_duenio) t
     HAVING count(*) > 0;
     IF v_actividades IS NOT NULL THEN
-        RAISE EXCEPTION 'No se puede eliminar %: tiene actividades vinculadas (%). Desvincúlelas o elimínelas primero.',
+        RAISE EXCEPTION 'No se puede eliminar %: otros docentes tienen actividades propias vinculadas (%). Ceda la unidad a uno de ellos en lugar de eliminarla.',
             academico_test.fn_unidad_etiqueta(p_pk_tunidad), v_actividades
             USING ERRCODE = '23503';
     END IF;
@@ -347,16 +434,59 @@ BEGIN
       INTO v_colegas
       FROM academico_test.TCRITERIO_UNIDAD cu
       JOIN academico_test.TRUBRICA_UNIDAD ru ON ru.PK_TRUBRICA_UNIDAD = cu.FK_TRUBRICA_UNIDAD
-      JOIN academico_test.TUNIDAD u ON u.PK_TUNIDAD = ru.FK_TUNIDAD
-      JOIN academico_test.TFUNCIONARIO f ON f.PK_TFUNCIONARIO = u.FK_TFUNCIONARIO
      WHERE ru.FK_TUNIDAD = p_pk_tunidad
        AND cu.ACTIVE = TRUE AND ru.ACTIVE = TRUE
-       AND cu.CREATED_BY IS DISTINCT FROM f.FK_TUSUARIO::VARCHAR;
+       AND cu.CREATED_BY IS DISTINCT FROM v_duenio;
     IF v_colegas IS NOT NULL THEN
         RAISE EXCEPTION 'No se puede eliminar %: otros docentes tienen criterios propios en su rúbrica (%). Ceda la unidad a uno de ellos en lugar de eliminarla.',
             academico_test.fn_unidad_etiqueta(p_pk_tunidad), v_colegas
             USING ERRCODE = '23503';
     END IF;
+END;
+$$;
+
+-- El nuevo dueño debe estar usando la unidad (actividades o criterios
+-- propios en ella) o dictar la asignatura en el grado de la unidad.
+CREATE OR REPLACE FUNCTION academico_test.fn_unidad_validar_cesion(
+    p_pk_tunidad      BIGINT,
+    p_fk_tfuncionario BIGINT,
+    p_fk_tasignatura  BIGINT,
+    p_fk_tgrado       BIGINT
+)
+RETURNS VOID
+LANGUAGE plpgsql
+STABLE
+AS $$
+DECLARE
+    v_usuario VARCHAR;
+BEGIN
+    IF p_fk_tfuncionario IS NULL OR EXISTS (
+        SELECT 1 FROM academico_test.TUNIDAD
+         WHERE PK_TUNIDAD = p_pk_tunidad AND FK_TFUNCIONARIO = p_fk_tfuncionario
+    ) THEN
+        RETURN;
+    END IF;
+    SELECT FK_TUSUARIO::VARCHAR INTO v_usuario
+      FROM academico_test.TFUNCIONARIO WHERE PK_TFUNCIONARIO = p_fk_tfuncionario;
+
+    IF EXISTS (SELECT 1 FROM academico_test.TACTIVIDAD a
+                WHERE a.FK_TUNIDAD = p_pk_tunidad AND a.ACTIVE = TRUE AND a.CREATED_BY = v_usuario)
+       OR EXISTS (SELECT 1 FROM academico_test.TCRITERIO_UNIDAD cu
+                    JOIN academico_test.TRUBRICA_UNIDAD ru ON ru.PK_TRUBRICA_UNIDAD = cu.FK_TRUBRICA_UNIDAD
+                   WHERE ru.FK_TUNIDAD = p_pk_tunidad AND ru.ACTIVE = TRUE
+                     AND cu.ACTIVE = TRUE AND cu.CREATED_BY = v_usuario)
+       OR EXISTS (SELECT 1 FROM academico_test.TDOCENTE_ASIGNATURA da
+                    JOIN academico_test.TGRUPO g ON g.PK_TGRUPO = da.FK_TGRUPO
+                   WHERE da.FK_TFUNCIONARIO = p_fk_tfuncionario AND da.ACTIVE = TRUE
+                     AND da.FK_TASIGNATURA = p_fk_tasignatura AND g.FK_TGRADO = p_fk_tgrado) THEN
+        RETURN;
+    END IF;
+    RAISE EXCEPTION 'No se puede ceder % a %: no la está usando ni dicta "%" en "%"',
+        academico_test.fn_unidad_etiqueta(p_pk_tunidad),
+        COALESCE(academico_test.fn_resolver_actor(v_usuario::BIGINT), 'ese docente'),
+        (SELECT NOMBRE FROM academico_test.TASIGNATURA WHERE PK_TASIGNATURA = p_fk_tasignatura),
+        (SELECT NOMBRE FROM academico_test.TGRADO WHERE PK_TGRADO = p_fk_tgrado)
+        USING ERRCODE = '22023';
 END;
 $$;
 
@@ -987,8 +1117,34 @@ $$;
 -- Validaciones centrales de la unidad
 -- ---------------------------------------------------------------------------
 
--- Lo que llega en el formulario. p_pk_tunidad NULL = alta (todo obligatorio);
--- en edición, NULL en un campo significa "no se toca".
+-- Regla 19: el criterio de cálculo no se exige si el referente resuelto es
+-- Formativo. Sin referente el enfoque no se conoce y se sigue exigiendo.
+CREATE OR REPLACE FUNCTION academico_test.fn_unidad_validar_calculo_requerido(
+    p_fk_tlv_calculo_definitiva BIGINT,
+    p_fk_referente_curricular   BIGINT
+)
+RETURNS VOID
+LANGUAGE plpgsql
+STABLE
+AS $$
+BEGIN
+    IF p_fk_tlv_calculo_definitiva IS NOT NULL OR EXISTS (
+        SELECT 1
+          FROM academico_test.TREFERENTE_CURRICULAR rc
+          JOIN academico_test.TLISTA_VALOR lv ON lv.PK_LISTA_VALOR = rc.FK_TLV_ENFOQUE_PEDAGOGICO
+         WHERE rc.PK_REFERENTE_CURRICULAR = p_fk_referente_curricular
+           AND lv.VALOR = 'FORMATIVO'
+    ) THEN
+        RETURN;
+    END IF;
+    RAISE EXCEPTION 'Seleccione la forma de calcular las actividades de la unidad (Ponderar, Promediar o Sumatoria)'
+        USING ERRCODE = '22023';
+END;
+$$;
+
+-- Lo que llega en el formulario. p_pk_tunidad NULL = alta (todo obligatorio
+-- salvo el criterio de cálculo, que depende del referente resuelto); en
+-- edición, NULL en un campo significa "no se toca".
 CREATE OR REPLACE FUNCTION academico_test.fn_unidad_validar_campos(
     p_pk_tunidad                BIGINT,
     p_nombre                    VARCHAR,
@@ -1018,10 +1174,6 @@ BEGIN
     END IF;
     IF v_alta AND p_fk_tgrado IS NULL THEN
         RAISE EXCEPTION 'Seleccione el grado de la unidad' USING ERRCODE = '22023';
-    END IF;
-    IF v_alta AND p_fk_tlv_calculo_definitiva IS NULL THEN
-        RAISE EXCEPTION 'Seleccione la forma de calcular las actividades de la unidad (Ponderar, Promediar o Sumatoria)'
-            USING ERRCODE = '22023';
     END IF;
     IF v_alta AND p_fk_tfuncionario IS NULL THEN
         RAISE EXCEPTION 'No se pudo determinar el docente autor de la unidad: el usuario no tiene un funcionario activo'
@@ -1160,3 +1312,37 @@ BEGIN
     END IF;
 END;
 $$;
+
+-- ---------------------------------------------------------------------------
+-- Componente curricular referenciado alguna vez (§2.1)
+-- ---------------------------------------------------------------------------
+
+-- Cuenta también las filas dadas de baja: un componente que alguna unidad o
+-- actividad llegó a usar es historia y solo se inactiva.
+CREATE OR REPLACE FUNCTION academico_test.fn_refenunc_referenciado_alguna_vez(p_pk_referente_enunciado BIGINT)
+RETURNS BOOLEAN
+LANGUAGE sql
+STABLE
+AS $$
+    WITH componentes AS (
+        SELECT e.PK_REFERENTE_ENUNCIADO
+          FROM academico_test.TREFERENTE_ENUNCIADO e
+         WHERE e.PK_REFERENTE_ENUNCIADO = p_pk_referente_enunciado
+            OR e.FK_PADRE = p_pk_referente_enunciado
+    )
+    SELECT EXISTS (SELECT 1 FROM academico_test.TUNIDAD_ENUNCIADO ue
+                     JOIN componentes c ON c.PK_REFERENTE_ENUNCIADO = ue.FK_REFERENTE_ENUNCIADO)
+        OR EXISTS (SELECT 1 FROM academico_test.TACTIVIDAD_EVIDENCIA ae
+                     JOIN componentes c ON c.PK_REFERENTE_ENUNCIADO = ae.FK_REFERENTE_ENUNCIADO);
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_unidad_validar_contenidos_titulos(VARCHAR[], VARCHAR[])
+    IS '§4: 22023 si llegan títulos de sección y no acompañan a los contenidos uno a uno, alguno está vacío o pasa de 200; títulos NULL no valida nada (clientes anteriores a §4). La usan fn_unidad_crear_interno y fn_unidad_actualizar_interno.';
+COMMENT ON FUNCTION academico_test.fn_unidad_validar_calculo_requerido(BIGINT, BIGINT)
+    IS 'Regla 19: 22023 si falta el criterio de cálculo y el referente resuelto no es de enfoque Formativo (sin referente se exige). La usan los núcleos de crear/actualizar unidad.';
+COMMENT ON FUNCTION academico_test.fn_unidad_validar_referente_cubre_grado(BIGINT, BIGINT)
+    IS 'Regla 12: 23503 si el grado no está entre fn_refcurr_grados_vinculados_interno del referente ([] o enunciados sin grado = todos). La usa fn_unidad_validar_referente_aplica_grado.';
+COMMENT ON FUNCTION academico_test.fn_unidad_validar_cesion(BIGINT, BIGINT, BIGINT, BIGINT)
+    IS 'Regla 27: 22023 si el nuevo dueño no tiene actividades ni criterios propios en la unidad ni dicta la asignatura en su grado. No-op si el dueño no cambia. La usa fn_unidad_actualizar_interno.';
+COMMENT ON FUNCTION academico_test.fn_refenunc_referenciado_alguna_vez(BIGINT)
+    IS '§2.1: TRUE si el componente (o sus evidencias) aparece en TUNIDAD_ENUNCIADO o TACTIVIDAD_EVIDENCIA, activas o no. Decide borrado físico vs lógico en fn_refenunc_eliminar_interno.';

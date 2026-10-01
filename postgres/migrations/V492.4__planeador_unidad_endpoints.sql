@@ -5,7 +5,8 @@
 -- V455, V488, V492 y V496) y de sus role_query (antes en V245, V249, V284,
 -- V305 y V406). Upsert por (microservicio, ruta, método): una fila que ya
 -- existe conserva su id, y con él los role_query que ya tenga.
--- Contratos iguales a los anteriores: mismas rutas, parámetros y funciones.
+-- POST/PUT aceptan CONTENIDOS_TITULOS opcional (§4); el PUT añade
+-- actividades_afectadas (Regla 28) sin cambiar la clave fn_unidad_actualizar.
 -- Depende de: V492.3 (funciones de endpoint), V488 (listar/buscar), V480,
 -- V244/V223 (actividades), V281/V407 (tabs), V496 (configuración de actividad).
 
@@ -42,8 +43,8 @@ ON CONFLICT (microservice_id, path_template, http_method) WHERE path_template IS
 INSERT INTO public.query (uuid, microservice_id, path_template, http_method, type, execution_mode, out_param_names,
                           public_end, captcha, cacheable, cache_ttl_seconds, action, style, param_types, detail, query)
 SELECT '1092ae72-15f3-4173-80b0-e2370de302e4', m.id_microservice, '/planeador/unidades', 'POST', 'postgres', 'SELECT', NULL,
-       'f', 'f', 'f', '60', NULL, NULL, '{"BODY.NOMBRE": "VARCHAR", "BODY.FK_TGRADO": "BIGINT", "BODY.OBJETIVOS": "TEXT[]", "BODY.CONTENIDOS": "TEXT[]", "BODY.ENUNCIADOS": "BIGINT[]", "BODY.DESCRIPCION": "VARCHAR", "BODY.PONDERACION": "NUMERIC", "BODY.FK_TASIGNATURA": "BIGINT", "BODY.FK_TFUNCIONARIO": "BIGINT", "BODY.FK_REFERENTE_CURRICULAR": "BIGINT", "BODY.FK_TLV_CALCULO_DEFINITIVA": "BIGINT"}'::jsonb,
-       'V245 -- crea una unidad tematica del Planeador (fn_unidad_crear, V216). Obligatorios: NOMBRE, FK_TASIGNATURA, FK_TGRADO, FK_TFUNCIONARIO, FK_TLV_CALCULO_DEFINITIVA (forma de calculo, catalogo TLISTA_VALOR CATEGORIA=CALCULO_DEFINITIVA). Opcionales: DESCRIPCION, FK_REFERENTE_CURRICULAR, OBJETIVOS/CONTENIDOS (arrays, ORDEN por posicion), ENUNCIADOS (PKs de TREFERENTE_ENUNCIADO nivel 1, via fn_unidad_enunciado_relacionar), PONDERACION (0..100, peso dentro de (asignatura,grado), valida regla del 100% y que el plan de la asignatura la admita). Retorna PK_TUNIDAD. Gate CREAR sobre PLANEADOR (fn_assert_permiso_seccion, dentro de la funcion).',
+       'f', 'f', 'f', '60', NULL, NULL, '{"BODY.NOMBRE": "VARCHAR", "BODY.FK_TGRADO": "BIGINT", "BODY.OBJETIVOS": "TEXT[]", "BODY.CONTENIDOS": "TEXT[]", "BODY.CONTENIDOS_TITULOS": "TEXT[]", "BODY.ENUNCIADOS": "BIGINT[]", "BODY.DESCRIPCION": "VARCHAR", "BODY.PONDERACION": "NUMERIC", "BODY.FK_TASIGNATURA": "BIGINT", "BODY.FK_TFUNCIONARIO": "BIGINT", "BODY.FK_REFERENTE_CURRICULAR": "BIGINT", "BODY.FK_TLV_CALCULO_DEFINITIVA": "BIGINT"}'::jsonb,
+       'Crea una unidad temática del Planeador (fn_unidad_crear). Obligatorios: NOMBRE, FK_TASIGNATURA, FK_TGRADO y FK_TLV_CALCULO_DEFINITIVA salvo que el referente del grado sea de enfoque Formativo (Regla 19). FK_TFUNCIONARIO se deriva del usuario si no llega. Opcionales: DESCRIPCION, FK_REFERENTE_CURRICULAR, OBJETIVOS, CONTENIDOS (ningún elemento vacío) y CONTENIDOS_TITULOS (§4: si llega, un título no vacío de máx. 200 por contenido, en la misma posición; si no llega, los contenidos quedan sin título, como antes), ENUNCIADOS, PONDERACION. El referente debe cubrir el nivel y el grado (Regla 12). Retorna PK_TUNIDAD. Gate: alcance CREAR sobre el grado.',
        'SELECT * FROM academico_test.fn_unidad_crear(
     public.fn_get_academico_usuario_id(:CONTEXT.USER_ID::BIGINT),
     CAST(:BODY.NOMBRE AS VARCHAR),
@@ -56,7 +57,8 @@ SELECT '1092ae72-15f3-4173-80b0-e2370de302e4', m.id_microservice, '/planeador/un
     CAST(:BODY.OBJETIVOS AS VARCHAR[]),
     CAST(:BODY.CONTENIDOS AS VARCHAR[]),
     CAST(:BODY.ENUNCIADOS AS BIGINT[]),
-    CAST(:BODY.PONDERACION AS NUMERIC)
+    CAST(:BODY.PONDERACION AS NUMERIC),
+    CAST(:BODY.CONTENIDOS_TITULOS AS VARCHAR[])
 );'
   FROM public.microservice m WHERE m.serviceid = 'eval-col'
 ON CONFLICT (microservice_id, path_template, http_method) WHERE path_template IS NOT NULL DO UPDATE
@@ -87,7 +89,7 @@ INSERT INTO public.query (uuid, microservice_id, path_template, http_method, typ
                           public_end, captcha, cacheable, cache_ttl_seconds, action, style, param_types, detail, query)
 SELECT '78b784ca-d168-48c1-b928-3ce180da0933', m.id_microservice, '/planeador/unidades/:ID', 'PATCH', 'postgres', 'SELECT', NULL,
        'f', 'f', 'f', '60', NULL, NULL, '{"PARAM.ID": "BIGINT"}'::jsonb,
-       'V245 -- soft delete (ACTIVE=FALSE) en cascada de una unidad: niveles -> criterios -> rubrica, objetivos, contenidos y la unidad (fn_unidad_eliminar, V216). :ID = PK_TUNIDAD. Se rechaza (23503) si la unidad todavia tiene actividades ACTIVE vinculadas (TACTIVIDAD.FK_TUNIDAD); desvincularlas antes con PATCH /planeador/unidades/actividades/:ACTIVIDADID o eliminarlas. Gate ELIMINAR sobre PLANEADOR. 404 (P0002) si la unidad no existe.',
+       'Baja lógica de una unidad (fn_unidad_eliminar): la unidad, su rúbrica (niveles, criterios), objetivos, contenidos y enunciados. :ID = PK_TUNIDAD. Regla 27: se rechaza (23503) si otros docentes tienen actividades o criterios propios en ella (se cede en lugar de eliminarla); las actividades del dueño se desvinculan y siguen vivas. Gate: alcance ELIMINAR + propietario. 404 (P0002) si la unidad no existe.',
        'SELECT * FROM academico_test.fn_unidad_eliminar(
     public.fn_get_academico_usuario_id(:CONTEXT.USER_ID::BIGINT),
     CAST(:PARAM.ID AS BIGINT)
@@ -103,9 +105,10 @@ ON CONFLICT (microservice_id, path_template, http_method) WHERE path_template IS
 INSERT INTO public.query (uuid, microservice_id, path_template, http_method, type, execution_mode, out_param_names,
                           public_end, captcha, cacheable, cache_ttl_seconds, action, style, param_types, detail, query)
 SELECT 'd017297c-7254-4463-8e68-967f45df05eb', m.id_microservice, '/planeador/unidades/:ID', 'PUT', 'postgres', 'SELECT', NULL,
-       'f', 'f', 'f', '60', NULL, NULL, '{"PARAM.ID": "BIGINT", "BODY.NOMBRE": "VARCHAR", "BODY.FK_TGRADO": "BIGINT", "BODY.OBJETIVOS": "TEXT[]", "BODY.CONTENIDOS": "TEXT[]", "BODY.ENUNCIADOS": "BIGINT[]", "BODY.DESCRIPCION": "VARCHAR", "BODY.PONDERACION": "NUMERIC", "BODY.FK_TASIGNATURA": "BIGINT", "BODY.FK_TFUNCIONARIO": "BIGINT", "BODY.LIMPIAR_REFERENTE": "BOOLEAN", "BODY.LIMPIAR_PONDERACION": "BOOLEAN", "BODY.FK_REFERENTE_CURRICULAR": "BIGINT", "BODY.FK_TLV_CALCULO_DEFINITIVA": "BIGINT"}'::jsonb,
-       'V245 -- PATCH parcial de una unidad (fn_unidad_actualizar, V216). Cada campo del body ausente/NULL preserva el valor actual. LIMPIAR_REFERENTE=true fuerza FK_REFERENTE_CURRICULAR a NULL; LIMPIAR_PONDERACION=true fuerza PONDERACION a NULL. OBJETIVOS/CONTENIDOS: NULL = no tocar, cualquier array (incl. vacio) = reemplazo completo. Revalida FKs, unicidad (nombre, asignatura, grado) y la regla del 100% de PONDERACION contra los valores RESULTANTES del PATCH. :ID = PK_TUNIDAD. Gate EDITAR sobre PLANEADOR. 404 (P0002) si la unidad no existe. V492: BODY.ENUNCIADOS (PKs de TREFERENTE_ENUNCIADO nivel 1) NULL = no tocar, array = reemplazo completo.',
-       'SELECT * FROM academico_test.fn_unidad_actualizar(
+       'f', 'f', 'f', '60', NULL, NULL, '{"PARAM.ID": "BIGINT", "BODY.NOMBRE": "VARCHAR", "BODY.FK_TGRADO": "BIGINT", "BODY.OBJETIVOS": "TEXT[]", "BODY.CONTENIDOS": "TEXT[]", "BODY.CONTENIDOS_TITULOS": "TEXT[]", "BODY.ENUNCIADOS": "BIGINT[]", "BODY.DESCRIPCION": "VARCHAR", "BODY.PONDERACION": "NUMERIC", "BODY.FK_TASIGNATURA": "BIGINT", "BODY.FK_TFUNCIONARIO": "BIGINT", "BODY.LIMPIAR_REFERENTE": "BOOLEAN", "BODY.LIMPIAR_PONDERACION": "BOOLEAN", "BODY.FK_REFERENTE_CURRICULAR": "BIGINT", "BODY.FK_TLV_CALCULO_DEFINITIVA": "BIGINT"}'::jsonb,
+       'PATCH parcial de una unidad (fn_unidad_actualizar). Campo ausente/NULL = no tocar; OBJETIVOS/CONTENIDOS son reemplazo completo y CONTENIDOS_TITULOS acompaña a CONTENIDOS (§4: si llega, uno no vacío de máx. 200 por contenido; si no llega, los contenidos se guardan sin título). LIMPIAR_REFERENTE / LIMPIAR_PONDERACION fuerzan NULL. Cambiar FK_TFUNCIONARIO cede la unidad: el nuevo dueño debe tener actividades o criterios propios en ella o dictar la asignatura en su grado (Regla 27). Responde la clave fn_unidad_actualizar con el PK_TUNIDAD y actividades_afectadas [{pk, titulo}]: las actividades cuyo peso o puntaje se convirtió por un cambio de criterio de cálculo, [] si no cambió (Regla 28). Gate: alcance EDITAR + propietario de la unidad.',
+       'SELECT r.pk_tunidad AS fn_unidad_actualizar, r.actividades_afectadas
+  FROM academico_test.fn_unidad_actualizar(
     public.fn_get_academico_usuario_id(:CONTEXT.USER_ID::BIGINT),
     CAST(:PARAM.ID AS BIGINT),
     CAST(:BODY.NOMBRE AS VARCHAR),
@@ -120,8 +123,9 @@ SELECT 'd017297c-7254-4463-8e68-967f45df05eb', m.id_microservice, '/planeador/un
     CAST(:BODY.CONTENIDOS AS VARCHAR[]),
     CAST(:BODY.PONDERACION AS NUMERIC),
     COALESCE(CAST(:BODY.LIMPIAR_PONDERACION AS BOOLEAN), FALSE),
-    CAST(:BODY.ENUNCIADOS AS BIGINT[])
-);'
+    CAST(:BODY.ENUNCIADOS AS BIGINT[]),
+    CAST(:BODY.CONTENIDOS_TITULOS AS VARCHAR[])
+) r;'
   FROM public.microservice m WHERE m.serviceid = 'eval-col'
 ON CONFLICT (microservice_id, path_template, http_method) WHERE path_template IS NOT NULL DO UPDATE
    SET type = EXCLUDED.type, execution_mode = EXCLUDED.execution_mode, out_param_names = EXCLUDED.out_param_names,
@@ -134,7 +138,7 @@ INSERT INTO public.query (uuid, microservice_id, path_template, http_method, typ
                           public_end, captcha, cacheable, cache_ttl_seconds, action, style, param_types, detail, query)
 SELECT 'f07d2353-007f-47b7-96b1-fd8c6f3b6828', m.id_microservice, '/planeador/unidades/:ID/actividades', 'GET', 'postgres', 'SELECT', NULL,
        'f', 'f', 'f', '60', NULL, NULL, '{"PARAM.ID": "BIGINT", "QUERY.SIZE": "INT", "QUERY.GRUPO": "BIGINT", "QUERY.OFFSET": "INT", "QUERY.SEARCH": "VARCHAR", "QUERY.ORDEN_ASC": "BOOLEAN", "QUERY.ORDEN_POR": "VARCHAR", "QUERY.INCLUIR_INACTIVAS": "BOOLEAN"}'::jsonb,
-       'V245 -- actividades vinculadas a una unidad (fn_unidad_actividades_listar, V216) con su PONDERACION (%, TACTIVIDAD.PONDERACION, V223 -- la columna "(%)" de la pantalla; distinta de INFLUENCIA que tambien se devuelve por compatibilidad). :ID = PK_TUNIDAD. Filtros ?search= (TITULO), ?grupo=, ?INCLUIR_INACTIVAS= (default false). Orden ?ORDEN_POR= en {actividad,tipo,instrumento,grupo,porcentaje} / ?ORDEN_ASC=. Paginacion ?size=(default 50)/?offset=. total_count via COUNT(*) OVER(). Gate VER sobre PLANEADOR. 404 (P0002) si la unidad no existe.',
+       'V245 -- actividades vinculadas a una unidad (fn_unidad_actividades_listar, V216) con su PONDERACION (%, TACTIVIDAD.PONDERACION, V223 -- la columna "(%)" de la pantalla; distinta de INFLUENCIA que tambien se devuelve por compatibilidad). :ID = PK_TUNIDAD. Filtros ?search= (TITULO), ?grupo=, ?INCLUIR_INACTIVAS= (default false). Orden ?ORDEN_POR= en {actividad,tipo,instrumento,grupo,porcentaje} / ?ORDEN_ASC=. Paginacion ?size=(default 50)/?offset=. total_count via COUNT(*) OVER(). Gate VER sobre PLANEADOR; a un docente de aula solo le lista las actividades que creó (Regla 25c). 404 (P0002) si la unidad no existe.',
        'SELECT * FROM academico_test.fn_unidad_actividades_listar(
     public.fn_get_academico_usuario_id(:CONTEXT.USER_ID::BIGINT),
     CAST(:PARAM.ID AS BIGINT),
@@ -219,7 +223,7 @@ INSERT INTO public.query (uuid, microservice_id, path_template, http_method, typ
                           public_end, captcha, cacheable, cache_ttl_seconds, action, style, param_types, detail, query)
 SELECT 'af761b1a-7192-4001-bf39-3123227fadde', m.id_microservice, '/planeador/unidades/:ID/contenidos', 'GET', 'postgres', 'SELECT', NULL,
        'f', 'f', 'f', '60', NULL, NULL, '{"PARAM.ID": "BIGINT"}'::jsonb,
-       'V245 -- contenidos/componentes ACTIVE de una unidad (TUNIDAD_CONTENIDO), ordenados por ORDEN (fn_unidad_contenidos_listar, V216). :ID = PK_TUNIDAD. Gate VER sobre PLANEADOR.',
+       'V245 -- contenidos/componentes ACTIVE de una unidad (TUNIDAD_CONTENIDO), ordenados por ORDEN (fn_unidad_contenidos_listar, V216). :ID = PK_TUNIDAD. Columnas pk_tunidad_contenido, orden, descripcion y titulo (§4, título de sección; NULL si no lo tiene), en ese orden. Gate VER sobre PLANEADOR.',
        'SELECT * FROM academico_test.fn_unidad_contenidos_listar(
     public.fn_get_academico_usuario_id(:CONTEXT.USER_ID::BIGINT),
     CAST(:PARAM.ID AS BIGINT)
@@ -363,7 +367,7 @@ INSERT INTO public.query (uuid, microservice_id, path_template, http_method, typ
                           public_end, captcha, cacheable, cache_ttl_seconds, action, style, param_types, detail, query)
 SELECT '529aba8e-501c-4749-a229-214083f2cd1a', m.id_microservice, '/planeador/unidades/actividades/:ACTIVIDADID', 'PATCH', 'postgres', 'SELECT', NULL,
        'f', 'f', 'f', '60', NULL, NULL, '{"PARAM.ACTIVIDADID": "BIGINT"}'::jsonb,
-       'V245 -- desvincula una actividad de su unidad: FK_TUNIDAD y PONDERACION quedan en NULL (fn_unidad_actividad_desvincular, V223). :ACTIVIDADID = PK_TACTIVIDAD. Si la unidad de origen calculaba por Sumatoria, recalcula el % de las actividades que quedan en ese (unidad,grupo). Retorna fn_unidad_actividad_desvincular (el PK, como antes) y, si la unidad pondera, porcentaje_libre y aviso (Al desvincular esta actividad, quedará un X% libre en la unidad...); no redistribuye (Regla 39). Gate EDITAR sobre PLANEADOR. 404 (P0002) si la actividad no existe.',
+       'V245 -- desvincula una actividad de su unidad: FK_TUNIDAD y PONDERACION quedan en NULL (fn_unidad_actividad_desvincular, V223). :ACTIVIDADID = PK_TACTIVIDAD. Si la unidad de origen calculaba por Sumatoria, recalcula el % de las actividades que quedan en ese (unidad,grupo). Retorna fn_unidad_actividad_desvincular (el PK, como antes) y, si la unidad pondera, porcentaje_libre y aviso (Al desvincular esta actividad, quedará un X% libre en la unidad...); no redistribuye (Regla 39). Gate EDITAR sobre PLANEADOR + autor de la actividad (Regla 25c). 404 (P0002) si la actividad no existe.',
        'SELECT r.pk_tactividad AS fn_unidad_actividad_desvincular, r.porcentaje_libre, r.aviso
   FROM academico_test.fn_unidad_actividad_desvincular(
     public.fn_get_academico_usuario_id(:CONTEXT.USER_ID::BIGINT),
@@ -381,7 +385,7 @@ INSERT INTO public.query (uuid, microservice_id, path_template, http_method, typ
                           public_end, captcha, cacheable, cache_ttl_seconds, action, style, param_types, detail, query)
 SELECT '25ffaf0b-3db2-4489-8b09-727aee1c3ec4', m.id_microservice, '/planeador/unidades/actividades/:ACTIVIDADID/ponderacion', 'PUT', 'postgres', 'SELECT', NULL,
        'f', 'f', 'f', '60', NULL, NULL, '{"BODY.PONDERACION": "NUMERIC", "PARAM.ACTIVIDADID": "BIGINT"}'::jsonb,
-       'V245 -- edicion inline del peso (%) de una actividad ya vinculada a una unidad (fn_unidad_actividad_ponderacion_set, V223). :ACTIVIDADID = PK_TACTIVIDAD. BODY.PONDERACION obligatorio, 0..100; se rechaza (22023) si la unidad Promedia (no aplica) o calcula por Sumatoria (se autocalcula desde NOTA_MAXIMA) o si la actividad no esta vinculada a ninguna unidad. Valida la regla del 100% por (unidad,grupo). Retorna PK_TACTIVIDAD. Gate EDITAR sobre PLANEADOR.',
+       'V245 -- edicion inline del peso (%) de una actividad ya vinculada a una unidad (fn_unidad_actividad_ponderacion_set, V223). :ACTIVIDADID = PK_TACTIVIDAD. BODY.PONDERACION obligatorio, 0..100; se rechaza (22023) si la unidad Promedia (no aplica) o calcula por Sumatoria (se autocalcula desde NOTA_MAXIMA) o si la actividad no esta vinculada a ninguna unidad. Valida la regla del 100% por (unidad,grupo). Retorna PK_TACTIVIDAD. Gate EDITAR sobre PLANEADOR + autor de la actividad (Regla 25c).',
        'SELECT * FROM academico_test.fn_unidad_actividad_ponderacion_set(
     public.fn_get_academico_usuario_id(:CONTEXT.USER_ID::BIGINT),
     CAST(:PARAM.ACTIVIDADID AS BIGINT),

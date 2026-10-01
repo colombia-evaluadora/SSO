@@ -2,9 +2,9 @@
 -- V136 -- Validaciones de escritura de asistencia, una funcion por regla
 -- (RETURNS VOID), para que los wrappers de V138 no las lleven en linea.
 -- Por que aqui: Regla 74 -- un docente sin rol que administre solo escribe
--- la asignatura que el mismo dicta; el gate actual solo valida capability +
--- alcance territorial, no eso. Incluye fn_asistencia_periodo_estado, que
--- vivia en V220 (eliminada: su contenido quedo consolidado en V136-V141).
+-- (y lee) la asignatura que el mismo dicta; Regla 72 -- dia de clase segun
+-- horario, excusa solo en inasistencia o tardanza y tipos 1/2/5. Incluye
+-- fn_asistencia_periodo_estado (antes V220, consolidada en V136-V141).
 -- Depende de: TGRUPO/TGRADO/TPERIODO_ACADEMICO/TLISTA_VALOR/TASIGNATURA/
 -- TACTIVIDAD/TDOCENTE_ASIGNATURA/TFUNCIONARIO (V22), V29 (fn_usuario_es_docente_puro).
 -- ===========================================================================
@@ -145,3 +145,161 @@ $$;
 
 COMMENT ON FUNCTION academico_test.fn_asistencia_validar_docente_asignado(BIGINT, BIGINT, BIGINT, BIGINT)
     IS 'Regla 74: salvo nivel administrativo real (categoria <= 2), exige TDOCENTE_ASIGNATURA activa para (funcionario, grupo, asignatura) -- aplica igual a un docente que ademas es director de grupo/coordinador/jefe de area. La usan fn_asistencia_registrar_bulk y fn_asistencia_editar (V138); fn_asistencia_editar_bulk (V438) la hereda porque llama a fn_asistencia_editar por cada pk.';
+
+-- Regla 72c: solo días con clase de la asignatura en el horario del grupo. Un
+-- grupo sin horario cargado para la asignatura no tiene contra qué validar y pasa.
+CREATE OR REPLACE FUNCTION academico_test.fn_asistencia_validar_fecha_programada(
+    p_fk_tgrupo      BIGINT,
+    p_fk_tasignatura BIGINT,
+    p_fecha          DATE,
+    p_bloque         NUMERIC
+)
+RETURNS VOID
+LANGUAGE plpgsql
+STABLE
+AS $$
+BEGIN
+    IF p_fk_tasignatura IS NULL OR NOT EXISTS (
+        SELECT 1 FROM academico_test.THORARIO
+         WHERE FK_TGRUPO = p_fk_tgrupo AND FK_TASIGNATURA = p_fk_tasignatura AND ACTIVE = TRUE) THEN
+        RETURN;
+    END IF;
+    IF EXISTS (SELECT 1
+                 FROM academico_test.fn_asistencia_sesiones_programadas(
+                          NULL, academico_test.fn_periodo_sede(academico_test.fn_grupo_periodo(p_fk_tgrupo)),
+                          p_fecha, p_fecha, p_fk_tgrupo, p_fk_tasignatura, NULL) sp
+                WHERE p_bloque IS NULL OR sp.bloque = p_bloque) THEN
+        RETURN;
+    END IF;
+    RAISE EXCEPTION '% no tiene clase programada en el grupo % el %',
+        COALESCE((SELECT NOMBRE FROM academico_test.TASIGNATURA WHERE PK_TASIGNATURA = p_fk_tasignatura), 'La asignatura'),
+        COALESCE((SELECT NOMBRE FROM academico_test.TGRUPO WHERE PK_TGRUPO = p_fk_tgrupo), ''),
+        to_char(p_fecha, 'DD/MM/YYYY') || CASE WHEN p_bloque IS NULL THEN '' ELSE ' en el bloque ' || p_bloque END
+        USING ERRCODE = '22023', HINT = 'Elija un día de clase según el horario del grupo';
+END;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_asistencia_validar_fecha_programada(BIGINT, BIGINT, DATE, NUMERIC)
+    IS 'Regla 72c: 22023 si la asignatura no tiene clase programada (fn_asistencia_sesiones_programadas) en el grupo esa fecha, o en ese bloque. Sin asignatura o sin horario cargado para ella no valida. La usa fn_asistencia_registrar_bulk (V138).';
+
+-- Regla 72b: la excusa acompaña una inasistencia o una llegada tarde, nunca un Asistió.
+CREATE OR REPLACE FUNCTION academico_test.fn_asistencia_validar_excusa_tipo(
+    p_tipo_asistencia_valor NUMERIC,
+    p_fk_soporte_archivo    BIGINT,
+    p_fk_tmatricula         BIGINT DEFAULT NULL
+)
+RETURNS VOID
+LANGUAGE plpgsql
+STABLE
+AS $$
+BEGIN
+    IF p_fk_soporte_archivo IS NOT NULL AND p_tipo_asistencia_valor = 1 THEN
+        RAISE EXCEPTION 'La excusa solo se adjunta a una inasistencia o a una llegada tarde: % está marcado como %',
+            COALESCE(academico_test.fn_actividad_estudiante_nombre(p_fk_tmatricula), 'el estudiante'),
+            COALESCE((SELECT NOMBRE FROM academico_test.TLISTA_VALOR
+                       WHERE PK_LISTA_VALOR = academico_test.fn_asistencia_tipo_pk(1)), 'Asistió')
+            USING ERRCODE = '22023';
+    END IF;
+END;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_asistencia_validar_excusa_tipo(NUMERIC, BIGINT, BIGINT)
+    IS 'Regla 72b: 22023 si se adjunta excusa a un registro de tipo Asistió (TIPO_ASISTENCIA VALOR 1). La usan fn_asistencia_validar_excusa_registros y fn_asistencia_editar (V138).';
+
+-- Regla 72: solo se escriben Asistió (1), No asistió (2) y Llegó tarde (5); la
+-- excusa es el archivo de soporte, no un tipo. 3 y 6 quedan en filas históricas.
+CREATE OR REPLACE FUNCTION academico_test.fn_asistencia_validar_tipo(p_valor NUMERIC)
+RETURNS BIGINT
+LANGUAGE plpgsql
+STABLE
+AS $$
+BEGIN
+    IF p_valor IS NULL OR p_valor NOT IN (1, 2, 5) OR academico_test.fn_asistencia_tipo_pk(p_valor) IS NULL THEN
+        RAISE EXCEPTION 'tipoAsistencia % invalido (validos: 1 Asistio, 2 No asistio, 5 Llego tarde; la excusa va como archivo de soporte)',
+            COALESCE(p_valor::TEXT, 'NULL') USING ERRCODE = '23503';
+    END IF;
+    RETURN academico_test.fn_asistencia_tipo_pk(p_valor);
+END;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_asistencia_validar_tipo(NUMERIC)
+    IS 'Regla 72: 23503 si el tipo de asistencia a escribir no es 1, 2 o 5 (3 y 6 solo se leen en filas históricas: la justificación es FK_SOPORTE_ARCHIVO). Devuelve su PK_LISTA_VALOR. La usan fn_asistencia_editar_interno (V137) y fn_actividad_asistencia_planeador_set_interno (V496.6).';
+
+CREATE OR REPLACE FUNCTION academico_test.fn_asistencia_validar_excusa_registros(
+    p_registros          JSONB,
+    p_marcar_todos_valor NUMERIC
+)
+RETURNS VOID
+LANGUAGE plpgsql
+STABLE
+AS $$
+DECLARE
+    v_r JSONB;
+BEGIN
+    IF p_registros IS NULL OR jsonb_typeof(p_registros) <> 'array' THEN
+        RETURN;
+    END IF;
+    FOR v_r IN SELECT * FROM jsonb_array_elements(p_registros) LOOP
+        PERFORM academico_test.fn_asistencia_validar_excusa_tipo(
+            COALESCE((v_r->>'tipoAsistencia')::NUMERIC, p_marcar_todos_valor),
+            NULLIF(v_r->>'fkArchivo', '')::BIGINT,
+            (v_r->>'fkMatricula')::BIGINT);
+    END LOOP;
+END;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_asistencia_validar_excusa_registros(JSONB, NUMERIC)
+    IS 'Regla 72b sobre cada registro de p_registros (fn_asistencia_validar_excusa_tipo). La usa fn_asistencia_registrar_bulk (V138).';
+
+-- ---------------------------------------------------------------------------
+-- Lectura (Regla 74): el docente solo ve las asignaturas que dicta en el grupo
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION academico_test.fn_asistencia_puede_ver_asignatura(
+    p_pk_usuario     BIGINT,
+    p_fk_tgrupo      BIGINT,
+    p_fk_tasignatura BIGINT
+)
+RETURNS BOOLEAN
+LANGUAGE plpgsql
+STABLE
+AS $$
+BEGIN
+    -- Solo se angosta el nivel 3 "solo sus grupos" que no dirige el grupo: el
+    -- docente. Director de grupo y coordinación conservan el alcance de V140.
+    RETURN academico_test.fn_asistencia_puede_ver(p_pk_usuario, p_fk_tgrupo)
+       AND (p_pk_usuario IS NULL OR p_fk_tasignatura IS NULL
+            OR COALESCE(academico_test.fn_usuario_categoria_rol_nivel(p_pk_usuario), 99) <> 3
+            OR NOT academico_test.fn_usuario_solo_sus_grupos(p_pk_usuario)
+            OR p_fk_tgrupo IN (SELECT grupo_id FROM academico_test.fn_usuario_grupos_dirigidos(p_pk_usuario))
+            OR EXISTS (SELECT 1
+                         FROM academico_test.TDOCENTE_ASIGNATURA da
+                         JOIN academico_test.TFUNCIONARIO f ON f.PK_TFUNCIONARIO = da.FK_TFUNCIONARIO
+                        WHERE f.FK_TUSUARIO = p_pk_usuario AND f.ACTIVE = TRUE
+                          AND da.FK_TGRUPO = p_fk_tgrupo AND da.FK_TASIGNATURA = p_fk_tasignatura
+                          AND da.ACTIVE = TRUE));
+END;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_asistencia_puede_ver_asignatura(BIGINT, BIGINT, BIGINT)
+    IS 'Regla 74, BOOLEAN para el WHERE de las lecturas de asistencia: fn_asistencia_puede_ver (V140) y, para el docente (nivel 3 solo-sus-grupos que no dirige el grupo), además que dicte esa asignatura en el grupo (TDOCENTE_ASIGNATURA). Asignatura NULL (toma por actividad) = alcance del grupo. plpgsql: depende de funciones posteriores (V140, V489).';
+
+CREATE OR REPLACE FUNCTION academico_test.fn_asistencia_assert_puede_ver(
+    p_pk_usuario     BIGINT,
+    p_fk_tgrupo      BIGINT,
+    p_fk_tasignatura BIGINT DEFAULT NULL
+)
+RETURNS VOID
+LANGUAGE plpgsql
+STABLE
+AS $$
+BEGIN
+    IF NOT academico_test.fn_asistencia_puede_ver_asignatura(p_pk_usuario, p_fk_tgrupo, p_fk_tasignatura) THEN
+        RAISE EXCEPTION 'No tiene permiso para ver la asistencia del grupo %',
+            COALESCE((SELECT NOMBRE FROM academico_test.TGRUPO WHERE PK_TGRUPO = p_fk_tgrupo), p_fk_tgrupo::TEXT)
+            USING ERRCODE = '42501';
+    END IF;
+END;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_asistencia_assert_puede_ver(BIGINT, BIGINT, BIGINT)
+    IS 'Gate de lectura de asistencia (Regla 74): 42501 si fn_asistencia_puede_ver_asignatura es falso; sin asignatura, alcance del grupo. La usan fn_asistencia_estudiantes_sesion, fn_asistencia_asignaturas_sesion y fn_asistencia_actividades_dia (V141).';
