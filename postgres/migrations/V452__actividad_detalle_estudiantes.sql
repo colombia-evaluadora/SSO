@@ -3,7 +3,7 @@
 -- (fn_actividad_pantalla_edicion). El detail de la fila de pantalla-edicion
 -- lo define hoy V496.4.
 -- Depende de: V224 (cuerpo base), V246 (fila del endpoint), V451
--- (fn_unidad_referente_aplicable).
+-- (fn_unidad_referente_aplicable), V496.1 (columnas y archivos de adaptacion).
 
 SET search_path TO academico_test, public;
 
@@ -136,12 +136,23 @@ BEGIN
                           'pk',                        ad.PK_TACTIVIDAD_ADAPTACION,
                           'tipoAdaptacion',            ad.FK_TLV_TIPO_ADAPTACION,
                           'tipoAdaptacionNombre',      lta.NOMBRE,
+                          'especificacionTipo',        ad.ESPECIFICACION_TIPO,
+                          'nombrePlantilla',           ad.NOMBRE_PLANTILLA,
                           'descripcion',               ad.DESCRIPCION,
                           'usaVersionModificada',      ad.USA_VERSION_MODIFICADA,
                           'formatoAdaptacion',         ad.FK_TLV_FORMATO_ADAPTACION,
                           'formatoAdaptacionNombre',   lfa.NOMBRE,
                           'fkTarchivo',                ad.FK_TARCHIVO,
                           'url',                       ad.URL,
+                          -- Mismo shape que fn_actividad_adaptaciones_reutilizables_listar_interno.
+                          'archivos', COALESCE((
+                              SELECT jsonb_agg(jsonb_build_object(
+                                         'fkTarchivo', ta.PK_TARCHIVO, 'nombre', ta.NOMBRE, 'peso', ta.PESO)
+                                         ORDER BY aa.ORDEN)
+                                FROM academico_test.TACTIVIDAD_ADAPTACION_ARCHIVO aa
+                                JOIN academico_test.TARCHIVO ta ON ta.PK_TARCHIVO = aa.FK_TARCHIVO AND ta.ACTIVE = TRUE
+                               WHERE aa.FK_TACTIVIDAD_ADAPTACION = ad.PK_TACTIVIDAD_ADAPTACION AND aa.ACTIVE = TRUE
+                          ), '[]'::jsonb),
                           'aplicaA',                   ad.FK_TLV_APLICA_A,
                           'aplicaANombre',             lap.NOMBRE,
                           -- Matriculas concretas del grupo a las que aplica
@@ -266,7 +277,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_actividad_buscar_por_pk(BIGINT, BIGINT, INT)
-    IS 'estudiantes ([{pkTactividadEstudiante, pkTmatricula, fkTestudiante, estudiante, calificacion, calificable, observacion}]) son los asignados ACTIVE con el pk de la asignacion -- el que piden calificar, observar y las adaptaciones -- y su nota u observacion actual; con esto el detalle trae todo lo relacionado a la actividad (unidad con referente/rubrica/enunciados en unidad_configuracion, materiales, adaptaciones, evidencias, criterios, recuperacion y estudiantes) en una sola llamada. Detalle completo de una actividad (gate VER): todos los campos de TACTIVIDAD con los nombres de catalogo resueltos, el estado derivado (fn_actividad_estado), el progreso de evaluacion (asignados/evaluados en un solo LATERAL), los materiales de apoyo y las adaptaciones curriculares como JSONB, las evidencias y los criterios ya relacionados (columnas "evidencias" y "criterios", ambas [] cuando no hay ninguno: evidencias = [{pk, fkReferenteEnunciado, texto, fkPadre, textoPadre}] sobre TACTIVIDAD_EVIDENCIA y criterios = [{pk, fkTcriterioUnidad, descripcion, codigo, orden}] sobre TACTIVIDAD_CRITERIO_UNIDAD, solo filas ACTIVE -- el "pk" de cada elemento es el de la RELACION, que es justo el que exigen fn_actividad_evidencia_quitar / fn_actividad_criterio_quitar de V214.1 y que antes solo se conocia en la respuesta del POST que lo creo), y la config de recuperacion (columna "recuperacion": objeto con destino/tipoAplicacion/tipoCalculo/valorPonderacion + nombres resueltos, o NULL si no es de recuperacion). campos_disponibles = fn_actividad_campos_disponibles (dependencias dinamicas actividad->criterio / actividad->evaluacion, V214.2); unidad_configuracion = fn_actividad_unidad_configuracion (snapshot de la unidad relacionada, o {tieneUnidad:false}, V214.2) -- ambas calculadas solo para esta fila (detalle), no en fn_actividad_listar. SETOF 0 o 1 fila (incluye inactivas). V224.';
+    IS 'estudiantes ([{pkTactividadEstudiante, pkTmatricula, fkTestudiante, estudiante, calificacion, calificable, observacion}]) son los asignados ACTIVE con el pk de la asignacion -- el que piden calificar, observar y las adaptaciones -- y su nota u observacion actual; con esto el detalle trae todo lo relacionado a la actividad (unidad con referente/rubrica/enunciados en unidad_configuracion, materiales, adaptaciones, evidencias, criterios, recuperacion y estudiantes) en una sola llamada. Detalle completo de una actividad (gate VER): todos los campos de TACTIVIDAD con los nombres de catalogo resueltos, el estado derivado (fn_actividad_estado), el progreso de evaluacion (asignados/evaluados en un solo LATERAL), los materiales de apoyo y las adaptaciones curriculares como JSONB, las evidencias y los criterios ya relacionados (columnas "evidencias" y "criterios", ambas [] cuando no hay ninguno: evidencias = [{pk, fkReferenteEnunciado, texto, fkPadre, textoPadre}] sobre TACTIVIDAD_EVIDENCIA y criterios = [{pk, fkTcriterioUnidad, descripcion, codigo, orden}] sobre TACTIVIDAD_CRITERIO_UNIDAD, solo filas ACTIVE -- el "pk" de cada elemento es el de la RELACION, que es justo el que exigen fn_actividad_evidencia_quitar / fn_actividad_criterio_quitar de V214.1 y que antes solo se conocia en la respuesta del POST que lo creo), y la config de recuperacion (columna "recuperacion": objeto con destino/tipoAplicacion/tipoCalculo/valorPonderacion + nombres resueltos, o NULL si no es de recuperacion). campos_disponibles = fn_actividad_campos_disponibles (dependencias dinamicas actividad->criterio / actividad->evaluacion, V214.2); unidad_configuracion = fn_actividad_unidad_configuracion (snapshot de la unidad relacionada, o {tieneUnidad:false}, V214.2) -- ambas calculadas solo para esta fila (detalle), no en fn_actividad_listar. Cada adaptacion trae especificacionTipo (justificacion libre de "Otro"), nombrePlantilla (rotulo en la Biblioteca) y archivos ([{fkTarchivo, nombre, peso}], hasta 3, TACTIVIDAD_ADAPTACION_ARCHIVO). SETOF 0 o 1 fila (incluye inactivas). V224.';
 
 CREATE OR REPLACE FUNCTION academico_test.fn_actividad_pantalla_edicion(
     p_pk_usuario_solicitante BIGINT,
