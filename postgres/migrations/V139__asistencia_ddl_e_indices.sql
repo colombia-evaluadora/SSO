@@ -5,7 +5,7 @@
 -- la que gana hoy sobre FK_TASISTENCIA_ACTIVIDAD, V220 no la tenia).
 -- Que hace: FK_TACTIVIDAD (nullable) + FK ON DELETE CASCADE, FK_TASIGNATURA
 -- pasa a NULLABLE, CHECK CK_TASISTENCIA_CONTEXTO (asignatura o actividad,
--- nunca ninguna), y los indices que usa el modulo (UQ_TASISTENCIA_SESION,
+-- nunca ninguna), ORIGEN, y los indices que usa el modulo (UQ_TASISTENCIA_SESION,
 -- IDX_TASISTENCIA_9/10/11, IDX_TASISTENCIA_ACTIVIDAD, IDX_THORARIO_LOOKUP).
 -- Depende de: TASISTENCIA/THORARIO (V22), TACTIVIDAD (rama Planeador/V243).
 -- ===========================================================================
@@ -48,6 +48,14 @@ BEGIN
     EXECUTE 'ALTER TABLE academico_test.TASISTENCIA
                  ADD CONSTRAINT CK_TASISTENCIA_CONTEXTO
                  CHECK (FK_TASIGNATURA IS NOT NULL OR FK_TACTIVIDAD IS NOT NULL)';
+
+    -- Vista Asistencias o Planeador (fila sin bloque); la de la Vista predomina.
+    EXECUTE 'ALTER TABLE academico_test.TASISTENCIA
+                 ADD COLUMN IF NOT EXISTS ORIGEN VARCHAR(20) NOT NULL DEFAULT ''ASISTENCIA''';
+    EXECUTE 'ALTER TABLE academico_test.TASISTENCIA
+                 DROP CONSTRAINT IF EXISTS CK_TASISTENCIA_ORIGEN';
+    EXECUTE 'ALTER TABLE academico_test.TASISTENCIA
+                 ADD CONSTRAINT CK_TASISTENCIA_ORIGEN CHECK (ORIGEN IN (''ASISTENCIA'', ''PLANEADOR''))';
 END
 $ddl$;
 
