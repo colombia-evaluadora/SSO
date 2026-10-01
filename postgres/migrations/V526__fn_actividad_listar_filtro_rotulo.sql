@@ -1,14 +1,15 @@
 -- ===========================================================================
 -- V526 — fn_actividad_listar_interno: filtro por pares (grado, asignatura)
--- de una pestaña de Rotulo de Ejecucion (fn_planeador_actividad_tabs_listar,
--- V525), para acotar GET /planeador/actividades/mias server-side sin romper
--- el paginado (el listado es paginado server-side, a diferencia de Unidades
--- que trae todo y filtra en el cliente).
--- Por que un par, no un grado solo: dos asignaturas del mismo grado pueden
--- resolver a rotulos distintos (V525) -- filtrar solo por grado mezclaria
--- pestañas. "asignatura": null matchea cualquier asignatura de ese grado.
+-- de una pestaña de Rotulo de Ejecucion (V525), para acotar GET /planeador/
+-- actividades/mias server-side sin romper el paginado.
+-- Por que un par y no un grado solo: dos asignaturas del mismo grado pueden
+-- resolver a rotulos distintos (V525). Por que VARCHAR[] y no JSONB: un
+-- parametro QUERY.* de un GET siempre llega como String al binder, nunca
+-- como List/array -- JSONB ahi rompe en runtime, mismo hallazgo que V253
+-- para TEXT[]/VARCHAR[]. Cada elemento es "grado:asignatura" (asignatura
+-- vacio = comodin), armado con string_to_array en el endpoint (V527).
 -- Depende de: V481 (fn_actividad_listar_interno/_listar/_listar_docente),
--- V525 (forma del par, igual a grado_asignatura_pares).
+-- V253 (mismo patron CSV-por-GET), V525.
 -- ===========================================================================
 
 SET search_path TO academico_test, public;
@@ -16,6 +17,11 @@ SET search_path TO academico_test, public;
 DROP FUNCTION IF EXISTS academico_test.fn_actividad_listar_docente(BIGINT, VARCHAR, BIGINT, BIGINT, BIGINT, VARCHAR[], INT, VARCHAR, BOOLEAN, INT, INT, DATE);
 DROP FUNCTION IF EXISTS academico_test.fn_actividad_listar(BIGINT, VARCHAR, BIGINT, BIGINT, BIGINT, BIGINT, BIGINT, DATE, DATE, VARCHAR[], INT, BOOLEAN, VARCHAR, BOOLEAN, INT, INT, BIGINT, DATE);
 DROP FUNCTION IF EXISTS academico_test.fn_actividad_listar_interno(BIGINT[], BOOLEAN, BOOLEAN, BIGINT, VARCHAR, VARCHAR, BIGINT, BIGINT, BIGINT, BIGINT, BIGINT, DATE, DATE, VARCHAR[], INT, BOOLEAN, VARCHAR, BOOLEAN, INT, INT, BIGINT, DATE);
+-- Version con el ultimo parametro JSONB (primera version de V526, antes de
+-- descubrir que QUERY.* no admite array/objeto en un GET -- ver cabecera).
+DROP FUNCTION IF EXISTS academico_test.fn_actividad_listar_docente(BIGINT, VARCHAR, BIGINT, BIGINT, BIGINT, VARCHAR[], INT, VARCHAR, BOOLEAN, INT, INT, DATE, JSONB);
+DROP FUNCTION IF EXISTS academico_test.fn_actividad_listar(BIGINT, VARCHAR, BIGINT, BIGINT, BIGINT, BIGINT, BIGINT, DATE, DATE, VARCHAR[], INT, BOOLEAN, VARCHAR, BOOLEAN, INT, INT, BIGINT, DATE, JSONB);
+DROP FUNCTION IF EXISTS academico_test.fn_actividad_listar_interno(BIGINT[], BOOLEAN, BOOLEAN, BIGINT, VARCHAR, VARCHAR, BIGINT, BIGINT, BIGINT, BIGINT, BIGINT, DATE, DATE, VARCHAR[], INT, BOOLEAN, VARCHAR, BOOLEAN, INT, INT, BIGINT, DATE, JSONB);
 
 CREATE OR REPLACE FUNCTION academico_test.fn_actividad_listar_interno(
     -- Alcance (fn_planeador_listado_alcance) y quién pide, para las
@@ -43,7 +49,7 @@ CREATE OR REPLACE FUNCTION academico_test.fn_actividad_listar_interno(
     p_offset                   INT       DEFAULT 0,
     p_fk_tfuncionario          BIGINT    DEFAULT NULL,
     p_dia                      DATE      DEFAULT NULL,
-    p_grado_asignatura_pares   JSONB     DEFAULT NULL
+    p_grado_asignatura_pares   VARCHAR[] DEFAULT NULL
 )
 RETURNS SETOF academico_test.t_actividad_listado_fila
 LANGUAGE plpgsql
@@ -142,15 +148,15 @@ BEGIN
            AND (p_estados IS NULL OR academico_test.fn_actividad_estado(
                     a.FECHA_INICIO, a.FECHA_CIERRE, a.FECHA_CALIFICADO, v_hoy, p_dias_gracia
                 ) = ANY(p_estados))
-           -- V526: pestaña de Rotulo de Ejecucion activa.
+           -- V526: pestaña de Rotulo de Ejecucion activa. Cada elemento es
+           -- "grado:asignatura" (asignatura vacío = comodín) -- ver cabecera.
            AND (p_grado_asignatura_pares IS NULL OR EXISTS (
                    SELECT 1
-                     FROM jsonb_array_elements(p_grado_asignatura_pares) par
-                    WHERE (par->>'grado')::BIGINT = COALESCE(g_ga.FK_TGRADO, u_ga.FK_TGRADO)
+                     FROM unnest(p_grado_asignatura_pares) AS par(valor)
+                    WHERE split_part(par.valor, ':', 1)::BIGINT = COALESCE(g_ga.FK_TGRADO, u_ga.FK_TGRADO)
                       AND (
-                            (par->'asignatura') IS NULL
-                         OR par->>'asignatura' = 'null'
-                         OR (par->>'asignatura')::BIGINT = a.FK_TASIGNATURA
+                            split_part(par.valor, ':', 2) = ''
+                         OR split_part(par.valor, ':', 2)::BIGINT = a.FK_TASIGNATURA
                       )
                ))
     ),
@@ -267,8 +273,8 @@ BEGIN
 END;
 $$;
 
-COMMENT ON FUNCTION academico_test.fn_actividad_listar_interno(BIGINT[], BOOLEAN, BOOLEAN, BIGINT, VARCHAR, VARCHAR, BIGINT, BIGINT, BIGINT, BIGINT, BIGINT, DATE, DATE, VARCHAR[], INT, BOOLEAN, VARCHAR, BOOLEAN, INT, INT, BIGINT, DATE, JSONB)
-    IS 'INTERNO: página de actividades del Planeador sin gate; recibe el alcance ya resuelto (fn_planeador_listado_alcance). Lo reutilizan fn_actividad_listar (GET /planeador/actividades y su export) y fn_actividad_listar_docente (GET /planeador/actividades/mias). ALCANCE: grupo o unidad en una sede de lectura (o alcance total); huérfanas (sin grupo ni unidad) solo para su autor; docente puro (p_solo_propias) solo lo que dicta vía TDOCENTE_ASIGNATURA más sus huérfanas. p_fk_tfuncionario filtra por el docente que DICTA la actividad (no el autor de la unidad) y deja fuera las que no tienen grupo. p_search matchea título+descripción (índice trigram), nivel de enseñanza de la unidad o nombre del instrumento. p_estados filtra por el estado derivado (fn_actividad_estado) con p_dias_gracia. p_dia: solo las actividades cuya ventana [FECHA_INICIO, FECHA_CIERRE] cubre ese día; dia_anterior/dia_siguiente son el día ocupado más cercano a cada lado, saltando los vacíos; un día vacío devuelve UNA fila con la actividad en NULL, total_count = 0 y las flechas. p_grado_asignatura_pares (V526): acota a una pestaña de Rotulo de Ejecucion -- [{"grado":N,"asignatura":N|null}], "asignatura" null matchea cualquier asignatura de ese grado. Orden por whitelist fecha_inicio|fecha_cierre|fecha_creacion|titulo|ponderacion. total_count via COUNT(*) OVER().';
+COMMENT ON FUNCTION academico_test.fn_actividad_listar_interno(BIGINT[], BOOLEAN, BOOLEAN, BIGINT, VARCHAR, VARCHAR, BIGINT, BIGINT, BIGINT, BIGINT, BIGINT, DATE, DATE, VARCHAR[], INT, BOOLEAN, VARCHAR, BOOLEAN, INT, INT, BIGINT, DATE, VARCHAR[])
+    IS 'INTERNO: página de actividades del Planeador sin gate; recibe el alcance ya resuelto (fn_planeador_listado_alcance). Lo reutilizan fn_actividad_listar (GET /planeador/actividades y su export) y fn_actividad_listar_docente (GET /planeador/actividades/mias). ALCANCE: grupo o unidad en una sede de lectura (o alcance total); huérfanas (sin grupo ni unidad) solo para su autor; docente puro (p_solo_propias) solo lo que dicta vía TDOCENTE_ASIGNATURA más sus huérfanas. p_fk_tfuncionario filtra por el docente que DICTA la actividad (no el autor de la unidad) y deja fuera las que no tienen grupo. p_search matchea título+descripción (índice trigram), nivel de enseñanza de la unidad o nombre del instrumento. p_estados filtra por el estado derivado (fn_actividad_estado) con p_dias_gracia. p_dia: solo las actividades cuya ventana [FECHA_INICIO, FECHA_CIERRE] cubre ese día; dia_anterior/dia_siguiente son el día ocupado más cercano a cada lado, saltando los vacíos; un día vacío devuelve UNA fila con la actividad en NULL, total_count = 0 y las flechas. p_grado_asignatura_pares (V526): acota a una pestaña de Rotulo de Ejecucion -- VARCHAR[] de "grado:asignatura" (asignatura vacío = comodín), nunca JSONB (QUERY.* de un GET no admite array/objeto). Orden por whitelist fecha_inicio|fecha_cierre|fecha_creacion|titulo|ponderacion. total_count via COUNT(*) OVER().';
 
 -- ---------------------------------------------------------------------------
 -- Wrappers: agregan p_grado_asignatura_pares al final y lo pasan tal cual.
@@ -292,7 +298,7 @@ CREATE OR REPLACE FUNCTION academico_test.fn_actividad_listar(
     p_offset                   INT       DEFAULT 0,
     p_fk_tfuncionario          BIGINT    DEFAULT NULL,
     p_dia                      DATE      DEFAULT NULL,
-    p_grado_asignatura_pares   JSONB     DEFAULT NULL
+    p_grado_asignatura_pares   VARCHAR[] DEFAULT NULL
 )
 RETURNS SETOF academico_test.t_actividad_listado_fila
 LANGUAGE plpgsql
@@ -320,7 +326,7 @@ BEGIN
 END;
 $$;
 
-COMMENT ON FUNCTION academico_test.fn_actividad_listar(BIGINT, VARCHAR, BIGINT, BIGINT, BIGINT, BIGINT, BIGINT, DATE, DATE, VARCHAR[], INT, BOOLEAN, VARCHAR, BOOLEAN, INT, INT, BIGINT, DATE, JSONB)
+COMMENT ON FUNCTION academico_test.fn_actividad_listar(BIGINT, VARCHAR, BIGINT, BIGINT, BIGINT, BIGINT, BIGINT, DATE, DATE, VARCHAR[], INT, BOOLEAN, VARCHAR, BOOLEAN, INT, INT, BIGINT, DATE, VARCHAR[])
     IS 'GET /planeador/actividades y POST /planeador/actividades/export-all: gate VER sobre PLANEADOR, alcance del usuario (fn_planeador_listado_alcance) y delega en fn_actividad_listar_interno, que documenta filtros, orden y paginado por día. Devuelve t_actividad_listado_fila, la misma fila que /planeador/actividades/mias.';
 
 CREATE OR REPLACE FUNCTION academico_test.fn_actividad_listar_docente(
@@ -336,7 +342,7 @@ CREATE OR REPLACE FUNCTION academico_test.fn_actividad_listar_docente(
     p_limite                   INT       DEFAULT 20,
     p_offset                   INT       DEFAULT 0,
     p_dia                      DATE      DEFAULT NULL,
-    p_grado_asignatura_pares   JSONB     DEFAULT NULL
+    p_grado_asignatura_pares   VARCHAR[] DEFAULT NULL
 )
 RETURNS SETOF academico_test.t_actividad_listado_fila
 LANGUAGE plpgsql
@@ -370,5 +376,5 @@ BEGIN
 END;
 $$;
 
-COMMENT ON FUNCTION academico_test.fn_actividad_listar_docente(BIGINT, VARCHAR, BIGINT, BIGINT, BIGINT, VARCHAR[], INT, VARCHAR, BOOLEAN, INT, INT, DATE, JSONB)
-    IS 'GET /planeador/actividades/mias: gate VER sobre PLANEADOR y las actividades que DICTA el funcionario del usuario autenticado (fn_funcionario_actual), vía fn_actividad_listar_interno con p_fk_tfuncionario fijado; sin funcionario, 0 filas. Solo activas; sin filtros de tipo, instrumento ni fechas. p_grado_asignatura_pares (V526): acota a una pestaña de Rotulo de Ejecucion (fn_planeador_actividad_tabs_listar, V525). Devuelve t_actividad_listado_fila, la misma fila que GET /planeador/actividades.';
+COMMENT ON FUNCTION academico_test.fn_actividad_listar_docente(BIGINT, VARCHAR, BIGINT, BIGINT, BIGINT, VARCHAR[], INT, VARCHAR, BOOLEAN, INT, INT, DATE, VARCHAR[])
+    IS 'GET /planeador/actividades/mias: gate VER sobre PLANEADOR y las actividades que DICTA el funcionario del usuario autenticado (fn_funcionario_actual), vía fn_actividad_listar_interno con p_fk_tfuncionario fijado; sin funcionario, 0 filas. Solo activas; sin filtros de tipo, instrumento ni fechas. p_grado_asignatura_pares (V526): acota a una pestaña de Rotulo de Ejecucion (fn_planeador_actividad_tabs_listar, V525) -- VARCHAR[] de "grado:asignatura", nunca JSONB. Devuelve t_actividad_listado_fila, la misma fila que GET /planeador/actividades.';
