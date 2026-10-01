@@ -85,6 +85,8 @@ BEGIN
                 AND ae.ACTIVE = TRUE
          WHERE m.FK_TGRUPO = p_fk_tgrupo
            AND m.ACTIVE = TRUE
+           -- Retirado u otro estado: solo sale si ya estaba asignado a la actividad.
+           AND (academico_test.fn_matricula_es_cursando(m.PK_TMATRICULA) OR ae.PK_TACTIVIDAD_ESTUDIANTE IS NOT NULL)
     )
     SELECT b.PK_TMATRICULA,
            b.FK_TESTUDIANTE,

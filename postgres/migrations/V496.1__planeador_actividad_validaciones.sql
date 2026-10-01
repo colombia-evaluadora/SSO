@@ -866,10 +866,11 @@ BEGIN
       FROM unnest(p_fk_tmatriculas) mid
      WHERE mid IS NOT NULL
        AND NOT EXISTS (SELECT 1 FROM academico_test.TMATRICULA m
-                        WHERE m.PK_TMATRICULA = mid AND m.ACTIVE = TRUE AND m.FK_TGRUPO = p_fk_tgrupo)
+                        WHERE m.PK_TMATRICULA = mid AND m.ACTIVE = TRUE AND m.FK_TGRUPO = p_fk_tgrupo
+                          AND academico_test.fn_matricula_es_cursando(m.PK_TMATRICULA))
      LIMIT 1;
     IF FOUND THEN
-        RAISE EXCEPTION '% no tiene una matrícula activa en %: no se puede incluir en %',
+        RAISE EXCEPTION '% no tiene una matrícula en estado Cursando en %: no se puede incluir en %',
             COALESCE(academico_test.fn_actividad_estudiante_nombre(v_ajena), 'Uno de los estudiantes seleccionados'),
             academico_test.fn_actividad_grupo_etiqueta(p_fk_tgrupo), p_titulo
             USING ERRCODE = '23503';
@@ -892,7 +893,9 @@ BEGIN
     IF v_grupo IS NULL
        OR EXISTS (SELECT 1 FROM academico_test.TACTIVIDAD_ESTUDIANTE
                    WHERE FK_TACTIVIDAD = p_pk_tactividad AND ACTIVE = TRUE)
-       OR NOT EXISTS (SELECT 1 FROM academico_test.TMATRICULA WHERE FK_TGRUPO = v_grupo AND ACTIVE = TRUE) THEN
+       OR NOT EXISTS (SELECT 1 FROM academico_test.TMATRICULA
+                        WHERE FK_TGRUPO = v_grupo AND ACTIVE = TRUE
+                          AND academico_test.fn_matricula_es_cursando(PK_TMATRICULA)) THEN
         RETURN;
     END IF;
     RAISE EXCEPTION '% debe tener al menos un estudiante %',

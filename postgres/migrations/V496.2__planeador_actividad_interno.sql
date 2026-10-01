@@ -48,7 +48,8 @@ BEGIN
     IF p_fk_tmatriculas IS NULL THEN
         SELECT COALESCE(array_agg(m.PK_TMATRICULA), ARRAY[]::BIGINT[]) INTO v_set
           FROM academico_test.TMATRICULA m
-         WHERE m.FK_TGRUPO = v_grupo AND m.ACTIVE = TRUE;
+         WHERE m.FK_TGRUPO = v_grupo AND m.ACTIVE = TRUE
+           AND academico_test.fn_matricula_es_cursando(m.PK_TMATRICULA);
     ELSE
         v_set := ARRAY(SELECT DISTINCT x FROM unnest(p_fk_tmatriculas) x WHERE x IS NOT NULL);
     END IF;
@@ -129,7 +130,8 @@ BEGIN
             SELECT COALESCE(array_agg(m.PK_TMATRICULA), ARRAY[]::BIGINT[]) INTO v_set
               FROM academico_test.TMATRICULA m
               JOIN academico_test.TACTIVIDAD a ON a.FK_TGRUPO = m.FK_TGRUPO
-             WHERE a.PK_TACTIVIDAD = p_pk_tactividad AND m.ACTIVE = TRUE;
+             WHERE a.PK_TACTIVIDAD = p_pk_tactividad AND m.ACTIVE = TRUE
+               AND academico_test.fn_matricula_es_cursando(m.PK_TMATRICULA);
         ELSE
             v_set := ARRAY(SELECT DISTINCT x FROM unnest(p_fk_tmatriculas) x WHERE x IS NOT NULL);
         END IF;
@@ -574,7 +576,8 @@ BEGIN
                        AND sn.ACTIVE = TRUE AND COALESCE(sn.DEFINITIVA, sn.CALIFICACION) IS NOT NULL
                      ORDER BY pe.FECHA_FIN DESC NULLS LAST, sn.PK_TASIGNATURA_NOTA DESC
                      LIMIT 1) nf ON TRUE
-             WHERE m.FK_TGRUPO = p_fk_tgrupo AND m.ACTIVE = TRUE;
+             WHERE m.FK_TGRUPO = p_fk_tgrupo AND m.ACTIVE = TRUE
+               AND academico_test.fn_matricula_es_cursando(m.PK_TMATRICULA);
         END IF;
     END IF;
 
@@ -637,6 +640,7 @@ BEGIN
                   LEFT JOIN academico_test.TACTIVIDAD_NOTA n
                          ON n.FK_TACTIVIDAD_ESTUDIANTE = ae.PK_TACTIVIDAD_ESTUDIANTE AND n.ACTIVE = TRUE
                  WHERE m.ACTIVE = TRUE
+                   AND academico_test.fn_matricula_es_cursando(m.PK_TMATRICULA)
                    AND (m.FK_TGRUPO = v_o.FK_TGRUPO
                         -- Original sin grupo: no hay roster, quedan sus asignados.
                         OR (v_o.FK_TGRUPO IS NULL AND ae.PK_TACTIVIDAD_ESTUDIANTE IS NOT NULL))), '[]'::jsonb));
