@@ -1,34 +1,80 @@
--- V450 - Asistencia por actividad en Preescolar: helpers de fecha y validez de
--- la asistencia, y es_formativa en GET /planeador/actividades/:ID. La fila de
--- pantalla-edicion la define hoy V496.4.
+-- V450 - Asistencia de una actividad: la de su primer día (FECHA_INICIO),
+-- agregando los bloques de la asignatura (en formativas, de cualquier
+-- asignatura); la Vista Asistencias predomina sobre la tomada en el Planeador.
+-- Solo lectura. También es_formativa en GET /planeador/actividades/:ID.
+-- Depende de: V137 (fn_asistencia_tipo_pk), V139 (TASISTENCIA.ORIGEN), V243.
 
+DROP FUNCTION IF EXISTS academico_test.fn_actividad_asistencia_valida(BIGINT, BIGINT, DATE);
 
-CREATE OR REPLACE FUNCTION academico_test.fn_actividad_asistencia_valida(
-    p_fk_tmatricula BIGINT,
-    p_pk_tactividad BIGINT,
-    p_fecha         DATE
-)
-RETURNS BOOLEAN
+CREATE OR REPLACE FUNCTION academico_test.fn_actividad_fecha_asistencia(p_pk_tactividad BIGINT)
+RETURNS DATE
 LANGUAGE sql
 STABLE
 AS $$
-    SELECT EXISTS (
-        SELECT 1
-          FROM academico_test.TASISTENCIA s
-          JOIN academico_test.TACTIVIDAD a ON a.PK_TACTIVIDAD = p_pk_tactividad
-         WHERE s.FK_TMATRICULA = p_fk_tmatricula
-           AND s.FECHA         = p_fecha
-           AND s.ACTIVE = TRUE
-           AND s.FK_TLV_TIPO_ASISTENCIA IS DISTINCT FROM academico_test.fn_asistencia_tipo_pk(2)
-           AND CASE
-                 WHEN academico_test.fn_actividad_es_formativa(p_pk_tactividad) THEN TRUE
-                 ELSE s.FK_TASIGNATURA = a.FK_TASIGNATURA
-               END
-    );
+    SELECT COALESCE(a.FECHA_INICIO, a.FECHA_CREACION)
+      FROM academico_test.TACTIVIDAD a
+     WHERE a.PK_TACTIVIDAD = p_pk_tactividad;
 $$;
 
-COMMENT ON FUNCTION academico_test.fn_actividad_asistencia_valida(BIGINT, BIGINT, DATE)
-    IS 'TRUE si el estudiante (por matricula) tiene, en p_fecha, una asistencia ACTIVA que habilita calificar u observar la actividad: alguna fila que NO sea inasistencia injustificada (TIPO_ASISTENCIA VALOR=2) y que ademas pertenezca al contexto correcto -- en una actividad FORMATIVA cualquier sesion del dia cuenta (la jornada de preescolar es continua y desde V436 la asistencia ya no se escribe por FK_TACTIVIDAD), en el resto tiene que ser la asignatura de la actividad. Con varios bloques alcanza UNA fila valida. Es la UNICA definicion de la regla: la usan el gate (fn_actividad_nota_asistencia_assert_preescolar) y, a traves de fn_actividad_asistencia_fecha_resolver, las lecturas de la planilla y de la tabla de calificaciones. V450.';
+-- Ausente = todos los bloques del día son No asistió (2, o 3 histórico); un
+-- bloque en Asistió o Llegó tarde lo hace presente. Justificada = algún bloque
+-- trae excusa (archivo, o 3/6 históricos): una excusa cubre todo el día.
+CREATE OR REPLACE FUNCTION academico_test.fn_actividad_asistencia_dia(
+    p_fk_tmatricula BIGINT,
+    p_pk_tactividad BIGINT
+)
+RETURNS TABLE (fecha DATE, tipo_valor VARCHAR, fk_tlv_tipo_asistencia BIGINT, ausente BOOLEAN,
+               justificada BOOLEAN, origen VARCHAR, pk_tasistencia BIGINT, fk_soporte_archivo BIGINT,
+               observacion VARCHAR)
+LANGUAGE sql
+STABLE
+AS $$
+    WITH act AS (
+        SELECT a.FK_TASIGNATURA,
+               academico_test.fn_actividad_fecha_asistencia(a.PK_TACTIVIDAD) AS fecha,
+               academico_test.fn_actividad_es_formativa(a.PK_TACTIVIDAD) AS formativa
+          FROM academico_test.TACTIVIDAD a
+         WHERE a.PK_TACTIVIDAD = p_pk_tactividad
+    ), filas AS (
+        SELECT s.*, lv.VALOR AS valor
+          FROM act
+          JOIN academico_test.TASISTENCIA s
+            ON s.FK_TMATRICULA = p_fk_tmatricula AND s.FECHA = act.fecha AND s.ACTIVE = TRUE
+           AND (act.formativa OR s.FK_TASIGNATURA = act.FK_TASIGNATURA)
+          JOIN academico_test.TLISTA_VALOR lv ON lv.PK_LISTA_VALOR = s.FK_TLV_TIPO_ASISTENCIA
+    ), vigentes AS (
+        -- La de la Vista predomina; la del Planeador vale solo si la Vista no se tomó.
+        SELECT f.* FROM filas f
+         WHERE f.ORIGEN = 'ASISTENCIA'
+            OR NOT EXISTS (SELECT 1 FROM filas x WHERE x.ORIGEN = 'ASISTENCIA')
+    ), agg AS (
+        SELECT COUNT(*) AS n,
+               BOOL_AND(v.valor IN ('2', '3')) AS ausente,
+               BOOL_OR(v.valor IN ('5', '6')) AS tarde,
+               BOOL_OR(v.FK_SOPORTE_ARCHIVO IS NOT NULL OR v.valor IN ('3', '6')) AS justificada,
+               BOOL_OR(v.ORIGEN = 'ASISTENCIA') AS de_vista,
+               MAX(v.PK_TASISTENCIA) AS pk,
+               MAX(v.FK_SOPORTE_ARCHIVO) AS soporte,
+               (ARRAY_AGG(v.OBSERVACION ORDER BY v.PK_TASISTENCIA DESC)
+                  FILTER (WHERE NULLIF(TRIM(v.OBSERVACION), '') IS NOT NULL))[1] AS observacion
+          FROM vigentes v
+    )
+    SELECT act.fecha,
+           t.valor::VARCHAR,
+           academico_test.fn_asistencia_tipo_pk(t.valor::NUMERIC),
+           agg.ausente,
+           COALESCE(agg.justificada, FALSE),
+           (CASE WHEN agg.de_vista THEN 'ASISTENCIA' ELSE 'PLANEADOR' END)::VARCHAR,
+           agg.pk, agg.soporte, agg.observacion::VARCHAR
+      FROM act CROSS JOIN agg
+     CROSS JOIN LATERAL (SELECT CASE WHEN agg.ausente THEN '2' WHEN agg.tarde THEN '5' ELSE '1' END AS valor) t
+     WHERE agg.n > 0;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_actividad_fecha_asistencia(BIGINT)
+    IS 'Fecha cuya asistencia vale para la actividad: su primer día (FECHA_INICIO; sin ella, FECHA_CREACION). Siempre es un día con clase porque la actividad no se crea fuera del horario.';
+COMMENT ON FUNCTION academico_test.fn_actividad_asistencia_dia(BIGINT, BIGINT)
+    IS 'Asistencia tomada (TASISTENCIA) del estudiante en el primer día de la actividad, agregada por bloques: de la asignatura de la actividad, o de cualquiera si es formativa. Filas de la Vista (ORIGEN ASISTENCIA) predominan sobre la del Planeador. tipo_valor normalizado a 1/2/5; ausente si todos los bloques son No asistió; justificada si algún bloque trae archivo (o 3/6 históricos). Sin filas no devuelve nada. No mira la copia congelada de TACTIVIDAD_NOTA: eso es fn_actividad_asistencia_estudiante (V496.5).';
 
 CREATE OR REPLACE FUNCTION academico_test.fn_actividad_asistencia_fecha_resolver(
     p_fk_tmatricula BIGINT,
@@ -38,67 +84,18 @@ RETURNS DATE
 LANGUAGE sql
 STABLE
 AS $$
-    SELECT s.FECHA
-      FROM academico_test.TASISTENCIA s
-      JOIN academico_test.TACTIVIDAD a ON a.PK_TACTIVIDAD = p_pk_tactividad
-     WHERE s.FK_TMATRICULA = p_fk_tmatricula
-       AND s.ACTIVE = TRUE
-       AND s.FECHA <= CURRENT_DATE
-       AND (a.FECHA_INICIO IS NULL OR s.FECHA >= a.FECHA_INICIO)
-       AND (a.FECHA_CIERRE IS NULL OR s.FECHA <= a.FECHA_CIERRE)
-       AND academico_test.fn_actividad_asistencia_valida(p_fk_tmatricula, p_pk_tactividad, s.FECHA)
-     ORDER BY s.FECHA DESC
-     LIMIT 1;
+    SELECT d.fecha FROM academico_test.fn_actividad_asistencia_dia(p_fk_tmatricula, p_pk_tactividad) d;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_actividad_asistencia_fecha_resolver(BIGINT, BIGINT)
-    IS 'La fecha que hay que mandar en BODY.FECHA para calificar u observar a ESE estudiante en ESA actividad: la mas reciente, dentro de la ventana [FECHA_INICIO, FECHA_CIERRE] de la actividad (extremo NULL = abierto), que fn_actividad_asistencia_valida acepta -- solo fechas <= hoy; sin ninguna, NULL. NULL = no hay ninguna pasada o de hoy que habilite, o sea que la celda no es calificable/observable todavia y cualquier intento devolveria 22023. Ya NO cae a una fecha futura de la ventana (bug: la pantalla de marcar mostraba "sin asistencia" para hoy y el gate igual dejaba guardar via esa fecha futura). Definida EN TERMINOS del predicado para que la lectura y el gate no puedan desincronizarse. V450.';
+    IS 'Primer día de la actividad (fn_actividad_fecha_asistencia) si ese día se tomó asistencia al estudiante (Vista o Planeador); NULL si no. Lo leen la planilla (fechaAsistencia/tieneAsistencia) y la tabla de calificaciones (fecha_asistencia). La asistencia ya no bloquea por sí sola: bloquea el estado de resultado (V496.5).';
 
-CREATE OR REPLACE FUNCTION academico_test.fn_actividad_nota_asistencia_assert_preescolar(
-    p_pk_tactividad_estudiante BIGINT,
-    p_fecha                    DATE
-)
-RETURNS VOID
-LANGUAGE plpgsql
-AS $$
-DECLARE
-    v_pk_matricula  BIGINT;
-    v_pk_tactividad BIGINT;
-BEGIN
-    SELECT ae.FK_TMATRICULA, ae.FK_TACTIVIDAD
-      INTO v_pk_matricula, v_pk_tactividad
-      FROM academico_test.TACTIVIDAD_ESTUDIANTE ae
-     WHERE ae.PK_TACTIVIDAD_ESTUDIANTE = p_pk_tactividad_estudiante AND ae.ACTIVE = TRUE;
-
-    IF NOT FOUND THEN
-        RAISE EXCEPTION 'No se encontro la asignacion actividad-estudiante solicitada' USING ERRCODE = 'P0002';
-    END IF;
-
-    IF academico_test.fn_actividad_asistencia_valida(v_pk_matricula, v_pk_tactividad, p_fecha) THEN
-        RETURN;
-    END IF;
-
-    IF NOT EXISTS (
-        SELECT 1
-          FROM academico_test.TASISTENCIA s
-         WHERE s.FK_TMATRICULA = v_pk_matricula
-           AND s.FECHA         = p_fecha
-           AND s.ACTIVE = TRUE
-    ) THEN
-        RAISE EXCEPTION 'No se puede observar: no hay asistencia registrada para esta actividad el %', p_fecha
-            USING ERRCODE = '22023';
-    END IF;
-
-    RAISE EXCEPTION 'No se puede observar: el estudiante tiene una inasistencia injustificada registrada el %', p_fecha
-        USING ERRCODE = '22023';
-END;
-$$;
-
-COMMENT ON FUNCTION academico_test.fn_actividad_nota_asistencia_assert_preescolar(BIGINT, DATE)
-    IS 'Gate de asistencia para actividades FORMATIVAS (preescolar). V450: delega la regla en fn_actividad_asistencia_valida -- ese dia le tomaron asistencia al estudiante en CUALQUIER sesion y no es inasistencia injustificada. Antes (V243) exigia una fila con FK_TACTIVIDAD = la actividad, que V436 dejo de escribir al mandar a preescolar a la sesion por asignatura + bloque: el gate pedia una fila inalcanzable y observar quedaba bloqueado por el camino normal del docente. Mantiene los dos mensajes y el 22023 de V243: distingue "no hay asistencia registrada" de "inasistencia injustificada". V243/V450.';
+-- Reglas 62/73: la asistencia ya no bloquea observar; la existencia de la
+-- asignación la resuelve fn_actividad_estudiante_actividad (V227).
+DROP FUNCTION IF EXISTS academico_test.fn_actividad_nota_asistencia_assert_preescolar(BIGINT, DATE);
 
 UPDATE public.query q
-   SET detail = q.detail || ' V450 -- En las actividades FORMATIVAS, la asistencia que habilita observar ya no tiene que ser una fila con FK_TACTIVIDAD (V436 dejo de escribirlas): basta con que ESE dia se le haya tomado asistencia al estudiante en cualquier sesion y que no sea inasistencia injustificada. fechaAsistencia/tieneAsistencia se calculan con esa misma regla, compartida con el gate (fn_actividad_asistencia_valida / _fecha_resolver). Cada fila agrega ademas es_formativa (TRUE = se registra con OBSERVACION, no con nota) y fecha_asistencia (la fecha en la que ESE estudiante tiene una asistencia que el gate aceptaria; NULL = no se puede calificar ni observar todavia). OJO: la columna `fecha` sigue siendo el ECO de ?fecha= (default hoy) y NO sirve para BODY.FECHA: para eso va fecha_asistencia.'
+   SET detail = q.detail || ' V450 -- La asistencia de una actividad es la de su primer dia (FECHA_INICIO), agregando los bloques de la asignatura (en FORMATIVAS, de cualquier asignatura); la de la Vista Asistencias predomina sobre la tomada en el Planeador. fechaAsistencia/tieneAsistencia (fn_actividad_asistencia_fecha_resolver): ese primer dia si ya se tomo asistencia, NULL si no. Cada fila agrega es_formativa (TRUE = se registra con OBSERVACION, no con nota). OJO: la columna `fecha` sigue siendo el ECO de ?fecha= (default hoy).'
   FROM public.microservice m
  WHERE m.id_microservice = q.microservice_id
    AND m.serviceid       = 'eval-col'

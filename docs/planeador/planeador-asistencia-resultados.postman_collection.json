@@ -1,0 +1,298 @@
+{
+  "info": {
+    "_postman_id": "6887b8d9-9d09-4f79-9ab7-59f20498bd31",
+    "name": "SSO — Planeador: asistencia de la actividad y estado del resultado (eval-col)",
+    "description": "Asistencia marcada desde la tabla de calificaciones del Planeador (PUT /planeador/actividades/estudiantes/:ID/asistencia) y su efecto en el estado del resultado: No asistido bloquea calificar, J/NJ lo decide la excusa de la Vista, No presentó exige que no haya nota. Necesita un docente dueño de `actividadId` con al menos un estudiante Pendiente. Queda en cero salvo la asistencia marcada en el Planeador (Asistió, que no cambia el resultado).",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "0 - Login",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200', () => pm.response.to.have.status(200));",
+              "const token = pm.response.json().token;",
+              "pm.test('devuelve token', () => pm.expect(token).to.be.a('string').and.not.empty);",
+              "pm.collectionVariables.set('token', token);"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"email\": \"{{email}}\",\n  \"password\": \"{{password}}\"\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/api/auth/login"
+        }
+      }
+    },
+    {
+      "name": "1 - Calificaciones de la actividad (elige un estudiante sin resultado)",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200', () => pm.response.to.have.status(200));",
+              "const filas = pm.response.json();",
+              "pm.test('trae la asistencia de la actividad', () => pm.expect(filas[0]).to.have.property('tipo_asistencia_valor'));",
+              "const libre = filas.find(f => f.asistencia_editable && f.estado_resultado === 'PENDIENTE');",
+              "pm.test('hay un estudiante Pendiente sin resultado', () => pm.expect(libre).to.exist);",
+              "pm.collectionVariables.set('actividadEstudianteId', libre.pk_tactividad_estudiante);"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/eval-col/planeador/actividades/{{actividadId}}/calificaciones"
+        }
+      }
+    },
+    {
+      "name": "2 - Marcar No asistió desde el Planeador",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200', () => pm.response.to.have.status(200));",
+              "pm.test('queda No asistido (J/NJ según la excusa de la Vista)', () => pm.expect(pm.response.json()[0].estado_resultado).to.match(/^NO_ASISTIO_/));"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "PUT",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/eval-col/planeador/actividades/estudiantes/{{actividadEstudianteId}}/asistencia"
+        },
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"TIPO_ASISTENCIA\": 2\n}"
+        }
+      }
+    },
+    {
+      "name": "3 - Calificar un No asistido es rechazado",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('400 (22023)', () => pm.response.to.have.status(400));"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "PUT",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/eval-col/planeador/actividades/estudiantes/{{actividadEstudianteId}}/calificar"
+        },
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"CALIFICACION\": {\n    \"porcentaje\": 80\n  }\n}"
+        }
+      }
+    },
+    {
+      "name": "4 - No asistido no se marca a mano",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('400 (22023)', () => pm.response.to.have.status(400));"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "PUT",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/eval-col/planeador/actividades/estudiantes/{{actividadEstudianteId}}/estado-resultado"
+        },
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"ESTADO\": \"NO_ASISTIO_JUSTIFICADA\"\n}"
+        }
+      }
+    },
+    {
+      "name": "5 - Volver a Asistió desde el Planeador",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200', () => pm.response.to.have.status(200));",
+              "pm.test('vuelve a Pendiente', () => pm.expect(pm.response.json()[0].estado_resultado).to.eql('PENDIENTE'));"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "PUT",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/eval-col/planeador/actividades/estudiantes/{{actividadEstudianteId}}/asistencia"
+        },
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"TIPO_ASISTENCIA\": 1\n}"
+        }
+      }
+    },
+    {
+      "name": "6 - Marcar No presentó",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200', () => pm.response.to.have.status(200));"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "PUT",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/eval-col/planeador/actividades/estudiantes/{{actividadEstudianteId}}/estado-resultado"
+        },
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"ESTADO\": \"NO_PRESENTO\"\n}"
+        }
+      }
+    },
+    {
+      "name": "7 - Limpieza: quitar No presentó",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200', () => pm.response.to.have.status(200));"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "PUT",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/eval-col/planeador/actividades/estudiantes/{{actividadEstudianteId}}/estado-resultado"
+        },
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"ESTADO\": \"PENDIENTE\"\n}"
+        }
+      }
+    }
+  ],
+  "variable": [
+    {
+      "key": "token",
+      "value": ""
+    },
+    {
+      "key": "actividadId",
+      "value": "1"
+    },
+    {
+      "key": "actividadEstudianteId",
+      "value": "1"
+    }
+  ]
+}

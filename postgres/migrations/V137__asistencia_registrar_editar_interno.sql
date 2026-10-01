@@ -3,7 +3,9 @@
 -- de negocio (las corre el wrapper de V138 antes de llamarlos). Cuerpo
 -- identico al que tenian V220/V464 (ambas eliminadas: su contenido quedo
 -- consolidado en V136-V141). Incluye fn_asistencia_periodo_eval y
--- fn_asistencia_tipo_pk, que vivian solo en V220.
+-- fn_asistencia_tipo_pk, que vivian solo en V220. Al escribir sugiere No
+-- asistido en las actividades del dia aun Pendientes (Regla 73, V496.6).
+-- Solo escribe tipos 1/2/5 y marca ORIGEN ASISTENCIA (la Vista predomina).
 -- Depende de: TASISTENCIA/TMATRICULA/TARCHIVO/TGRUPO/TGRADO/
 -- TPERIODO_EVALUACION/TLISTA_VALOR (V22), fn_periodo_sede/fn_grupo_periodo (V40).
 -- ===========================================================================
@@ -106,8 +108,8 @@ BEGIN
                                e.fk_matricula, p_fk_tgrupo)
                  WHEN e.valor_tipo IS NULL
                    THEN 'falta tipoAsistencia en algun registro y no se envio p_marcar_todos_valor'
-                 WHEN academico_test.fn_asistencia_tipo_pk(e.valor_tipo) IS NULL
-                   THEN format('tipoAsistencia %s invalido (validos de TIPO_ASISTENCIA: 1,2,3,5,6)',
+                 WHEN e.valor_tipo NOT IN (1, 2, 5) OR academico_test.fn_asistencia_tipo_pk(e.valor_tipo) IS NULL
+                   THEN format('tipoAsistencia %s invalido (validos: 1 Asistio, 2 No asistio, 5 Llego tarde; la excusa va como fkArchivo)',
                                e.valor_tipo)
                  WHEN e.fk_archivo IS NOT NULL
                       AND NOT EXISTS (SELECT 1 FROM academico_test.TARCHIVO ar
@@ -144,12 +146,12 @@ BEGIN
         INSERT INTO academico_test.TASISTENCIA (
             FECHA, FK_TLV_TIPO_ASISTENCIA, FK_TASIGNATURA, FK_TACTIVIDAD,
             FK_TPERIODO_EVALUACION,
-            FK_TMATRICULA, OBSERVACION, FK_SOPORTE_ARCHIVO, BLOQUE,
+            FK_TMATRICULA, OBSERVACION, FK_SOPORTE_ARCHIVO, BLOQUE, ORIGEN,
             CREATED_BY, CREATED_AT, ACTIVE
         )
         SELECT p_fecha, e.fk_tlv_tipo, p_fk_tasignatura, p_fk_tactividad,
                v_fk_periodo,
-               e.fk_matricula, e.observacion, e.fk_archivo, p_bloque,
+               e.fk_matricula, e.observacion, e.fk_archivo, p_bloque, 'ASISTENCIA',
                p_pk_usuario_solicitante::VARCHAR, CURRENT_TIMESTAMP, TRUE
           FROM entrada e
         -- Target = UQ_TASISTENCIA_SESION (V220): debe coincidir EXACTAMENTE
@@ -165,19 +167,30 @@ BEGIN
             FK_TPERIODO_EVALUACION = EXCLUDED.FK_TPERIODO_EVALUACION,
             OBSERVACION            = EXCLUDED.OBSERVACION,
             FK_SOPORTE_ARCHIVO     = EXCLUDED.FK_SOPORTE_ARCHIVO,
+            ORIGEN                 = 'ASISTENCIA',
             MODIFIED_BY            = p_pk_usuario_solicitante::VARCHAR,
             MODIFIED_AT            = CURRENT_TIMESTAMP
         RETURNING 1
     )
     SELECT COUNT(*) INTO v_afectados FROM up;
 
+    -- La Vista predomina: la fila que el Planeador tomo ese dia deja de contar.
+    UPDATE academico_test.TASISTENCIA s
+       SET ACTIVE = FALSE, MODIFIED_BY = p_pk_usuario_solicitante::VARCHAR, MODIFIED_AT = CURRENT_TIMESTAMP
+     WHERE s.ORIGEN = 'PLANEADOR' AND s.ACTIVE = TRUE
+       AND s.FECHA = p_fecha AND s.FK_TASIGNATURA IS NOT DISTINCT FROM p_fk_tasignatura
+       AND s.FK_TMATRICULA IN (SELECT (r->>'fkMatricula')::BIGINT FROM jsonb_array_elements(v_entrada) r);
+
+    PERFORM academico_test.fn_actividad_resultado_desde_asistencia_interno(
+        p_pk_usuario_solicitante, p_fk_tgrupo, p_fk_tasignatura, p_fecha,
+        ARRAY(SELECT (r->>'fkMatricula')::BIGINT FROM jsonb_array_elements(v_entrada) r));
+
     RETURN v_afectados;
 END;
 $$;
 
-COMMENT ON FUNCTION academico_test.fn_asistencia_registrar_bulk_interno(
-    BIGINT, BIGINT, DATE, NUMERIC, JSONB, NUMERIC, BIGINT, BIGINT
-) IS 'INTERNO: nucleo de fn_asistencia_registrar_bulk (V138), sin gate ni reglas de negocio. Resuelve periodo de evaluacion y sede del grupo, normaliza p_registros (o construye el arreglo desde las matriculas activas si viene "Marcar todo"), valida la FORMA de cada fila y hace el upsert por UQ_TASISTENCIA_SESION. p_pk_usuario_solicitante solo para CREATED_BY/MODIFIED_BY.';
+COMMENT ON FUNCTION academico_test.fn_asistencia_registrar_bulk_interno(BIGINT, BIGINT, DATE, NUMERIC, JSONB, NUMERIC, BIGINT, BIGINT)
+    IS 'INTERNO: nucleo de fn_asistencia_registrar_bulk, sin gate ni reglas de negocio. Resuelve periodo de evaluacion y sede del grupo, normaliza p_registros (o "Marcar todo"), valida la forma de cada fila, hace el upsert por UQ_TASISTENCIA_SESION con ORIGEN ASISTENCIA, retira la fila del Planeador de ese dia (la Vista predomina) y sincroniza el estado de resultado de las actividades del dia (fn_actividad_resultado_desde_asistencia_interno, Regla 73). p_pk_usuario_solicitante solo para CREATED_BY/MODIFIED_BY.';
 
 CREATE OR REPLACE FUNCTION academico_test.fn_asistencia_editar_interno(
     p_pk_tasistencia         BIGINT,
@@ -193,13 +206,10 @@ RETURNS BIGINT
 LANGUAGE plpgsql VOLATILE AS $$
 DECLARE
     v_fk_tlv_tipo BIGINT;
+    v_s           RECORD;
 BEGIN
     IF p_tipo_asistencia_valor IS NOT NULL THEN
-        v_fk_tlv_tipo := academico_test.fn_asistencia_tipo_pk(p_tipo_asistencia_valor);
-        IF v_fk_tlv_tipo IS NULL THEN
-            RAISE EXCEPTION 'tipoAsistencia % invalido (validos: 1,2,3,5,6)', p_tipo_asistencia_valor
-                USING ERRCODE = '23503';
-        END IF;
+        v_fk_tlv_tipo := academico_test.fn_asistencia_validar_tipo(p_tipo_asistencia_valor);
     END IF;
 
     IF p_fk_soporte_archivo IS NOT NULL AND NOT EXISTS (
@@ -219,14 +229,21 @@ BEGIN
                            ELSE COALESCE(NULLIF(TRIM(p_observacion), ''), OBSERVACION) END,
         FK_SOPORTE_ARCHIVO = CASE WHEN p_limpiar_archivo THEN NULL
                                   ELSE COALESCE(p_fk_soporte_archivo, FK_SOPORTE_ARCHIVO) END,
+        -- Corregirla desde Seguimiento la vuelve asistencia de la Vista.
+        ORIGEN = 'ASISTENCIA',
         MODIFIED_BY = p_pk_usuario_solicitante::VARCHAR,
         MODIFIED_AT = CURRENT_TIMESTAMP
-     WHERE PK_TASISTENCIA = p_pk_tasistencia AND ACTIVE = TRUE;
+     WHERE PK_TASISTENCIA = p_pk_tasistencia AND ACTIVE = TRUE
+    RETURNING FK_TASIGNATURA, FECHA, FK_TMATRICULA INTO v_s;
+
+    IF FOUND THEN
+        PERFORM academico_test.fn_actividad_resultado_desde_asistencia_interno(
+            p_pk_usuario_solicitante, p_fk_tgrupo, v_s.FK_TASIGNATURA, v_s.FECHA, ARRAY[v_s.FK_TMATRICULA]);
+    END IF;
 
     RETURN p_pk_tasistencia;
 END;
 $$;
 
-COMMENT ON FUNCTION academico_test.fn_asistencia_editar_interno(
-    BIGINT, BIGINT, NUMERIC, VARCHAR, BIGINT, BOOLEAN, BOOLEAN, BIGINT
-) IS 'INTERNO: nucleo de fn_asistencia_editar (V138), sin gate. Valida tipoAsistencia y el soporte (TARCHIVO activo, sede NULL o la del grupo) y aplica el UPDATE parcial. p_pk_usuario_solicitante solo para MODIFIED_BY.';
+COMMENT ON FUNCTION academico_test.fn_asistencia_editar_interno(BIGINT, BIGINT, NUMERIC, VARCHAR, BIGINT, BOOLEAN, BOOLEAN, BIGINT)
+    IS 'INTERNO: nucleo de fn_asistencia_editar, sin gate. Valida tipoAsistencia y el soporte, aplica el UPDATE parcial y sincroniza el estado de resultado del estudiante (Regla 73). p_pk_usuario_solicitante solo para MODIFIED_BY.';

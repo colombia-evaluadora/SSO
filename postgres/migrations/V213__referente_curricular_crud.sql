@@ -835,8 +835,16 @@ BEGIN
             USING ERRCODE = '22023';
     END IF;
 
-    -- Referenciado por una unidad o actividad: no se borra (Regla 10: se inactiva).
+    -- Uso vigente bloquea (Regla 10: se inactiva desde el Estado, no se elimina).
     PERFORM academico_test.fn_refcurr_uso_assert(v_actual.FK_REFERENTE_CURRICULAR, p_pk_referente_enunciado);
+
+    IF NOT academico_test.fn_refenunc_referenciado_alguna_vez(p_pk_referente_enunciado) THEN
+        DELETE FROM academico_test.TREFERENTE_ENUNCIADO
+         WHERE v_actual.FK_PADRE IS NULL AND FK_PADRE = p_pk_referente_enunciado;
+        DELETE FROM academico_test.TREFERENTE_ENUNCIADO
+         WHERE PK_REFERENTE_ENUNCIADO = p_pk_referente_enunciado;
+        RETURN p_pk_referente_enunciado;
+    END IF;
 
     UPDATE academico_test.TREFERENTE_ENUNCIADO
        SET ACTIVE = FALSE, MODIFIED_BY = p_actor::VARCHAR, MODIFIED_AT = CURRENT_TIMESTAMP
@@ -849,7 +857,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_refenunc_eliminar_interno(BIGINT, BIGINT)
-    IS 'INTERNO: baja logica de un componente curricular sin permisos; un enunciado arrastra sus evidencias activas. 22023 si ya esta inactivo, 23503 (fn_refcurr_uso_assert) si una unidad o actividad activa lo usa. Lo usa fn_refenunc_eliminar.';
+    IS 'INTERNO: elimina un componente curricular sin permisos. 22023 si ya está inactivo, 23503 si una unidad o actividad activa lo usa; si nunca fue referenciado (fn_refenunc_referenciado_alguna_vez) lo borra físicamente con sus evidencias, si no lo inactiva con ellas (§2.1). La usa fn_refenunc_eliminar.';
 
 CREATE OR REPLACE FUNCTION academico_test.fn_refenunc_eliminar(
     p_pk_usuario_solicitante   BIGINT,

@@ -47,6 +47,13 @@ from sqlscan import (  # noqa: E402
     strip_comments,
 )
 import categories  # noqa: E402
+
+
+def vnum(v: str) -> float:
+    """Clave numerica de version con el orden de Flyway: V496.15 va despues de V496.6
+    (float("496.15") lo pondria antes). Cada parte decimal ocupa 3 cifras."""
+    parts = str(v).split(".")
+    return float(parts[0]) + sum(int(p) / 1000 ** i for i, p in enumerate(parts[1:], 1))
 import render  # noqa: E402
 
 
@@ -470,7 +477,7 @@ def analyze_file(path: Path, version: str) -> Migration:
     text = path.read_text(encoding="utf-8", errors="replace")
     mig = Migration(
         version=version,
-        sort=float(version),
+        sort=vnum(version),
         name=FILE_RE.match(path.name).group(2),
         path=str(path.relative_to(REPO)).replace("\\", "/"),
         lines=text.count("\n") + 1,
@@ -492,7 +499,7 @@ def analyze_file(path: Path, version: str) -> Migration:
         for v in RE_VREF.findall(cm.group(0)):
             if v != version:
                 mig.comment_refs.append(v)
-    mig.comment_refs = sorted(set(mig.comment_refs), key=float)
+    mig.comment_refs = sorted(set(mig.comment_refs), key=vnum)
 
     # objetos TEMP: existen solo durante la migracion (V94_ICONO, V305_ROLES);
     # se cuentan pero no se encadenan con nada
@@ -987,7 +994,7 @@ def build_graph(migs: list[Migration]) -> dict[str, list[Write]]:
             chains[w.obj_key].append(w)
 
     for key, ws in chains.items():
-        ws.sort(key=lambda w: (float(w.version), w.line))
+        ws.sort(key=lambda w: (vnum(w.version), w.line))
 
         # dos cadenas conviven sobre el mismo objeto:
         #   identidad -> create / delete  (existe o no existe)
@@ -1507,7 +1514,7 @@ def orphan_functions(chains: dict[str, list[Write]],
         if last:
             out.append({"fn": fn, "version": last.version,
                         "params": last.extra.get("total", 0)})
-    return sorted(out, key=lambda d: -float(d["version"]))
+    return sorted(out, key=lambda d: -vnum(d["version"]))
 
 
 # ---------------------------------------------------------------------------
@@ -1607,16 +1614,16 @@ def authorship(versions: set[str]) -> dict:
     out = []
     for pr in people.values():
         out.append({**pr, "commits": len(pr["commits"]),
-                    "created": sorted(pr["created"], key=float),
-                    "edited": sorted(pr["edited"], key=float),
-                    "retouched": sorted(pr["retouched"], key=float)})
+                    "created": sorted(pr["created"], key=vnum),
+                    "edited": sorted(pr["edited"], key=vnum),
+                    "retouched": sorted(pr["retouched"], key=vnum)})
     out.sort(key=lambda d: -len(d["created"]))
 
     return {
         "people": out,
         "by_version": by_version,
         "commits": commits,
-        "uncommitted": sorted(versions - set(by_version), key=float),
+        "uncommitted": sorted(versions - set(by_version), key=vnum),
         "git": bool(raw.strip()),
     }
 
@@ -1647,7 +1654,7 @@ def slot_report(local: set[str], use_git: bool) -> dict:
                 FILE_RE.match(Path(p).name)
                 for p in git("ls-tree", "-r", "--name-only", b,
                              "--", "postgres/migrations/").splitlines()
-                if p.strip()) if m}, key=float)
+                if p.strip()) if m}, key=vnum)
             if vs:
                 branches[b] = vs
                 remote.update(vs)
@@ -1656,7 +1663,7 @@ def slot_report(local: set[str], use_git: bool) -> dict:
     ints = sorted({int(float(v)) for v in allv})
     ceiling = max(ints) if ints else 0
     holes = [n for n in range(1, ceiling + 1) if n not in set(ints)]
-    dotted = sorted([v for v in allv if "." in v], key=float)
+    dotted = sorted([v for v in allv if "." in v], key=vnum)
 
     return {
         "local_max": max((int(float(v)) for v in local), default=0),
@@ -1665,9 +1672,9 @@ def slot_report(local: set[str], use_git: bool) -> dict:
         "holes": holes,
         "dotted": dotted,
         "used_count": len(ints),
-        "only_remote": sorted({v for v in remote - local}, key=float),
+        "only_remote": sorted({v for v in remote - local}, key=vnum),
         "branch_tops": {b: vs[-1] for b, vs in sorted(
-            branches.items(), key=lambda kv: -float(kv[1][-1]))},
+            branches.items(), key=lambda kv: -vnum(kv[1][-1]))},
         "branch_count": len(branches),
         "git": use_git,
     }
@@ -1699,7 +1706,7 @@ def usage_edges(migs: list[Migration], chains: dict[str, list[Write]],
                                  "kind": "usa", "objs": []})
         if cs["fn"] not in e["objs"]:
             e["objs"].append(cs["fn"])
-    return sorted(edges.values(), key=lambda e: (float(e["from"]), float(e["to"])))
+    return sorted(edges.values(), key=lambda e: (vnum(e["from"]), vnum(e["to"])))
 
 
 # ---------------------------------------------------------------------------
@@ -1803,7 +1810,7 @@ def main() -> int:
     if not files:
         print(f"No hay migraciones en {MIGRATIONS}", file=sys.stderr)
         return 1
-    files.sort(key=lambda t: float(t[0]))
+    files.sort(key=lambda t: vnum(t[0]))
 
     print(f"Analizando {len(files)} migraciones...")
     migs = [analyze_file(p, v) for v, p in files]

@@ -95,7 +95,7 @@ BEGIN
                   AND da.FK_TGRUPO       = th.FK_TGRUPO
                   AND da.FK_TASIGNATURA  = th.FK_TASIGNATURA
                   AND da.ACTIVE = TRUE))
-       AND academico_test.fn_asistencia_puede_ver(p_pk_usuario, th.FK_TGRUPO)
+       AND academico_test.fn_asistencia_puede_ver_asignatura(p_pk_usuario, th.FK_TGRUPO, th.FK_TASIGNATURA)
      GROUP BY dd::date, th.FK_TGRUPO, gr.NOMBRE, g.PK_TGRADO, g.NOMBRE, g.CODIGO,
               gr.FK_TLV_JORNADA, jor.NOMBRE, jor.VALOR, th.FK_TASIGNATURA, asig.NOMBRE,
               th.NUMERO_BLOQUE, th.HORA_INICIO, th.HORA_FIN,

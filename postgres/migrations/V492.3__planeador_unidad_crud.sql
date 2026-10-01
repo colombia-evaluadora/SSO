@@ -5,9 +5,11 @@
 -- orden: existencia (P0002) → estado (22023) → alcance (42501) → propiedad de
 -- la unidad o del criterio (42501, Regla 25) → etiqueta de auditoría → núcleo
 -- _interno de V492.2, que valida los datos y escribe (23503/23505/23514).
--- Las lecturas siguen el mismo corte, sin etiqueta.
+-- Las lecturas siguen el mismo corte, sin etiqueta. crear/actualizar reciben
+-- CONTENIDOS_TITULOS (§4); actualizar devuelve las actividades afectadas
+-- (Regla 28); desvincular y peso exigen ser autor de la actividad (25c).
 -- Depende de: V492.1, V492.2, V277 (fn_planeador_assert_alcance), V26/V276
--- (fn_audit_declarar), V224 (fn_funcionario_actual).
+-- (fn_audit_declarar), V224 (fn_funcionario_actual), V496.1 (autor de actividad).
 
 SET search_path TO academico_test, public;
 
@@ -28,6 +30,8 @@ $$;
 -- Unidad
 -- ---------------------------------------------------------------------------
 
+-- Firmas anteriores a CONTENIDOS_TITULOS (§4); el PUT cambia además el retorno.
+DROP FUNCTION IF EXISTS academico_test.fn_unidad_crear(BIGINT, VARCHAR, BIGINT, BIGINT, BIGINT, BIGINT, VARCHAR, BIGINT, VARCHAR[], VARCHAR[], BIGINT[], NUMERIC);
 CREATE OR REPLACE FUNCTION academico_test.fn_unidad_crear(
     p_pk_usuario_solicitante    BIGINT,
     p_nombre                    VARCHAR,
@@ -40,14 +44,15 @@ CREATE OR REPLACE FUNCTION academico_test.fn_unidad_crear(
     p_objetivos                 VARCHAR[] DEFAULT NULL,
     p_contenidos                VARCHAR[] DEFAULT NULL,
     p_enunciados                BIGINT[]  DEFAULT NULL,
-    p_ponderacion               NUMERIC   DEFAULT NULL
+    p_ponderacion               NUMERIC   DEFAULT NULL,
+    p_contenidos_titulos        VARCHAR[] DEFAULT NULL
 )
 RETURNS BIGINT
 LANGUAGE plpgsql
 AS $$
 DECLARE
-    -- El autor no se le pide al front (el JWT no trae el funcionario): se
-    -- deriva del usuario. Coordinación puede crear a nombre de otro docente.
+    -- El JWT no trae el funcionario: se deriva del usuario. Coordinación
+    -- puede crear a nombre de otro docente.
     v_autor BIGINT := COALESCE(p_fk_tfuncionario,
                                academico_test.fn_funcionario_actual(p_pk_usuario_solicitante));
 BEGIN
@@ -65,10 +70,11 @@ BEGIN
     RETURN academico_test.fn_unidad_crear_interno(
         p_pk_usuario_solicitante, p_nombre, p_fk_tasignatura, p_fk_tgrado, v_autor,
         p_fk_tlv_calculo_definitiva, p_descripcion, p_fk_referente_curricular,
-        p_objetivos, p_contenidos, p_enunciados, p_ponderacion);
+        p_objetivos, p_contenidos, p_enunciados, p_ponderacion, p_contenidos_titulos);
 END;
 $$;
 
+DROP FUNCTION IF EXISTS academico_test.fn_unidad_actualizar(BIGINT, BIGINT, VARCHAR, VARCHAR, BIGINT, BIGINT, BIGINT, BIGINT, BIGINT, BOOLEAN, VARCHAR[], VARCHAR[], NUMERIC, BOOLEAN, BIGINT[]);
 CREATE OR REPLACE FUNCTION academico_test.fn_unidad_actualizar(
     p_pk_usuario_solicitante    BIGINT,
     p_pk_tunidad                BIGINT,
@@ -84,15 +90,18 @@ CREATE OR REPLACE FUNCTION academico_test.fn_unidad_actualizar(
     p_contenidos                VARCHAR[] DEFAULT NULL,
     p_ponderacion               NUMERIC   DEFAULT NULL,
     p_limpiar_ponderacion       BOOLEAN   DEFAULT FALSE,
-    p_enunciados                BIGINT[]  DEFAULT NULL
+    p_enunciados                BIGINT[]  DEFAULT NULL,
+    p_contenidos_titulos        VARCHAR[] DEFAULT NULL
 )
-RETURNS BIGINT
+RETURNS TABLE (pk_tunidad BIGINT, actividades_afectadas JSONB)
 LANGUAGE plpgsql
 AS $$
+#variable_conflict use_column
 DECLARE
-    v_nombre   VARCHAR;
-    v_calculo  BIGINT;
-    v_etiqueta TEXT;
+    v_nombre      VARCHAR;
+    v_calculo     BIGINT;
+    v_modo_previo VARCHAR;
+    v_etiqueta    TEXT;
 BEGIN
     PERFORM academico_test.fn_unidad_validar_existente(p_pk_tunidad);
     PERFORM academico_test.fn_unidad_validar_activa(p_pk_tunidad);
@@ -100,23 +109,30 @@ BEGIN
         p_pk_usuario_solicitante, 'EDITAR', NULL, p_fk_tgrado, p_pk_tunidad);
     PERFORM academico_test.fn_unidad_assert_propietario(p_pk_usuario_solicitante, p_pk_tunidad);
 
-    SELECT NOMBRE, FK_TLV_CALCULO_DEFINITIVA INTO v_nombre, v_calculo
-      FROM academico_test.TUNIDAD WHERE PK_TUNIDAD = p_pk_tunidad;
+    SELECT u.NOMBRE, u.FK_TLV_CALCULO_DEFINITIVA INTO v_nombre, v_calculo
+      FROM academico_test.TUNIDAD u WHERE u.PK_TUNIDAD = p_pk_tunidad;
+    v_modo_previo := academico_test.fn_unidad_calculo_definitiva_modo(p_pk_tunidad);
     v_etiqueta := format('Actualización de la unidad %s', COALESCE(NULLIF(TRIM(p_nombre), ''), v_nombre));
     -- Regla 28: el cambio de criterio de cálculo es de alto impacto y se rotula aparte.
     IF p_fk_tlv_calculo_definitiva IS DISTINCT FROM v_calculo AND p_fk_tlv_calculo_definitiva IS NOT NULL THEN
         v_etiqueta := v_etiqueta || format(' (criterio de cálculo: %s → %s)',
-            (SELECT NOMBRE FROM academico_test.TLISTA_VALOR WHERE PK_LISTA_VALOR = v_calculo),
-            (SELECT NOMBRE FROM academico_test.TLISTA_VALOR WHERE PK_LISTA_VALOR = p_fk_tlv_calculo_definitiva));
+            (SELECT lv.NOMBRE FROM academico_test.TLISTA_VALOR lv WHERE lv.PK_LISTA_VALOR = v_calculo),
+            (SELECT lv.NOMBRE FROM academico_test.TLISTA_VALOR lv WHERE lv.PK_LISTA_VALOR = p_fk_tlv_calculo_definitiva));
     END IF;
     PERFORM academico_test.fn_audit_declarar(p_pk_usuario_solicitante, v_etiqueta, NULL,
         academico_test.fn_unidad_sede(p_pk_tunidad, p_fk_tgrado));
 
-    RETURN academico_test.fn_unidad_actualizar_interno(
+    PERFORM academico_test.fn_unidad_actualizar_interno(
         p_pk_usuario_solicitante, p_pk_tunidad, p_nombre, p_descripcion, p_fk_tasignatura,
         p_fk_tgrado, p_fk_tfuncionario, p_fk_tlv_calculo_definitiva, p_fk_referente_curricular,
         p_limpiar_referente, p_objetivos, p_contenidos, p_ponderacion, p_limpiar_ponderacion,
-        p_enunciados);
+        p_enunciados, p_contenidos_titulos);
+
+    RETURN QUERY
+    SELECT p_pk_tunidad,
+           CASE WHEN academico_test.fn_unidad_calculo_definitiva_modo(p_pk_tunidad) IS DISTINCT FROM v_modo_previo
+                THEN academico_test.fn_unidad_actividades_resumen_interno(p_pk_tunidad)
+                ELSE '[]'::jsonb END;
 END;
 $$;
 
@@ -358,6 +374,7 @@ BEGIN
     PERFORM academico_test.fn_unidad_validar_actividad_activa(p_pk_tactividad);
     PERFORM academico_test.fn_planeador_assert_alcance(
         p_pk_usuario_solicitante, 'EDITAR', NULL, NULL, NULL, p_pk_tactividad);
+    PERFORM academico_test.fn_actividad_assert_propietario(p_pk_usuario_solicitante, p_pk_tactividad);
 
     SELECT FK_TUNIDAD INTO v_unidad FROM academico_test.TACTIVIDAD WHERE PK_TACTIVIDAD = p_pk_tactividad;
     PERFORM academico_test.fn_audit_declarar(p_pk_usuario_solicitante,
@@ -389,6 +406,7 @@ BEGIN
     PERFORM academico_test.fn_unidad_validar_actividad_activa(p_pk_tactividad);
     PERFORM academico_test.fn_planeador_assert_alcance(
         p_pk_usuario_solicitante, 'EDITAR', NULL, NULL, NULL, p_pk_tactividad);
+    PERFORM academico_test.fn_actividad_assert_propietario(p_pk_usuario_solicitante, p_pk_tactividad);
 
     SELECT FK_TUNIDAD INTO v_unidad FROM academico_test.TACTIVIDAD WHERE PK_TACTIVIDAD = p_pk_tactividad;
     PERFORM academico_test.fn_audit_declarar(p_pk_usuario_solicitante,
@@ -417,8 +435,10 @@ BEGIN
 END;
 $$;
 
+-- Cambia el retorno (título de sección, al final).
+DROP FUNCTION IF EXISTS academico_test.fn_unidad_contenidos_listar(BIGINT, BIGINT);
 CREATE OR REPLACE FUNCTION academico_test.fn_unidad_contenidos_listar(p_pk_usuario_solicitante BIGINT, p_pk_tunidad BIGINT)
-RETURNS TABLE(pk_tunidad_contenido BIGINT, orden NUMERIC, descripcion VARCHAR)
+RETURNS TABLE(pk_tunidad_contenido BIGINT, orden NUMERIC, descripcion VARCHAR, titulo VARCHAR)
 LANGUAGE plpgsql
 STABLE
 AS $$
@@ -483,12 +503,12 @@ $$;
 -- Comentarios
 -- ---------------------------------------------------------------------------
 
-COMMENT ON FUNCTION academico_test.fn_unidad_crear(BIGINT, VARCHAR, BIGINT, BIGINT, BIGINT, BIGINT, VARCHAR, BIGINT, VARCHAR[], VARCHAR[], BIGINT[], NUMERIC)
-    IS 'POST /planeador/unidades: alcance CREAR sobre el grado, un docente solo crea a su nombre (autor derivado del usuario si no llega), etiqueta de auditoría y fn_unidad_crear_interno.';
-COMMENT ON FUNCTION academico_test.fn_unidad_actualizar(BIGINT, BIGINT, VARCHAR, VARCHAR, BIGINT, BIGINT, BIGINT, BIGINT, BIGINT, BOOLEAN, VARCHAR[], VARCHAR[], NUMERIC, BOOLEAN, BIGINT[])
-    IS 'PUT /planeador/unidades/:ID: PATCH parcial (NULL = no tocar, arrays = reemplazo). Alcance EDITAR + propietario (Regla 25); cambiar FK_TFUNCIONARIO es ceder la unidad (Regla 27). Lógica en fn_unidad_actualizar_interno.';
+COMMENT ON FUNCTION academico_test.fn_unidad_crear(BIGINT, VARCHAR, BIGINT, BIGINT, BIGINT, BIGINT, VARCHAR, BIGINT, VARCHAR[], VARCHAR[], BIGINT[], NUMERIC, VARCHAR[])
+    IS 'POST /planeador/unidades: alcance CREAR sobre el grado, un docente solo crea a su nombre (autor derivado del usuario si no llega), etiqueta de auditoría y fn_unidad_crear_interno. CONTENIDOS_TITULOS opcional: si llega, un título por contenido (§4).';
+COMMENT ON FUNCTION academico_test.fn_unidad_actualizar(BIGINT, BIGINT, VARCHAR, VARCHAR, BIGINT, BIGINT, BIGINT, BIGINT, BIGINT, BOOLEAN, VARCHAR[], VARCHAR[], NUMERIC, BOOLEAN, BIGINT[], VARCHAR[])
+    IS 'PUT /planeador/unidades/:ID: PATCH parcial (NULL = no tocar, arrays = reemplazo). Alcance EDITAR + propietario (Regla 25); cambiar FK_TFUNCIONARIO es ceder la unidad a un docente que la usa (Regla 27). Devuelve pk_tunidad y actividades_afectadas [{pk, titulo}] si cambió el criterio de cálculo (Regla 28). Lógica en fn_unidad_actualizar_interno.';
 COMMENT ON FUNCTION academico_test.fn_unidad_eliminar(BIGINT, BIGINT)
-    IS 'PATCH /planeador/unidades/:ID: baja lógica. Alcance ELIMINAR + propietario; bloquea con actividades vinculadas o criterios de otros docentes (23503). Lógica en fn_unidad_eliminar_interno.';
+    IS 'PATCH /planeador/unidades/:ID: baja lógica. Alcance ELIMINAR + propietario; bloquea con actividades o criterios de otros docentes (23503); las actividades del dueño se desvinculan. Lógica en fn_unidad_eliminar_interno.';
 COMMENT ON FUNCTION academico_test.fn_unidad_enunciado_relacionar(BIGINT, BIGINT, BIGINT)
     IS 'POST /planeador/unidades/:ID/enunciados: relaciona un enunciado (nivel 1) del referente de la unidad, de su grado y área. Alcance EDITAR + propietario. Lógica en fn_unidad_enunciado_relacionar_interno.';
 COMMENT ON FUNCTION academico_test.fn_unidad_enunciado_quitar(BIGINT, BIGINT)
@@ -502,13 +522,13 @@ COMMENT ON FUNCTION academico_test.fn_unidad_criterio_eliminar(BIGINT, BIGINT)
 COMMENT ON FUNCTION academico_test.fn_unidad_actividad_vincular(BIGINT, BIGINT, BIGINT, NUMERIC, BOOLEAN)
     IS 'PUT /planeador/unidades/:ID/actividades/:ACTIVIDADID: vincula una actividad de la misma asignatura y grado; mover desde otra unidad exige PERMITIR_MOVER_DE_UNIDAD. Lógica en fn_unidad_actividad_vincular_interno.';
 COMMENT ON FUNCTION academico_test.fn_unidad_actividad_desvincular(BIGINT, BIGINT)
-    IS 'PATCH /planeador/unidades/actividades/:ACTIVIDADID: suelta la actividad de su unidad (idempotente) y recalcula el reparto de Sumatoria. Devuelve pk_tactividad y, si la unidad pondera, el % que quedó libre y el aviso (Regla 39). Lógica en fn_unidad_actividad_desvincular_interno.';
+    IS 'PATCH /planeador/unidades/actividades/:ACTIVIDADID: suelta la actividad de su unidad (idempotente). Alcance EDITAR + autor de la actividad (Regla 25c). Devuelve pk_tactividad y, si la unidad pondera, el % libre y el aviso (Regla 39). Lógica en fn_unidad_actividad_desvincular_interno.';
 COMMENT ON FUNCTION academico_test.fn_unidad_actividad_ponderacion_set(BIGINT, BIGINT, NUMERIC)
-    IS 'PUT /planeador/unidades/actividades/:ACTIVIDADID/ponderacion: peso (%) de la actividad, solo en unidades que Ponderan, sin pasar de 100 por grupo.';
+    IS 'PUT /planeador/unidades/actividades/:ACTIVIDADID/ponderacion: peso (%) de la actividad, solo en unidades que Ponderan, sin pasar de 100 por grupo. Alcance EDITAR + autor de la actividad (Regla 25c).';
 COMMENT ON FUNCTION academico_test.fn_unidad_objetivos_listar(BIGINT, BIGINT)
     IS 'GET /planeador/unidades/:ID/objetivos: alcance VER + fn_unidad_objetivos_listar_interno.';
 COMMENT ON FUNCTION academico_test.fn_unidad_contenidos_listar(BIGINT, BIGINT)
-    IS 'GET /planeador/unidades/:ID/contenidos: alcance VER + fn_unidad_contenidos_listar_interno.';
+    IS 'GET /planeador/unidades/:ID/contenidos: alcance VER + fn_unidad_contenidos_listar_interno (titulo, el título de sección, va al final).';
 COMMENT ON FUNCTION academico_test.fn_unidad_criterio_listar(BIGINT, BIGINT, BOOLEAN)
     IS 'GET /planeador/unidades/:ID/criterios: alcance VER + fn_unidad_criterio_listar_interno.';
 COMMENT ON FUNCTION academico_test.fn_unidad_ponderacion_disponible(BIGINT, BIGINT, BIGINT)
@@ -516,12 +536,12 @@ COMMENT ON FUNCTION academico_test.fn_unidad_ponderacion_disponible(BIGINT, BIGI
 COMMENT ON FUNCTION academico_test.fn_unidad_referente_detalle(BIGINT, BIGINT)
     IS 'GET /planeador/unidades/:ID/referente: referente vigente de la unidad, sus rótulos y los enunciados relacionados con sus evidencias. Alcance VER.';
 
-COMMENT ON FUNCTION academico_test.fn_unidad_crear_interno(BIGINT, VARCHAR, BIGINT, BIGINT, BIGINT, BIGINT, VARCHAR, BIGINT, VARCHAR[], VARCHAR[], BIGINT[], NUMERIC)
-    IS 'INTERNO: alta de la unidad sin permisos (validar_campos + validar_coherencia, referente derivado del grado). La usa fn_unidad_crear.';
-COMMENT ON FUNCTION academico_test.fn_unidad_actualizar_interno(BIGINT, BIGINT, VARCHAR, VARCHAR, BIGINT, BIGINT, BIGINT, BIGINT, BIGINT, BOOLEAN, VARCHAR[], VARCHAR[], NUMERIC, BOOLEAN, BIGINT[])
-    IS 'INTERNO: PATCH de la unidad sin permisos; depura enunciados de otro referente y convierte el peso de las actividades al cambiar el criterio de cálculo (Regla 18). La usa fn_unidad_actualizar.';
+COMMENT ON FUNCTION academico_test.fn_unidad_crear_interno(BIGINT, VARCHAR, BIGINT, BIGINT, BIGINT, BIGINT, VARCHAR, BIGINT, VARCHAR[], VARCHAR[], BIGINT[], NUMERIC, VARCHAR[])
+    IS 'INTERNO: alta de la unidad sin permisos (campos, títulos de sección, criterio de cálculo según el enfoque del referente derivado, coherencia). La usa fn_unidad_crear.';
+COMMENT ON FUNCTION academico_test.fn_unidad_actualizar_interno(BIGINT, BIGINT, VARCHAR, VARCHAR, BIGINT, BIGINT, BIGINT, BIGINT, BIGINT, BOOLEAN, VARCHAR[], VARCHAR[], NUMERIC, BOOLEAN, BIGINT[], VARCHAR[])
+    IS 'INTERNO: PATCH de la unidad sin permisos; valida la cesión (Regla 27), depura enunciados de otro referente y convierte peso/puntaje de las actividades al cambiar el criterio de cálculo (Regla 18). La usa fn_unidad_actualizar.';
 COMMENT ON FUNCTION academico_test.fn_unidad_eliminar_interno(BIGINT, BIGINT)
-    IS 'INTERNO: baja lógica de la unidad, su rúbrica, objetivos, contenidos y enunciados. La usa fn_unidad_eliminar.';
+    IS 'INTERNO: baja lógica de la unidad, su rúbrica, objetivos, contenidos y enunciados; desvincula las actividades del dueño (las de colegas bloquean). La usa fn_unidad_eliminar.';
 COMMENT ON FUNCTION academico_test.fn_unidad_enunciado_relacionar_interno(BIGINT, BIGINT, BIGINT)
     IS 'INTERNO: relaciona (o reactiva) un enunciado validado con fn_unidad_validar_enunciado. La usan fn_unidad_enunciado_relacionar y fn_unidad_enunciados_reemplazar_interno.';
 COMMENT ON FUNCTION academico_test.fn_unidad_enunciado_quitar_interno(BIGINT, BIGINT)

@@ -5,7 +5,8 @@
 -- (42501, en origen y en destino si la mueve) → propiedad (42501, Regla 25)
 -- → edición bloqueada por resultados (23503, Regla 37) → etiqueta de
 -- auditoría → núcleo _interno de V496.2. Antes materiales y adaptaciones no
--- tenían gate y solo el alta declaraba etiqueta.
+-- tenían gate y solo el alta declaraba etiqueta. Fijar estudiantes devuelve
+-- los afectados y el aviso PIAR (Reglas 46/48); precarga de escala (Regla 40).
 -- Depende de: V496.1, V496.2, V277 (fn_planeador_assert_alcance), V26/V276
 -- (fn_audit_declarar), V479 (fn_actividad_sede), V482 (eliminar_interno).
 
@@ -341,6 +342,32 @@ $$;
 -- Estudiantes, materiales y adaptaciones
 -- ---------------------------------------------------------------------------
 
+DROP FUNCTION IF EXISTS academico_test.fn_actividad_estudiantes_set_detalle(BIGINT, BIGINT, BIGINT[], BOOLEAN);
+CREATE OR REPLACE FUNCTION academico_test.fn_actividad_estudiantes_set_detalle(
+    p_pk_usuario_solicitante BIGINT,
+    p_pk_tactividad          BIGINT,
+    p_fk_tmatriculas         BIGINT[] DEFAULT NULL,
+    p_todo_el_grupo          BOOLEAN  DEFAULT FALSE
+)
+RETURNS TABLE (total INT, afectados_adaptacion JSONB, avisos_piar JSONB)
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_r RECORD;
+BEGIN
+    PERFORM academico_test.fn_actividad_assert_escritura(p_pk_usuario_solicitante, p_pk_tactividad, 'EDITAR');
+    PERFORM academico_test.fn_actividad_auditar(p_pk_usuario_solicitante, p_pk_tactividad,
+        format('Estudiantes de %s', academico_test.fn_actividad_etiqueta(p_pk_tactividad)));
+    SELECT * INTO v_r FROM academico_test.fn_actividad_estudiantes_asignar_detalle_interno(
+        p_pk_usuario_solicitante, p_pk_tactividad, p_fk_tmatriculas, COALESCE(p_todo_el_grupo, FALSE));
+    IF p_fk_tmatriculas IS NOT NULL OR COALESCE(p_todo_el_grupo, FALSE) THEN
+        PERFORM academico_test.fn_actividad_validar_estudiantes_minimo(p_pk_tactividad);
+    END IF;
+    RETURN QUERY SELECT v_r.total, v_r.afectados_adaptacion, v_r.avisos_piar;
+END;
+$$;
+
+-- Misma firma y retorno de siempre: quien llame a la versión escalar no cambia.
 CREATE OR REPLACE FUNCTION academico_test.fn_actividad_estudiantes_set(
     p_pk_usuario_solicitante BIGINT,
     p_pk_tactividad          BIGINT,
@@ -348,21 +375,11 @@ CREATE OR REPLACE FUNCTION academico_test.fn_actividad_estudiantes_set(
     p_todo_el_grupo          BOOLEAN  DEFAULT FALSE
 )
 RETURNS INT
-LANGUAGE plpgsql
+LANGUAGE sql
 AS $$
-DECLARE
-    v_total INT;
-BEGIN
-    PERFORM academico_test.fn_actividad_assert_escritura(p_pk_usuario_solicitante, p_pk_tactividad, 'EDITAR');
-    PERFORM academico_test.fn_actividad_auditar(p_pk_usuario_solicitante, p_pk_tactividad,
-        format('Estudiantes de %s', academico_test.fn_actividad_etiqueta(p_pk_tactividad)));
-    v_total := academico_test.fn_actividad_estudiantes_asignar_interno(
-        p_pk_usuario_solicitante, p_pk_tactividad, p_fk_tmatriculas, COALESCE(p_todo_el_grupo, FALSE));
-    IF p_fk_tmatriculas IS NOT NULL OR COALESCE(p_todo_el_grupo, FALSE) THEN
-        PERFORM academico_test.fn_actividad_validar_estudiantes_minimo(p_pk_tactividad);
-    END IF;
-    RETURN v_total;
-END;
+    SELECT d.total
+      FROM academico_test.fn_actividad_estudiantes_set_detalle(
+               p_pk_usuario_solicitante, p_pk_tactividad, p_fk_tmatriculas, p_todo_el_grupo) d;
 $$;
 
 CREATE OR REPLACE FUNCTION academico_test.fn_actividad_material_reemplazar(
@@ -471,6 +488,64 @@ BEGIN
 END;
 $$;
 
+-- ---------------------------------------------------------------------------
+-- Escala de valoración (Regla 40)
+-- ---------------------------------------------------------------------------
+
+DROP FUNCTION IF EXISTS academico_test.fn_actividad_escala_precarga(BIGINT, BIGINT, BIGINT, BIGINT, BIGINT);
+CREATE OR REPLACE FUNCTION academico_test.fn_actividad_escala_precarga(
+    p_pk_usuario_solicitante BIGINT,
+    p_fk_tgrupo              BIGINT DEFAULT NULL,
+    p_fk_tasignatura         BIGINT DEFAULT NULL,
+    p_fk_tunidad             BIGINT DEFAULT NULL,
+    p_pk_tactividad          BIGINT DEFAULT NULL
+)
+RETURNS JSONB
+LANGUAGE plpgsql
+STABLE
+AS $$
+DECLARE
+    v_asignatura BIGINT := p_fk_tasignatura;
+    v_grupo      BIGINT := p_fk_tgrupo;
+    v_unidad     BIGINT := p_fk_tunidad;
+    v_grado      BIGINT;
+BEGIN
+    IF p_pk_tactividad IS NULL AND p_fk_tunidad IS NULL AND p_fk_tgrupo IS NULL THEN
+        RAISE EXCEPTION 'Indique la actividad, la unidad o el grupo y la asignatura para precargar la escala'
+            USING ERRCODE = '22023';
+    END IF;
+    IF p_pk_tactividad IS NOT NULL THEN
+        PERFORM academico_test.fn_actividad_validar_existente(p_pk_tactividad);
+        SELECT COALESCE(v_asignatura, a.FK_TASIGNATURA), COALESCE(v_grupo, a.FK_TGRUPO), COALESCE(v_unidad, a.FK_TUNIDAD)
+          INTO v_asignatura, v_grupo, v_unidad
+          FROM academico_test.TACTIVIDAD a WHERE a.PK_TACTIVIDAD = p_pk_tactividad;
+    END IF;
+    IF v_unidad IS NOT NULL AND NOT EXISTS (SELECT 1 FROM academico_test.TUNIDAD WHERE PK_TUNIDAD = v_unidad) THEN
+        RAISE EXCEPTION 'No se encontró la unidad indicada' USING ERRCODE = 'P0002';
+    END IF;
+    IF v_grupo IS NOT NULL AND NOT EXISTS (SELECT 1 FROM academico_test.TGRUPO WHERE PK_TGRUPO = v_grupo) THEN
+        RAISE EXCEPTION 'No se encontró el grupo indicado' USING ERRCODE = 'P0002';
+    END IF;
+
+    PERFORM academico_test.fn_planeador_assert_alcance(
+        p_pk_usuario_solicitante, 'VER', v_grupo, NULL, v_unidad, p_pk_tactividad);
+
+    -- Sin unidad, un SELECT INTO sin fila dejaría en NULL la asignatura recibida.
+    IF v_unidad IS NOT NULL THEN
+        SELECT COALESCE(v_asignatura, u.FK_TASIGNATURA), u.FK_TGRADO INTO v_asignatura, v_grado
+          FROM academico_test.TUNIDAD u WHERE u.PK_TUNIDAD = v_unidad;
+    END IF;
+    IF v_grado IS NULL THEN
+        SELECT g.FK_TGRADO INTO v_grado FROM academico_test.TGRUPO g WHERE g.PK_TGRUPO = v_grupo;
+    END IF;
+    IF v_asignatura IS NULL OR v_grado IS NULL THEN
+        RAISE EXCEPTION 'Indique la asignatura junto con el grupo para precargar la escala' USING ERRCODE = '22023';
+    END IF;
+
+    RETURN academico_test.fn_actividad_escala_precarga_interno(v_asignatura, v_grado);
+END;
+$$;
+
 COMMENT ON FUNCTION academico_test.fn_actividad_crear(BIGINT, VARCHAR, BIGINT, BIGINT, BIGINT, VARCHAR, BIGINT, BIGINT, NUMERIC, DATE, DATE, NUMERIC, VARCHAR, BIGINT, VARCHAR, academico_test.bool_sn, BIGINT, VARCHAR, BIGINT, BIGINT, BIGINT, NUMERIC, NUMERIC, academico_test.bool_sn, academico_test.bool_sn, academico_test.bool_sn, academico_test.bool_sn, VARCHAR, JSONB, JSONB, BIGINT[], BOOLEAN, JSONB, BIGINT[], BIGINT[], BOOLEAN)
     IS 'POST /planeador/actividades. Wrapper: gate CREAR con alcance (la actividad sin grupo ni unidad pasa con solo capability), VER sobre la actividad a recuperar, etiqueta de auditoría y delega en fn_actividad_crear_interno. p_exigir_minimos lo apaga la importación.';
 COMMENT ON FUNCTION academico_test.fn_actividad_actualizar(BIGINT, BIGINT, VARCHAR, VARCHAR, BIGINT, BIGINT, BIGINT, NUMERIC, BOOLEAN, BIGINT, DATE, DATE, NUMERIC, VARCHAR, BIGINT, VARCHAR, academico_test.bool_sn, BIGINT, VARCHAR, BIGINT, BIGINT, BIGINT, NUMERIC, NUMERIC, academico_test.bool_sn, academico_test.bool_sn, academico_test.bool_sn, academico_test.bool_sn, VARCHAR, JSONB, JSONB, BIGINT[], BOOLEAN, JSONB, BOOLEAN, BIGINT[], BIGINT[])
@@ -485,8 +560,10 @@ COMMENT ON FUNCTION academico_test.fn_actividad_criterio_relacionar(BIGINT, BIGI
     IS 'POST /planeador/actividades/:ID/criterios. Wrapper con gate EDITAR, propiedad, Regla 37 y etiqueta; el criterio debe ser de la rúbrica de la unidad de la actividad.';
 COMMENT ON FUNCTION academico_test.fn_actividad_criterio_quitar(BIGINT, BIGINT)
     IS 'PATCH /planeador/actividades/criterios/:ID. Wrapper con gate EDITAR, propiedad, Regla 37 y etiqueta.';
+COMMENT ON FUNCTION academico_test.fn_actividad_estudiantes_set_detalle(BIGINT, BIGINT, BIGINT[], BOOLEAN)
+    IS 'PUT /planeador/actividades/:ID/estudiantes: reemplazo del set de estudiantes con gate de escritura; devuelve el total, los estudiantes que salen de adaptaciones (Regla 46) y los del grupo con discapacidad que quedan fuera (Regla 48). Delega en fn_actividad_estudiantes_asignar_detalle_interno.';
 COMMENT ON FUNCTION academico_test.fn_actividad_estudiantes_set(BIGINT, BIGINT, BIGINT[], BOOLEAN)
-    IS 'PUT /planeador/actividades/:ID/estudiantes. Wrapper con gate EDITAR, propiedad, Regla 37 y etiqueta; reemplaza el set (fn_actividad_estudiantes_asignar_interno) y exige al menos un estudiante cuando el grupo tiene matrículas.';
+    IS 'Versión escalar (solo el total asignado) de PUT /planeador/actividades/:ID/estudiantes. No lleva gate propio: delega en el wrapper fn_actividad_estudiantes_set_detalle, que hace el gate y la etiqueta de auditoría; así las dos firmas no pueden divergir.';
 COMMENT ON FUNCTION academico_test.fn_actividad_material_reemplazar(BIGINT, BIGINT, JSONB)
     IS 'PUT /planeador/actividades/:ID/materiales. Wrapper con gate EDITAR, propiedad, Regla 37 y etiqueta; reemplaza la lista (máximo 10, Regla 82).';
 COMMENT ON FUNCTION academico_test.fn_actividad_adaptacion_reemplazar(BIGINT, BIGINT, JSONB)
@@ -497,3 +574,5 @@ COMMENT ON FUNCTION academico_test.fn_actividad_adaptacion_archivo_registrar(BIG
     IS 'POST /planeador/actividades/:ID/adaptaciones/archivo (multipart vía file-service). Devuelve el PK_TARCHIVO para usarlo como fkTarchivo en PUT :ID/adaptaciones.';
 COMMENT ON FUNCTION academico_test.fn_actividad_instrumento_definir(BIGINT, BIGINT, JSONB)
     IS 'PUT /planeador/actividades/:ID/instrumento. Wrapper con gate EDITAR, propiedad, Regla 37 y etiqueta; delega en fn_actividad_instrumento_definir_interno.';
+COMMENT ON FUNCTION academico_test.fn_actividad_escala_precarga(BIGINT, BIGINT, BIGINT, BIGINT, BIGINT)
+    IS 'GET /planeador/actividades/escala-precarga: valores iniciales del constructor Escala de valoración (Regla 40) para el contexto de la actividad (actividad, unidad o grupo + asignatura). Errores: 400 sin contexto, 404 si el grupo/unidad/actividad no existe, 403 sin alcance VER. Delega en fn_actividad_escala_precarga_interno.';
