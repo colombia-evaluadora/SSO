@@ -1,19 +1,30 @@
 -- ===========================================================================
 -- V421 -- fn_actividad_matriculas_grupo_listar + GET /planeador/actividades/
---         estudiantes-grupo.
--- Que hace: lista las matriculas activas de un grupo (id, nombre, documento)
---   para que el form de Actividad pueda ofrecer un checklist de estudiantes
---   puntuales en vez de asignar siempre "todo el grupo".
--- Por que aqui: fn_actividad_crear/_actualizar (V224) YA aceptan
---   FK_TMATRICULAS (array) o ASIGNAR_TODO_EL_GRUPO -- lo unico que faltaba
---   era de donde sacar la lista para armar ese array; no hay ningun otro
---   endpoint que devuelva el padron de un grupo sin pedir tambien una fecha
---   de asistencia (fn_asistencia_estudiantes_sesion, V220ish).
--- Depende de: V224 (TACTIVIDAD/fn_actividad_crear), V277 (fn_planeador_
---   assert_alcance), V22 (TMATRICULA/TESTUDIANTE).
+--         estudiantes-grupo, y el helper fn_matricula_es_cursando.
+-- Que hace: lista las matriculas activas en estado Cursando de un grupo para
+--   el checklist de estudiantes del form de Actividad.
+-- Por que aqui: fn_actividad_crear/_actualizar ya aceptan FK_TMATRICULAS o
+--   ASIGNAR_TODO_EL_GRUPO; faltaba la lista de donde armar ese array.
+-- Depende de: V224 (TACTIVIDAD), V277 (fn_planeador_assert_alcance), V22.
 -- ===========================================================================
 
 SET search_path TO academico_test, public;
+
+-- Solo una matricula en estado Cursando (ESTADO_MATRICULA VALOR '1', por texto
+-- y no por pk) puede recibir actividades nuevas; Retirado y demas quedan fuera.
+CREATE OR REPLACE FUNCTION academico_test.fn_matricula_es_cursando(p_pk_tmatricula BIGINT)
+RETURNS BOOLEAN
+LANGUAGE sql
+STABLE
+AS $$
+    SELECT EXISTS (
+        SELECT 1
+          FROM academico_test.TMATRICULA m
+          JOIN academico_test.TLISTA_VALOR lv ON lv.PK_LISTA_VALOR = m.FK_TLV_ESTADO_MATRICULA
+         WHERE m.PK_TMATRICULA = p_pk_tmatricula
+           AND lv.CATEGORIA = 'ESTADO_MATRICULA' AND lv.VALOR = '1'
+    );
+$$;
 
 CREATE OR REPLACE FUNCTION academico_test.fn_actividad_matriculas_grupo_listar(
     p_pk_usuario_solicitante BIGINT,
@@ -58,12 +69,13 @@ BEGIN
       JOIN academico_test.TUSUARIO u     ON u.PK_TUSUARIO = es.FK_TUSUARIO
      WHERE m.FK_TGRUPO = p_fk_tgrupo
        AND m.ACTIVE = TRUE
+       AND academico_test.fn_matricula_es_cursando(m.PK_TMATRICULA)
      ORDER BY u.PRIMER_APELLIDO, u.PRIMER_NOMBRE;
 END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_actividad_matriculas_grupo_listar(BIGINT, BIGINT)
-    IS 'Padron de matriculas activas de un grupo (pk_tmatricula, pk_testudiante, nombre completo, documento) -- para el checklist de "Estudiantes" del form de Actividad, que arma el array FK_TMATRICULAS que fn_actividad_crear/_actualizar (V224) ya aceptan. Gate VER sobre PLANEADOR + alcance territorial del grupo (fn_planeador_assert_alcance, V277). V421.';
+    IS 'Padron de matriculas activas en estado Cursando de un grupo (pk_tmatricula, pk_testudiante, nombre completo, documento) -- para el checklist de "Estudiantes" del form de Actividad, que arma el array FK_TMATRICULAS que fn_actividad_crear/_actualizar (V224) ya aceptan. Gate VER sobre PLANEADOR + alcance territorial del grupo (fn_planeador_assert_alcance, V277). V421.';
 
 INSERT INTO public.query
     (uuid, query, type, public_end, captcha, microservice_id, path_template, execution_mode, http_method, param_types, detail)
@@ -79,7 +91,8 @@ SELECT
     'V421 -- padron de matriculas activas del grupo (?grupo=), para el checklist de "Estudiantes" al crear/editar una actividad. Ver fn_actividad_matriculas_grupo_listar. Gate VER sobre PLANEADOR.'
   FROM public.microservice m
  WHERE m.serviceid = 'eval-col'
-ON CONFLICT (microservice_id, path_template, http_method) WHERE path_template IS NOT NULL DO NOTHING;
+ON CONFLICT (microservice_id, path_template, http_method) WHERE path_template IS NOT NULL DO UPDATE
+   SET query = EXCLUDED.query, param_types = EXCLUDED.param_types, detail = EXCLUDED.detail;
 
 -- Mismos roles que ya pueden CREAR una actividad (POST /planeador/actividades)
 -- -- sin hardcodear nombres de rol (ver V305: un nombre que no matchea deja
