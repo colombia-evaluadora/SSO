@@ -1,13 +1,14 @@
--- V496.6 - Instrumentos y calificación de actividades: núcleos _interno sin
--- permisos. Definen rúbrica, lista de cotejo, escala y Otro (Regla 41: la
--- casilla de entrega que dicta el tipo de evidencia queda siempre marcada),
--- califican individual y en bloque, y leen la nota y el listado de
--- calificaciones. La rúbrica suma puntajes sobre la suma de máximos (Regla 42).
--- Reemplaza a las funciones con el permiso dentro de V226, V227 y V469.
--- Depende de: V496.5 (validaciones), V227 (get_or_create, ajuste por
--- criterio), V226 (reset, Otro), V408 (recuperación), V428 (homologación),
--- V450 (fecha de asistencia). Incluye fn_numero_corto y
--- fn_actividad_nota_resultado_instrumento (antes V477).
+-- V496.6 - Instrumentos, calificación y resultados de actividades: núcleos
+-- _interno sin permisos. Definen rúbrica, lista de cotejo, escala y Otro
+-- (Regla 41), califican individual y en bloque (la rúbrica suma puntajes
+-- sobre la suma de máximos, Regla 42; la escala por criterios, Regla 56),
+-- fijan el estado de resultado (Regla 62) y lo sugieren desde la asistencia
+-- (Regla 73), registran la observación y sus soportes (Regla 61) y leen la
+-- nota y el listado de calificaciones (Regla 58). La nota se escribe en un
+-- solo punto (aplicar_interno); guardar_interno decide si es una corrección
+-- que exige aprobación (Regla 55, tablas de V496.18).
+-- Depende de: V496.5 (validaciones, catálogos), V227 (get_or_create, ajuste
+-- por criterio), V226, V408 (recuperación), V428, V450, V463 (evidencias).
 
 SET search_path TO academico_test, public;
 
@@ -20,6 +21,8 @@ DROP FUNCTION IF EXISTS academico_test.fn_actividad_nota_calificar_cotejo(BIGINT
 DROP FUNCTION IF EXISTS academico_test.fn_actividad_nota_calificar_escala(BIGINT, BIGINT, BIGINT, NUMERIC, DATE);
 DROP FUNCTION IF EXISTS academico_test.fn_actividad_nota_calificar_escala_criterios(BIGINT, BIGINT, JSONB, DATE);
 DROP FUNCTION IF EXISTS academico_test.fn_actividad_nota_calificar_otro(BIGINT, BIGINT, NUMERIC, DATE);
+-- Cambia el tipo de retorno (estado, momento, enlace, resultados_completos).
+DROP FUNCTION IF EXISTS academico_test.fn_actividad_estudiantes_calificaciones_listar_interno(BIGINT, DATE, VARCHAR);
 
 -- ---------------------------------------------------------------------------
 -- Definición del instrumento
@@ -278,6 +281,35 @@ AS $$
      WHERE e.FK_TACTIVIDAD = p_pk_tactividad AND e.ACTIVE = TRUE;
 $$;
 
+CREATE OR REPLACE FUNCTION academico_test.fn_actividad_nota_aplicar_interno(
+    p_pk_usuario_solicitante   BIGINT,
+    p_pk_tactividad_estudiante BIGINT,
+    p_porcentaje               NUMERIC
+)
+RETURNS NUMERIC
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_pk_nota BIGINT  := academico_test.fn_actividad_nota_get_or_create(p_pk_usuario_solicitante, p_pk_tactividad_estudiante);
+    v_pct     NUMERIC := academico_test.fn_actividad_nota_redondear(
+                             academico_test.fn_actividad_estudiante_actividad(p_pk_tactividad_estudiante), p_porcentaje);
+BEGIN
+    -- NULL = captura aún incompleta: se guarda lo marcado pero no se toca la nota.
+    IF v_pct IS NOT NULL THEN
+        UPDATE academico_test.TACTIVIDAD_NOTA
+           SET CALIFICACION = v_pct, CALIFICABLE = 'S',
+               FK_TLV_ESTADO_RESULTADO = academico_test.fn_tlv_estado_resultado_pk('CALIFICADO'),
+               MODIFIED_BY = p_pk_usuario_solicitante::VARCHAR, MODIFIED_AT = CURRENT_TIMESTAMP
+         WHERE PK_TACTIVIDAD_NOTA = v_pk_nota;
+        PERFORM academico_test.fn_actividad_recuperacion_aplicar(p_pk_usuario_solicitante, p_pk_tactividad_estudiante);
+    END IF;
+    RETURN v_pct;
+END;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_actividad_nota_aplicar_interno(BIGINT, BIGINT, NUMERIC)
+    IS 'INTERNO: escribe la nota (porcentaje, redondeado con la Regla 30), la marca Calificado y consolida la recuperación. Sin decisión de aprobación: la usan fn_actividad_nota_guardar_interno y la aprobación de una corrección de resultado.';
+
 CREATE OR REPLACE FUNCTION academico_test.fn_actividad_nota_guardar_interno(
     p_pk_usuario_solicitante   BIGINT,
     p_pk_tactividad_estudiante BIGINT,
@@ -287,17 +319,22 @@ RETURNS NUMERIC
 LANGUAGE plpgsql
 AS $$
 DECLARE
-    v_pk_nota BIGINT := academico_test.fn_actividad_nota_get_or_create(p_pk_usuario_solicitante, p_pk_tactividad_estudiante);
+    v_pct NUMERIC := academico_test.fn_actividad_nota_redondear(
+                         academico_test.fn_actividad_estudiante_actividad(p_pk_tactividad_estudiante), p_porcentaje);
 BEGIN
-    -- NULL = captura aún incompleta: se guarda lo marcado pero no se toca la nota.
-    IF p_porcentaje IS NOT NULL THEN
-        UPDATE academico_test.TACTIVIDAD_NOTA
-           SET CALIFICACION = p_porcentaje, CALIFICABLE = 'S',
-               MODIFIED_BY = p_pk_usuario_solicitante::VARCHAR, MODIFIED_AT = CURRENT_TIMESTAMP
-         WHERE PK_TACTIVIDAD_NOTA = v_pk_nota;
-        PERFORM academico_test.fn_actividad_recuperacion_aplicar(p_pk_usuario_solicitante, p_pk_tactividad_estudiante);
+    -- La rama de aprobación exige su tabla (V496.18): V496.9 ejecuta esta función
+    -- al migrar una base limpia, antes de que exista. Se compara ya redondeado:
+    -- el mismo número digitado otra vez no es una corrección.
+    IF v_pct IS NOT NULL
+       AND to_regclass('academico_test.tsolicitud_aprobacion') IS NOT NULL
+       AND academico_test.fn_resultado_correccion_requiere_aprobacion(p_pk_tactividad_estudiante, v_pct) IS TRUE THEN
+        PERFORM academico_test.fn_actividad_resultado_correccion_solicitar_interno(
+            p_pk_usuario_solicitante, p_pk_tactividad_estudiante, v_pct);
+        RETURN (SELECT n.CALIFICACION FROM academico_test.TACTIVIDAD_NOTA n
+                 WHERE n.FK_TACTIVIDAD_ESTUDIANTE = p_pk_tactividad_estudiante AND n.ACTIVE = TRUE);
     END IF;
-    RETURN p_porcentaje;
+    -- Redondea una sola vez quien escribe.
+    RETURN academico_test.fn_actividad_nota_aplicar_interno(p_pk_usuario_solicitante, p_pk_tactividad_estudiante, p_porcentaje);
 END;
 $$;
 
@@ -444,6 +481,7 @@ BEGIN
 END;
 $$;
 
+-- Regla 56: suma de lo obtenido sobre la suma de los máximos de cada criterio.
 CREATE OR REPLACE FUNCTION academico_test.fn_actividad_nota_calificar_escala_criterios_interno(
     p_pk_usuario_solicitante   BIGINT,
     p_pk_tactividad_estudiante BIGINT,
@@ -453,23 +491,31 @@ RETURNS NUMERIC
 LANGUAGE plpgsql
 AS $$
 DECLARE
-    v_pk     BIGINT := academico_test.fn_actividad_estudiante_actividad(p_pk_tactividad_estudiante);
-    v_escala BIGINT;
-    v_e      JSONB;
-    v_nivel  BIGINT;
-    v_valor  NUMERIC;
-    v_suma   NUMERIC := 0;
-    v_por    VARCHAR := p_pk_usuario_solicitante::VARCHAR;
+    v_pk       BIGINT := academico_test.fn_actividad_estudiante_actividad(p_pk_tactividad_estudiante);
+    v_escala   BIGINT;
+    v_valor_max NUMERIC;
+    v_nivel_max NUMERIC;
+    v_e        JSONB;
+    v_nivel    BIGINT;
+    v_valor    NUMERIC;
+    v_obtenido NUMERIC := 0;
+    v_maximo   NUMERIC := 0;
+    v_por      VARCHAR := p_pk_usuario_solicitante::VARCHAR;
 BEGIN
     PERFORM academico_test.fn_actividad_validar_instrumento(v_pk, 'ESCALA_VALORACION');
     PERFORM academico_test.fn_actividad_validar_escala_criterios(v_pk, p_criterios);
-    SELECT PK_TACTIVIDAD_ESCALA INTO v_escala FROM academico_test.TACTIVIDAD_ESCALA
-     WHERE FK_TACTIVIDAD = v_pk AND ACTIVE = TRUE;
+    SELECT e.PK_TACTIVIDAD_ESCALA, e.VALOR_MAX,
+           (SELECT MAX(n.PONDERACION) FROM academico_test.TACTIVIDAD_ESCALA_NIVEL n
+             WHERE n.FK_TACTIVIDAD_ESCALA = e.PK_TACTIVIDAD_ESCALA AND n.ACTIVE = TRUE)
+      INTO v_escala, v_valor_max, v_nivel_max
+      FROM academico_test.TACTIVIDAD_ESCALA e
+     WHERE e.FK_TACTIVIDAD = v_pk AND e.ACTIVE = TRUE;
     FOR v_e IN SELECT * FROM jsonb_array_elements(p_criterios) LOOP
         v_nivel := (v_e->>'pkNivel')::BIGINT;
         v_valor := COALESCE((v_e->>'valorNumerico')::NUMERIC,
                             (SELECT PONDERACION FROM academico_test.TACTIVIDAD_ESCALA_NIVEL WHERE PK_TACTIVIDAD_ESCALA_NIVEL = v_nivel));
-        v_suma  := v_suma + academico_test.fn_actividad_escala_porcentaje(v_pk, v_nivel, (v_e->>'valorNumerico')::NUMERIC);
+        v_obtenido := v_obtenido + COALESCE(v_valor, 0);
+        v_maximo   := v_maximo + COALESCE(CASE WHEN v_nivel IS NOT NULL THEN v_nivel_max ELSE v_valor_max END, 0);
         UPDATE academico_test.TACTIVIDAD_ESCALA_CRITERIO_EVALUACION
            SET FK_TACTIVIDAD_ESCALA = v_escala, FK_TACTIVIDAD_ESCALA_NIVEL = v_nivel, VALOR = v_valor,
                PONDERACION = CASE WHEN v_nivel IS NOT NULL THEN v_valor END,
@@ -483,10 +529,9 @@ BEGIN
                     CASE WHEN v_nivel IS NOT NULL THEN v_valor END, v_por, CURRENT_TIMESTAMP, TRUE);
         END IF;
     END LOOP;
-    -- Todos los criterios comparten niveles y rango: el promedio de sus
-    -- porcentajes es la suma obtenida sobre la suma de máximos (Regla 42).
     RETURN academico_test.fn_actividad_nota_guardar_interno(p_pk_usuario_solicitante, p_pk_tactividad_estudiante,
-        academico_test.fn_actividad_nota_ajustar_por_criterio(v_pk, ROUND(v_suma / jsonb_array_length(p_criterios), 2)));
+        academico_test.fn_actividad_nota_ajustar_por_criterio(v_pk,
+            CASE WHEN v_maximo > 0 THEN ROUND(v_obtenido / v_maximo * 100, 2) END));
 END;
 $$;
 
@@ -503,9 +548,7 @@ DECLARE
 BEGIN
     PERFORM academico_test.fn_actividad_validar_instrumento(v_pk, 'OTRO');
     PERFORM academico_test.fn_actividad_validar_porcentaje(p_porcentaje,
-        'la calificación de ' || COALESCE(academico_test.fn_actividad_estudiante_nombre(
-            (SELECT FK_TMATRICULA FROM academico_test.TACTIVIDAD_ESTUDIANTE WHERE PK_TACTIVIDAD_ESTUDIANTE = p_pk_tactividad_estudiante)),
-            'el estudiante'));
+        'la calificación de ' || academico_test.fn_actividad_estudiante_etiqueta(p_pk_tactividad_estudiante));
     RETURN academico_test.fn_actividad_nota_guardar_interno(p_pk_usuario_solicitante, p_pk_tactividad_estudiante,
         academico_test.fn_actividad_nota_ajustar_por_criterio(v_pk, ROUND(p_porcentaje, 2)));
 END;
@@ -588,7 +631,6 @@ BEGIN
     SELECT COUNT(*) INTO v_total FROM academico_test.TACTIVIDAD_RUBRICA_CRITERIO
      WHERE FK_TACTIVIDAD = p_pk_tactividad AND ACTIVE = TRUE;
     FOREACH v_ae IN ARRAY p_pk_tactividad_estudiante LOOP
-        PERFORM academico_test.fn_actividad_validar_asistencia_calificar(v_ae, p_fecha);
         PERFORM academico_test.fn_actividad_rubrica_captura_guardar(p_pk_usuario_solicitante, v_ae, p_pk_criterio, p_pk_nivel);
         -- Los demás criterios ya capturados no se tocan; la nota sale al completarlos.
         v_pct := academico_test.fn_actividad_nota_guardar_interno(p_pk_usuario_solicitante, v_ae,
@@ -631,7 +673,6 @@ BEGIN
     SELECT COUNT(*) INTO v_total FROM academico_test.TACTIVIDAD_COTEJO_ITEM
      WHERE FK_TACTIVIDAD = p_pk_tactividad AND ACTIVE = TRUE;
     FOREACH v_ae IN ARRAY p_pk_tactividad_estudiante LOOP
-        PERFORM academico_test.fn_actividad_validar_asistencia_calificar(v_ae, p_fecha);
         PERFORM academico_test.fn_actividad_cotejo_captura_guardar(p_pk_usuario_solicitante, v_ae, p_pk_item, p_cumplido);
         -- Un elemento sin captura cuenta como no cumplido: siempre hay nota.
         calificacion := academico_test.fn_actividad_nota_guardar_interno(p_pk_usuario_solicitante, v_ae,
@@ -683,7 +724,6 @@ BEGIN
         END IF;
     END IF;
     FOREACH v_ae IN ARRAY p_pk_tactividad_estudiante LOOP
-        PERFORM academico_test.fn_actividad_validar_asistencia_calificar(v_ae, p_fecha);
         pk_tactividad_estudiante := v_ae;
         calificacion := CASE WHEN v_criterios IS NOT NULL
             THEN academico_test.fn_actividad_nota_calificar_escala_criterios_interno(p_pk_usuario_solicitante, v_ae, v_criterios)
@@ -691,6 +731,368 @@ BEGIN
         END;
         RETURN NEXT;
     END LOOP;
+END;
+$$;
+
+-- ---------------------------------------------------------------------------
+-- Estado de resultado (Reglas 62 y 73)
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION academico_test.fn_actividad_resultado_estado_set_interno(
+    p_pk_usuario_solicitante   BIGINT,
+    p_pk_tactividad_estudiante BIGINT,
+    p_estado                   VARCHAR
+)
+RETURNS VARCHAR
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_pk      BIGINT  := academico_test.fn_actividad_estudiante_actividad(p_pk_tactividad_estudiante);
+    v_estado  VARCHAR := upper(TRIM(p_estado));
+    v_pk_nota BIGINT;
+BEGIN
+    PERFORM academico_test.fn_actividad_validar_activa(v_pk);
+    PERFORM academico_test.fn_actividad_validar_referente_calificable(v_pk);
+    PERFORM academico_test.fn_actividad_validar_estado_resultado_asignable(v_estado);
+    v_pk_nota := academico_test.fn_actividad_nota_get_or_create(p_pk_usuario_solicitante, p_pk_tactividad_estudiante);
+    -- Regla 62: el estado excluye la nota. DEFINITIVA solo se limpia si no la
+    -- sostiene una recuperación ya aplicada (RECUPERACION).
+    UPDATE academico_test.TACTIVIDAD_NOTA
+       SET FK_TLV_ESTADO_RESULTADO = academico_test.fn_tlv_estado_resultado_pk(v_estado),
+           CALIFICACION = NULL,
+           DEFINITIVA   = CASE WHEN RECUPERACION IS NULL THEN NULL ELSE DEFINITIVA END,
+           MODIFIED_BY  = p_pk_usuario_solicitante::VARCHAR, MODIFIED_AT = CURRENT_TIMESTAMP
+     WHERE PK_TACTIVIDAD_NOTA = v_pk_nota;
+    PERFORM academico_test.fn_actividad_validar_estado_coherente(v_pk_nota);
+    RETURN v_estado;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION academico_test.fn_actividad_resultado_estado_set_bulk_interno(
+    p_pk_usuario_solicitante   BIGINT,
+    p_pk_tactividad            BIGINT,
+    p_estado                   VARCHAR,
+    p_pk_tactividad_estudiante BIGINT[]
+)
+RETURNS TABLE (pk_tactividad_estudiante BIGINT, estado_resultado VARCHAR)
+LANGUAGE plpgsql
+AS $$
+#variable_conflict use_column
+DECLARE
+    v_ae BIGINT;
+BEGIN
+    PERFORM academico_test.fn_actividad_validar_estado_resultado_asignable(p_estado);
+    PERFORM academico_test.fn_actividad_validar_estudiantes_lote(p_pk_tactividad, p_pk_tactividad_estudiante);
+    FOREACH v_ae IN ARRAY p_pk_tactividad_estudiante LOOP
+        pk_tactividad_estudiante := v_ae;
+        estado_resultado := academico_test.fn_actividad_resultado_estado_set_interno(p_pk_usuario_solicitante, v_ae, p_estado);
+        RETURN NEXT;
+    END LOOP;
+END;
+$$;
+
+-- Regla 73: ausente = todas sus tomas de la asignatura ese día son No asistió
+-- (VALOR 2/3); Justificada si alguna trae excusa o es "trajo justificación".
+-- Llegó tarde y Asistió no cambian nada. Solo se escribe sobre Pendiente sin
+-- nota ni observación: nunca pisa un resultado capturado.
+CREATE OR REPLACE FUNCTION academico_test.fn_actividad_resultado_desde_asistencia_interno(
+    p_pk_usuario_solicitante BIGINT,
+    p_fk_tgrupo              BIGINT,
+    p_fk_tasignatura         BIGINT,
+    p_fecha                  DATE,
+    p_matriculas             BIGINT[] DEFAULT NULL
+)
+RETURNS INT
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_pendiente BIGINT := academico_test.fn_tlv_estado_resultado_pk('PENDIENTE');
+    v_r         RECORD;
+    v_pk_nota   BIGINT;
+    v_n         INT := 0;
+BEGIN
+    IF p_fk_tgrupo IS NULL OR p_fk_tasignatura IS NULL OR p_fecha IS NULL THEN
+        RETURN 0;
+    END IF;
+    FOR v_r IN
+        WITH ausentes AS (
+            SELECT s.FK_TMATRICULA,
+                   BOOL_OR(lv.VALOR = '3' OR s.FK_SOPORTE_ARCHIVO IS NOT NULL) AS justificada
+              FROM academico_test.TASISTENCIA s
+              JOIN academico_test.TLISTA_VALOR lv ON lv.PK_LISTA_VALOR = s.FK_TLV_TIPO_ASISTENCIA
+              JOIN academico_test.TMATRICULA m ON m.PK_TMATRICULA = s.FK_TMATRICULA AND m.FK_TGRUPO = p_fk_tgrupo
+             WHERE s.FECHA = p_fecha AND s.ACTIVE = TRUE AND s.FK_TASIGNATURA = p_fk_tasignatura
+               AND (p_matriculas IS NULL OR s.FK_TMATRICULA = ANY (p_matriculas))
+             GROUP BY s.FK_TMATRICULA
+            HAVING BOOL_AND(lv.VALOR IN ('2', '3'))
+        )
+        SELECT ae.PK_TACTIVIDAD_ESTUDIANTE AS pk_ae, au.justificada,
+               (SELECT n.PK_TACTIVIDAD_NOTA FROM academico_test.TACTIVIDAD_NOTA n
+                 WHERE n.FK_TACTIVIDAD_ESTUDIANTE = ae.PK_TACTIVIDAD_ESTUDIANTE
+                 ORDER BY n.ACTIVE DESC LIMIT 1) AS pk_nota,
+               (SELECT bool_or(n.ACTIVE) FROM academico_test.TACTIVIDAD_NOTA n
+                 WHERE n.FK_TACTIVIDAD_ESTUDIANTE = ae.PK_TACTIVIDAD_ESTUDIANTE) AS nota_activa
+          FROM academico_test.TACTIVIDAD a
+          JOIN academico_test.TACTIVIDAD_ESTUDIANTE ae ON ae.FK_TACTIVIDAD = a.PK_TACTIVIDAD AND ae.ACTIVE = TRUE
+          JOIN ausentes au ON au.FK_TMATRICULA = ae.FK_TMATRICULA
+         WHERE a.FK_TGRUPO = p_fk_tgrupo AND a.FK_TASIGNATURA = p_fk_tasignatura AND a.ACTIVE = TRUE
+           AND p_fecha BETWEEN COALESCE(a.FECHA_INICIO, a.FECHA_CREACION)
+                           AND COALESCE(a.FECHA_CIERRE, a.FECHA_INICIO, a.FECHA_CREACION)
+    LOOP
+        -- Una nota dada de baja no se reactiva: get_or_create traería su nota vieja.
+        IF v_r.pk_nota IS NOT NULL AND NOT COALESCE(v_r.nota_activa, FALSE) THEN
+            CONTINUE;
+        END IF;
+        v_pk_nota := COALESCE(v_r.pk_nota,
+                              academico_test.fn_actividad_nota_get_or_create(p_pk_usuario_solicitante, v_r.pk_ae));
+        UPDATE academico_test.TACTIVIDAD_NOTA n
+           SET FK_TLV_ESTADO_RESULTADO = academico_test.fn_tlv_estado_resultado_pk(
+                   CASE WHEN v_r.justificada THEN 'NO_ASISTIO_JUSTIFICADA' ELSE 'NO_ASISTIO_NO_JUSTIFICADA' END),
+               MODIFIED_BY = p_pk_usuario_solicitante::VARCHAR, MODIFIED_AT = CURRENT_TIMESTAMP
+         WHERE n.PK_TACTIVIDAD_NOTA = v_pk_nota
+           AND n.CALIFICACION IS NULL
+           AND NULLIF(TRIM(n.OBSERVACION), '') IS NULL
+           AND COALESCE(n.FK_TLV_ESTADO_RESULTADO, v_pendiente) = v_pendiente;
+        IF FOUND THEN
+            v_n := v_n + 1;
+        END IF;
+    END LOOP;
+    RETURN v_n;
+END;
+$$;
+
+-- ---------------------------------------------------------------------------
+-- Registro narrativo (formativo) y sus soportes
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION academico_test.fn_actividad_observar_estudiante_interno(
+    p_pk_usuario_solicitante   BIGINT,
+    p_pk_tactividad_estudiante BIGINT,
+    p_observacion              TEXT,
+    p_fecha                    DATE,
+    p_evidencias               BIGINT[],
+    p_momento                  VARCHAR,
+    p_enlace                   VARCHAR
+)
+RETURNS VOID
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_pk_tactividad BIGINT := academico_test.fn_actividad_estudiante_actividad(p_pk_tactividad_estudiante);
+    v_pk_nota       BIGINT;
+    v_actuales      INT;
+    v_enlace        VARCHAR;
+    v_evidencias    INT;
+BEGIN
+    PERFORM academico_test.fn_actividad_validar_formativa(v_pk_tactividad);
+    PERFORM academico_test.fn_actividad_validar_referente_calificable(v_pk_tactividad);
+    PERFORM academico_test.fn_actividad_validar_observacion_texto(p_observacion);
+    PERFORM academico_test.fn_actividad_validar_momento(p_momento);
+    SELECT COUNT(*) INTO v_actuales FROM academico_test.TACTIVIDAD_SOPORTE
+     WHERE FK_TACTIVIDAD_ESTUDIANTE = p_pk_tactividad_estudiante AND ACTIVE = TRUE AND FK_TARCHIVO IS NOT NULL;
+    SELECT EVIDENCIA_ENLACE INTO v_enlace FROM academico_test.TACTIVIDAD_NOTA
+     WHERE FK_TACTIVIDAD_ESTUDIANTE = p_pk_tactividad_estudiante AND ACTIVE = TRUE;
+    PERFORM academico_test.fn_actividad_validar_evidencias_narrativas(p_evidencias, p_enlace, v_actuales, v_enlace);
+
+    v_pk_nota := academico_test.fn_actividad_nota_get_or_create(p_pk_usuario_solicitante, p_pk_tactividad_estudiante);
+
+    -- Texto vacío = observación sin texto (se guarda NULL), no un error.
+    UPDATE academico_test.TACTIVIDAD_NOTA
+       SET OBSERVACION = NULLIF(TRIM(p_observacion), ''), CALIFICACION = NULL, CALIFICABLE = 'N',
+           FK_TLV_ESTADO_RESULTADO = academico_test.fn_tlv_estado_resultado_pk('CALIFICADO'),
+           FK_TLV_MOMENTO = CASE WHEN p_momento IS NULL THEN FK_TLV_MOMENTO
+                                 ELSE academico_test.fn_tlv_momento_registro_pk(NULLIF(TRIM(p_momento), '')) END,
+           EVIDENCIA_ENLACE = CASE WHEN p_enlace IS NULL THEN EVIDENCIA_ENLACE ELSE NULLIF(TRIM(p_enlace), '') END,
+           MODIFIED_BY = p_pk_usuario_solicitante::VARCHAR, MODIFIED_AT = CURRENT_TIMESTAMP
+     WHERE PK_TACTIVIDAD_NOTA = v_pk_nota
+    RETURNING EVIDENCIA_ENLACE INTO v_enlace;
+
+    v_evidencias := academico_test.fn_actividad_observacion_evidencias_set(
+        p_pk_usuario_solicitante, p_pk_tactividad_estudiante, p_evidencias, p_fecha);
+
+    -- Sin texto, ni archivos, ni enlace no es una observación; el RAISE deshace el UPDATE.
+    IF NULLIF(TRIM(p_observacion), '') IS NULL AND v_enlace IS NULL
+       AND COALESCE(v_evidencias, v_actuales) = 0 THEN
+        RAISE EXCEPTION 'La observación necesita texto, al menos una evidencia o un enlace' USING ERRCODE = '22023';
+    END IF;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION academico_test.fn_actividad_observar_grupal_interno(
+    p_pk_usuario_solicitante BIGINT,
+    p_pk_tactividad          BIGINT,
+    p_observacion            TEXT,
+    p_fecha                  DATE,
+    p_evidencias             BIGINT[],
+    p_momento                VARCHAR,
+    p_enlace                 VARCHAR
+)
+RETURNS INT
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_pk_ae      BIGINT;
+    v_pk_nota    BIGINT;
+    v_observados INT := 0;
+    v_omitidos   INT := 0;
+BEGIN
+    PERFORM academico_test.fn_actividad_validar_formativa(p_pk_tactividad);
+    PERFORM academico_test.fn_actividad_validar_referente_calificable(p_pk_tactividad);
+    PERFORM academico_test.fn_actividad_validar_observacion_texto(p_observacion);
+    PERFORM academico_test.fn_actividad_validar_momento(p_momento);
+    PERFORM academico_test.fn_actividad_validar_evidencias_narrativas(p_evidencias, p_enlace);
+    IF NULLIF(TRIM(p_observacion), '') IS NULL AND NULLIF(TRIM(p_enlace), '') IS NULL
+       AND NOT EXISTS (SELECT 1 FROM unnest(p_evidencias) x WHERE x IS NOT NULL) THEN
+        RAISE EXCEPTION 'La observación necesita texto, al menos una evidencia o un enlace' USING ERRCODE = '22023';
+    END IF;
+
+    SELECT COUNT(*) INTO v_omitidos FROM academico_test.TACTIVIDAD_ESTUDIANTE ae
+     WHERE ae.FK_TACTIVIDAD = p_pk_tactividad AND ae.ACTIVE = TRUE
+       AND academico_test.fn_actividad_resultado_registrado(ae.PK_TACTIVIDAD_ESTUDIANTE);
+    IF v_omitidos > 0 THEN
+        RAISE WARNING 'fn_actividad_observar_grupal: se omiten % estudiante(s) de % que ya tienen resultado registrado; la grupal no sobrescribe',
+            v_omitidos, academico_test.fn_actividad_etiqueta(p_pk_tactividad);
+    END IF;
+
+    FOR v_pk_ae IN
+        SELECT ae.PK_TACTIVIDAD_ESTUDIANTE FROM academico_test.TACTIVIDAD_ESTUDIANTE ae
+         WHERE ae.FK_TACTIVIDAD = p_pk_tactividad AND ae.ACTIVE = TRUE
+           AND NOT academico_test.fn_actividad_resultado_registrado(ae.PK_TACTIVIDAD_ESTUDIANTE)
+    LOOP
+        v_pk_nota := academico_test.fn_actividad_nota_get_or_create(p_pk_usuario_solicitante, v_pk_ae);
+        UPDATE academico_test.TACTIVIDAD_NOTA
+           SET OBSERVACION = NULLIF(TRIM(p_observacion), ''), CALIFICACION = NULL, CALIFICABLE = 'N',
+               FK_TLV_ESTADO_RESULTADO = academico_test.fn_tlv_estado_resultado_pk('CALIFICADO'),
+               FK_TLV_MOMENTO = academico_test.fn_tlv_momento_registro_pk(NULLIF(TRIM(p_momento), '')),
+               EVIDENCIA_ENLACE = NULLIF(TRIM(p_enlace), ''),
+               MODIFIED_BY = p_pk_usuario_solicitante::VARCHAR, MODIFIED_AT = CURRENT_TIMESTAMP
+         WHERE PK_TACTIVIDAD_NOTA = v_pk_nota;
+        -- En la grupal las evidencias son las de la sesión, las mismas para todos.
+        PERFORM academico_test.fn_actividad_observacion_evidencias_set(
+            p_pk_usuario_solicitante, v_pk_ae, p_evidencias, p_fecha);
+        v_observados := v_observados + 1;
+    END LOOP;
+    RETURN v_observados;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION academico_test.fn_actividad_observacion_soporte_agregar_interno(
+    p_pk_usuario_solicitante   BIGINT,
+    p_pk_tactividad_estudiante BIGINT,
+    p_fk_tarchivo              BIGINT,
+    p_fecha                    DATE
+)
+RETURNS BIGINT
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_pk_tactividad BIGINT := academico_test.fn_actividad_estudiante_actividad(p_pk_tactividad_estudiante);
+    v_pk_soporte    BIGINT;
+    v_otros         INT;
+BEGIN
+    PERFORM academico_test.fn_actividad_validar_formativa(v_pk_tactividad);
+    PERFORM academico_test.fn_actividad_validar_referente_calificable(v_pk_tactividad);
+    IF p_fk_tarchivo IS NULL THEN
+        RAISE EXCEPTION 'Indique el archivo de la evidencia' USING ERRCODE = '22023';
+    END IF;
+
+    SELECT PK_TACTIVIDAD_SOPORTE INTO v_pk_soporte
+      FROM academico_test.TACTIVIDAD_SOPORTE
+     WHERE FK_TACTIVIDAD_ESTUDIANTE = p_pk_tactividad_estudiante AND FK_TARCHIVO = p_fk_tarchivo AND ACTIVE = TRUE;
+    IF FOUND THEN
+        RETURN v_pk_soporte;              -- ya estaba adjunto: idempotente
+    END IF;
+
+    SELECT COUNT(*) INTO v_otros FROM academico_test.TACTIVIDAD_SOPORTE
+     WHERE FK_TACTIVIDAD_ESTUDIANTE = p_pk_tactividad_estudiante AND ACTIVE = TRUE AND FK_TARCHIVO IS NOT NULL;
+    PERFORM academico_test.fn_actividad_validar_evidencias_cantidad(v_otros + 1);
+    PERFORM academico_test.fn_actividad_validar_evidencias_narrativas(
+        ARRAY[p_fk_tarchivo], NULL, 0,
+        (SELECT EVIDENCIA_ENLACE FROM academico_test.TACTIVIDAD_NOTA
+          WHERE FK_TACTIVIDAD_ESTUDIANTE = p_pk_tactividad_estudiante AND ACTIVE = TRUE));
+
+    -- Reactivar antes que insertar: un_tactividad_soporte_archivo es parcial
+    -- sobre ACTIVE y la fila inactiva del archivo quitado sigue existiendo.
+    UPDATE academico_test.TACTIVIDAD_SOPORTE
+       SET ACTIVE = TRUE, FECHA = p_fecha,
+           MODIFIED_BY = p_pk_usuario_solicitante::VARCHAR, MODIFIED_AT = CURRENT_TIMESTAMP
+     WHERE FK_TACTIVIDAD_ESTUDIANTE = p_pk_tactividad_estudiante AND FK_TARCHIVO = p_fk_tarchivo AND ACTIVE = FALSE
+    RETURNING PK_TACTIVIDAD_SOPORTE INTO v_pk_soporte;
+    IF v_pk_soporte IS NOT NULL THEN
+        RETURN v_pk_soporte;
+    END IF;
+
+    INSERT INTO academico_test.TACTIVIDAD_SOPORTE (
+        FK_TACTIVIDAD_ESTUDIANTE, FK_TARCHIVO, FECHA, CREATED_BY, CREATED_AT, ACTIVE)
+    VALUES (p_pk_tactividad_estudiante, p_fk_tarchivo, p_fecha,
+            p_pk_usuario_solicitante::VARCHAR, CURRENT_TIMESTAMP, TRUE)
+    RETURNING PK_TACTIVIDAD_SOPORTE INTO v_pk_soporte;
+    RETURN v_pk_soporte;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION academico_test.fn_actividad_observacion_soportes_listar_interno(p_pk_tactividad_estudiante BIGINT)
+RETURNS TABLE (pk_tactividad_soporte BIGINT, fk_tarchivo BIGINT, nombre VARCHAR, urls3 VARCHAR, peso BIGINT,
+               etiqueta VARCHAR, fecha DATE, created_at TIMESTAMP, es_favorito BOOLEAN)
+LANGUAGE sql
+STABLE
+AS $$
+    SELECT so.PK_TACTIVIDAD_SOPORTE, so.FK_TARCHIVO, ar.NOMBRE, ar.URLS3, ar.PESO, ar.ETIQUETA,
+           so.FECHA, so.CREATED_AT, so.ES_FAVORITO
+      FROM academico_test.TACTIVIDAD_SOPORTE so
+      JOIN academico_test.TARCHIVO ar ON ar.PK_TARCHIVO = so.FK_TARCHIVO
+     WHERE so.FK_TACTIVIDAD_ESTUDIANTE = p_pk_tactividad_estudiante
+       AND so.ACTIVE = TRUE
+       AND so.FK_TARCHIVO IS NOT NULL
+     ORDER BY so.PK_TACTIVIDAD_SOPORTE;
+$$;
+
+CREATE OR REPLACE FUNCTION academico_test.fn_actividad_observacion_soporte_quitar_interno(
+    p_pk_usuario_solicitante BIGINT,
+    p_pk_tactividad_soporte  BIGINT
+)
+RETURNS BIGINT
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_pk BIGINT := academico_test.fn_actividad_estudiante_actividad(
+                       academico_test.fn_actividad_observacion_soporte_resolver(p_pk_tactividad_soporte));
+BEGIN
+    PERFORM academico_test.fn_actividad_validar_formativa(v_pk);
+    PERFORM academico_test.fn_actividad_validar_referente_calificable(v_pk);
+    UPDATE academico_test.TACTIVIDAD_SOPORTE
+       SET ACTIVE = FALSE, ES_FAVORITO = FALSE,
+           MODIFIED_BY = p_pk_usuario_solicitante::VARCHAR, MODIFIED_AT = CURRENT_TIMESTAMP
+     WHERE PK_TACTIVIDAD_SOPORTE = p_pk_tactividad_soporte;
+    RETURN p_pk_tactividad_soporte;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION academico_test.fn_actividad_observacion_soporte_favorito_interno(
+    p_pk_usuario_solicitante BIGINT,
+    p_pk_tactividad_soporte  BIGINT,
+    p_es_favorito            BOOLEAN
+)
+RETURNS BIGINT
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_pk_ae BIGINT := academico_test.fn_actividad_observacion_soporte_resolver(p_pk_tactividad_soporte);
+    v_pk    BIGINT := academico_test.fn_actividad_estudiante_actividad(v_pk_ae);
+BEGIN
+    PERFORM academico_test.fn_actividad_validar_formativa(v_pk);
+    PERFORM academico_test.fn_actividad_validar_referente_calificable(v_pk);
+    -- La anterior se apaga primero: un_tactividad_soporte_favorito no admite dos.
+    IF COALESCE(p_es_favorito, TRUE) THEN
+        UPDATE academico_test.TACTIVIDAD_SOPORTE
+           SET ES_FAVORITO = FALSE,
+               MODIFIED_BY = p_pk_usuario_solicitante::VARCHAR, MODIFIED_AT = CURRENT_TIMESTAMP
+         WHERE FK_TACTIVIDAD_ESTUDIANTE = v_pk_ae AND ES_FAVORITO = TRUE
+           AND PK_TACTIVIDAD_SOPORTE <> p_pk_tactividad_soporte;
+    END IF;
+    UPDATE academico_test.TACTIVIDAD_SOPORTE
+       SET ES_FAVORITO = COALESCE(p_es_favorito, TRUE),
+           MODIFIED_BY = p_pk_usuario_solicitante::VARCHAR, MODIFIED_AT = CURRENT_TIMESTAMP
+     WHERE PK_TACTIVIDAD_SOPORTE = p_pk_tactividad_soporte;
+    RETURN p_pk_tactividad_soporte;
 END;
 $$;
 
@@ -941,14 +1343,16 @@ RETURNS TABLE (pk_tactividad_estudiante BIGINT, pk_tmatricula BIGINT, nombre_est
                fecha DATE, pk_tasistencia BIGINT, fk_tlv_tipo_asistencia BIGINT, tipo_asistencia VARCHAR,
                asistencia_observacion VARCHAR, fk_soporte_archivo BIGINT, calificacion NUMERIC, calificable CHAR,
                nota_observacion VARCHAR, es_formativa BOOLEAN, fecha_asistencia DATE, nota_homologada NUMERIC,
-               valoracion VARCHAR, formato_valor VARCHAR, resultado_instrumento JSONB)
+               valoracion VARCHAR, formato_valor VARCHAR, resultado_instrumento JSONB,
+               estado_resultado VARCHAR, momento VARCHAR, evidencia_enlace VARCHAR, resultados_completos BOOLEAN)
 LANGUAGE sql
 STABLE
 AS $$
     WITH act AS (
         SELECT a.PK_TACTIVIDAD, a.FK_TASIGNATURA, lv.VALOR AS instrumento,
                academico_test.fn_actividad_es_formativa(a.PK_TACTIVIDAD) AS formativa,
-               academico_test.fn_actividad_grado_resolver(a.PK_TACTIVIDAD) AS grado
+               academico_test.fn_actividad_grado_resolver(a.PK_TACTIVIDAD) AS grado,
+               academico_test.fn_actividad_resultados_completos(a.PK_TACTIVIDAD) AS completos
           FROM academico_test.TACTIVIDAD a
           LEFT JOIN academico_test.TLISTA_VALOR lv ON lv.PK_LISTA_VALOR = a.FK_TLV_INSTRUMENTO_EVALUACION
          WHERE a.PK_TACTIVIDAD = p_pk_tactividad
@@ -963,7 +1367,9 @@ AS $$
            n.CALIFICACION, n.CALIFICABLE, n.OBSERVACION, act.formativa,
            academico_test.fn_actividad_asistencia_fecha_resolver(b.FK_TMATRICULA, p_pk_tactividad),
            h.nota_homologada, h.valoracion_nombre, h.formato_valor,
-           academico_test.fn_actividad_nota_resultado_instrumento(b.PK_TACTIVIDAD_ESTUDIANTE)
+           academico_test.fn_actividad_nota_resultado_instrumento(b.PK_TACTIVIDAD_ESTUDIANTE),
+           COALESCE(lve.VALOR, CASE WHEN n.CALIFICACION IS NOT NULL THEN 'CALIFICADO' ELSE 'PENDIENTE' END)::VARCHAR,
+           lvm.VALOR::VARCHAR, n.EVIDENCIA_ENLACE, act.completos
       FROM base b
      CROSS JOIN act
       LEFT JOIN LATERAL (
@@ -976,6 +1382,8 @@ AS $$
            LIMIT 1) s ON TRUE
       LEFT JOIN academico_test.TLISTA_VALOR lva ON lva.PK_LISTA_VALOR = s.FK_TLV_TIPO_ASISTENCIA
       LEFT JOIN academico_test.TACTIVIDAD_NOTA n ON n.FK_TACTIVIDAD_ESTUDIANTE = b.PK_TACTIVIDAD_ESTUDIANTE AND n.ACTIVE = TRUE
+      LEFT JOIN academico_test.TLISTA_VALOR lve ON lve.PK_LISTA_VALOR = n.FK_TLV_ESTADO_RESULTADO
+      LEFT JOIN academico_test.TLISTA_VALOR lvm ON lvm.PK_LISTA_VALOR = n.FK_TLV_MOMENTO
       LEFT JOIN LATERAL academico_test.fn_nota_homologar(
                     COALESCE(n.DEFINITIVA, n.CALIFICACION), act.FK_TASIGNATURA, act.grado) h ON TRUE
      WHERE NULLIF(TRIM(p_search), '') IS NULL OR b.nombre ILIKE '%' || TRIM(p_search) || '%'
@@ -991,10 +1399,30 @@ COMMENT ON FUNCTION academico_test.fn_actividad_nota_rubrica_recalcular(BIGINT)
 COMMENT ON FUNCTION academico_test.fn_actividad_nota_cotejo_recalcular(BIGINT)
     IS 'INTERNO: nota (0-100) de la lista de cotejo: suma de los puntajes cumplidos sobre el total posible (sin puntaje pesa 1), con piso y tope. No escribe.';
 COMMENT ON FUNCTION academico_test.fn_actividad_nota_guardar_interno(BIGINT, BIGINT, NUMERIC)
-    IS 'INTERNO: escribe el porcentaje en TACTIVIDAD_NOTA y consolida la recuperación (fn_actividad_recuperacion_aplicar). NULL no toca la nota. Lo usan todos los _interno de calificación.';
+    IS 'INTERNO: decide cómo guardar la nota de un estudiante (porcentaje 0-100). Si es una corrección con el periodo de evaluación ya no calificable abre la solicitud CORRECCION_RESULTADO y devuelve la nota vigente sin cambiarla (Reglas 55 y 70); si no, la escribe con fn_actividad_nota_aplicar_interno. Lo usan todos los _interno de calificación, individuales y en bloque.';
 COMMENT ON FUNCTION academico_test.fn_actividad_nota_calificar_interno(BIGINT, BIGINT, JSONB, DATE)
     IS 'INTERNO: valida la calificación (fn_actividad_validar_calificacion) y la despacha según el instrumento efectivo: {niveles}, {itemsMarcados}, {pkNivel|valorNumerico} o {criterios}, {porcentaje}. Lo usa fn_actividad_nota_calificar.';
 COMMENT ON FUNCTION academico_test.fn_actividad_nota_obtener_interno(BIGINT)
     IS 'INTERNO: detalle de la nota de un estudiante (instrumento, %, captura cruda, soportes, homologación y resultado con etiquetas). Lo usa fn_actividad_nota_obtener.';
 COMMENT ON FUNCTION academico_test.fn_actividad_estudiantes_calificaciones_listar_interno(BIGINT, DATE, VARCHAR)
-    IS 'INTERNO: estudiantes de la actividad con asistencia del día, nota, homologación y resultado del instrumento. Lo usa fn_actividad_estudiantes_calificaciones_listar.';
+    IS 'INTERNO: estudiantes de la actividad con asistencia del día, nota, homologación, resultado del instrumento, estado de resultado, momento, enlace de evidencia y resultados_completos (Regla 58, igual en todas las filas). Lo usa fn_actividad_estudiantes_calificaciones_listar.';
+COMMENT ON FUNCTION academico_test.fn_actividad_resultado_estado_set_interno(BIGINT, BIGINT, VARCHAR)
+    IS 'INTERNO: fija el estado de resultado (PENDIENTE, NO_PRESENTO, NO_ASISTIO_JUSTIFICADA, NO_ASISTIO_NO_JUSTIFICADA) de un estudiante y borra su CALIFICACION (Regla 62). Lo usan fn_actividad_resultado_estado_set y su variante en bloque.';
+COMMENT ON FUNCTION academico_test.fn_actividad_resultado_estado_set_bulk_interno(BIGINT, BIGINT, VARCHAR, BIGINT[])
+    IS 'INTERNO: el mismo estado para varios estudiantes de una actividad, uno por uno con fn_actividad_resultado_estado_set_interno. Lo usa fn_actividad_resultado_estado_set_bulk.';
+COMMENT ON FUNCTION academico_test.fn_actividad_resultado_desde_asistencia_interno(BIGINT, BIGINT, BIGINT, DATE, BIGINT[])
+    IS 'INTERNO: Regla 73. Marca No asistido (Justificada con excusa o tipo "trajo justificación", si no No justificada) en las actividades vigentes ese día del grupo y la asignatura, solo donde el resultado sigue Pendiente sin nota ni observación. Devuelve cuántos marcó. La usan fn_asistencia_registrar_bulk_interno y fn_asistencia_editar_interno.';
+COMMENT ON FUNCTION academico_test.fn_actividad_observar_estudiante_interno(BIGINT, BIGINT, TEXT, DATE, BIGINT[], VARCHAR, VARCHAR)
+    IS 'INTERNO: observación de UN estudiante en una actividad formativa: texto ≤1000, Momento (MOMENTO_REGISTRO), hasta 3 archivos o un enlace (Regla 61); marca Calificado. NULL en momento/evidencias/enlace = no tocar. Lo usa fn_actividad_observar_estudiante.';
+COMMENT ON FUNCTION academico_test.fn_actividad_observar_grupal_interno(BIGINT, BIGINT, TEXT, DATE, BIGINT[], VARCHAR, VARCHAR)
+    IS 'INTERNO: la misma observación para los estudiantes de una actividad formativa que siguen Pendientes y sin observación; los demás se omiten con WARNING. Devuelve cuántos observó. Lo usa fn_actividad_observar_grupal.';
+COMMENT ON FUNCTION academico_test.fn_actividad_observacion_soportes_listar_interno(BIGINT)
+    IS 'INTERNO: archivos activos adjuntos a la observación de un estudiante, con los datos de TARCHIVO. Lo usa fn_actividad_observacion_soportes_listar.';
+COMMENT ON FUNCTION academico_test.fn_actividad_observacion_soporte_agregar_interno(BIGINT, BIGINT, BIGINT, DATE)
+    IS 'INTERNO: adjunta UN archivo a la observación (idempotente, reactiva si estaba de baja) dentro de los límites de la Regla 61. Lo usa fn_actividad_observacion_soporte_agregar.';
+COMMENT ON FUNCTION academico_test.fn_actividad_observacion_soporte_quitar_interno(BIGINT, BIGINT)
+    IS 'INTERNO: baja lógica de un soporte de observación de una actividad formativa con referente activo (desmarca favorito). Lo usa fn_actividad_observacion_soporte_quitar.';
+COMMENT ON FUNCTION academico_test.fn_actividad_observacion_soporte_favorito_interno(BIGINT, BIGINT, BOOLEAN)
+    IS 'INTERNO: marca o desmarca la evidencia favorita (a lo sumo una por estudiante) de una actividad formativa con referente activo. P0002 si el soporte no existe o fue retirado. Lo usa fn_actividad_observacion_soporte_favorito.';
+COMMENT ON FUNCTION academico_test.fn_actividad_nota_calificar_escala_criterios_interno(BIGINT, BIGINT, JSONB)
+    IS 'INTERNO: califica la escala de valoración criterio a criterio ({criterioIndex, pkNivel|valorNumerico}) y guarda la nota como Σ valores obtenidos / Σ máximos de cada criterio (Regla 56): el máximo de un criterio por nivel es el nivel más alto de la escala; el de uno numérico, VALOR_MAX. Pasa por piso/tope y por fn_actividad_nota_guardar_interno. La usan fn_actividad_nota_calificar_interno y el calificar en bloque de escala.';

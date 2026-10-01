@@ -1,6 +1,6 @@
 -- V450 - Asistencia por actividad en Preescolar: helpers de fecha y validez de
--- la asistencia, y es_formativa en GET /planeador/actividades/:ID. La fila de
--- pantalla-edicion la define hoy V496.4.
+-- la asistencia (solo lectura: ya no bloquea observar), y es_formativa en
+-- GET /planeador/actividades/:ID. La fila de pantalla-edicion la define V496.4.
 
 
 CREATE OR REPLACE FUNCTION academico_test.fn_actividad_asistencia_valida(
@@ -28,7 +28,7 @@ AS $$
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_actividad_asistencia_valida(BIGINT, BIGINT, DATE)
-    IS 'TRUE si el estudiante (por matricula) tiene, en p_fecha, una asistencia ACTIVA que habilita calificar u observar la actividad: alguna fila que NO sea inasistencia injustificada (TIPO_ASISTENCIA VALOR=2) y que ademas pertenezca al contexto correcto -- en una actividad FORMATIVA cualquier sesion del dia cuenta (la jornada de preescolar es continua y desde V436 la asistencia ya no se escribe por FK_TACTIVIDAD), en el resto tiene que ser la asignatura de la actividad. Con varios bloques alcanza UNA fila valida. Es la UNICA definicion de la regla: la usan el gate (fn_actividad_nota_asistencia_assert_preescolar) y, a traves de fn_actividad_asistencia_fecha_resolver, las lecturas de la planilla y de la tabla de calificaciones. V450.';
+    IS 'TRUE si el estudiante (por matricula) tiene, en p_fecha, una asistencia ACTIVA que habilita calificar u observar la actividad: alguna fila que NO sea inasistencia injustificada (TIPO_ASISTENCIA VALOR=2) y que ademas pertenezca al contexto correcto -- en una actividad FORMATIVA cualquier sesion del dia cuenta (la jornada de preescolar es continua y desde V436 la asistencia ya no se escribe por FK_TACTIVIDAD), en el resto tiene que ser la asignatura de la actividad. Con varios bloques alcanza UNA fila valida. Es la UNICA definicion de la regla: la usan, a traves de fn_actividad_asistencia_fecha_resolver, las lecturas de la planilla y de la tabla de calificaciones (la asistencia ya no bloquea calificar ni observar, Reglas 62/73). V450.';
 
 CREATE OR REPLACE FUNCTION academico_test.fn_actividad_asistencia_fecha_resolver(
     p_fk_tmatricula BIGINT,
@@ -54,48 +54,9 @@ $$;
 COMMENT ON FUNCTION academico_test.fn_actividad_asistencia_fecha_resolver(BIGINT, BIGINT)
     IS 'La fecha que hay que mandar en BODY.FECHA para calificar u observar a ESE estudiante en ESA actividad: la mas reciente, dentro de la ventana [FECHA_INICIO, FECHA_CIERRE] de la actividad (extremo NULL = abierto), que fn_actividad_asistencia_valida acepta -- solo fechas <= hoy; sin ninguna, NULL. NULL = no hay ninguna pasada o de hoy que habilite, o sea que la celda no es calificable/observable todavia y cualquier intento devolveria 22023. Ya NO cae a una fecha futura de la ventana (bug: la pantalla de marcar mostraba "sin asistencia" para hoy y el gate igual dejaba guardar via esa fecha futura). Definida EN TERMINOS del predicado para que la lectura y el gate no puedan desincronizarse. V450.';
 
-CREATE OR REPLACE FUNCTION academico_test.fn_actividad_nota_asistencia_assert_preescolar(
-    p_pk_tactividad_estudiante BIGINT,
-    p_fecha                    DATE
-)
-RETURNS VOID
-LANGUAGE plpgsql
-AS $$
-DECLARE
-    v_pk_matricula  BIGINT;
-    v_pk_tactividad BIGINT;
-BEGIN
-    SELECT ae.FK_TMATRICULA, ae.FK_TACTIVIDAD
-      INTO v_pk_matricula, v_pk_tactividad
-      FROM academico_test.TACTIVIDAD_ESTUDIANTE ae
-     WHERE ae.PK_TACTIVIDAD_ESTUDIANTE = p_pk_tactividad_estudiante AND ae.ACTIVE = TRUE;
-
-    IF NOT FOUND THEN
-        RAISE EXCEPTION 'No se encontro la asignacion actividad-estudiante solicitada' USING ERRCODE = 'P0002';
-    END IF;
-
-    IF academico_test.fn_actividad_asistencia_valida(v_pk_matricula, v_pk_tactividad, p_fecha) THEN
-        RETURN;
-    END IF;
-
-    IF NOT EXISTS (
-        SELECT 1
-          FROM academico_test.TASISTENCIA s
-         WHERE s.FK_TMATRICULA = v_pk_matricula
-           AND s.FECHA         = p_fecha
-           AND s.ACTIVE = TRUE
-    ) THEN
-        RAISE EXCEPTION 'No se puede observar: no hay asistencia registrada para esta actividad el %', p_fecha
-            USING ERRCODE = '22023';
-    END IF;
-
-    RAISE EXCEPTION 'No se puede observar: el estudiante tiene una inasistencia injustificada registrada el %', p_fecha
-        USING ERRCODE = '22023';
-END;
-$$;
-
-COMMENT ON FUNCTION academico_test.fn_actividad_nota_asistencia_assert_preescolar(BIGINT, DATE)
-    IS 'Gate de asistencia para actividades FORMATIVAS (preescolar). V450: delega la regla en fn_actividad_asistencia_valida -- ese dia le tomaron asistencia al estudiante en CUALQUIER sesion y no es inasistencia injustificada. Antes (V243) exigia una fila con FK_TACTIVIDAD = la actividad, que V436 dejo de escribir al mandar a preescolar a la sesion por asignatura + bloque: el gate pedia una fila inalcanzable y observar quedaba bloqueado por el camino normal del docente. Mantiene los dos mensajes y el 22023 de V243: distingue "no hay asistencia registrada" de "inasistencia injustificada". V243/V450.';
+-- Reglas 62/73: la asistencia ya no bloquea observar; la existencia de la
+-- asignación la resuelve fn_actividad_estudiante_actividad (V227).
+DROP FUNCTION IF EXISTS academico_test.fn_actividad_nota_asistencia_assert_preescolar(BIGINT, DATE);
 
 UPDATE public.query q
    SET detail = q.detail || ' V450 -- En las actividades FORMATIVAS, la asistencia que habilita observar ya no tiene que ser una fila con FK_TACTIVIDAD (V436 dejo de escribirlas): basta con que ESE dia se le haya tomado asistencia al estudiante en cualquier sesion y que no sea inasistencia injustificada. fechaAsistencia/tieneAsistencia se calculan con esa misma regla, compartida con el gate (fn_actividad_asistencia_valida / _fecha_resolver). Cada fila agrega ademas es_formativa (TRUE = se registra con OBSERVACION, no con nota) y fecha_asistencia (la fecha en la que ESE estudiante tiene una asistencia que el gate aceptaria; NULL = no se puede calificar ni observar todavia). OJO: la columna `fecha` sigue siendo el ECO de ?fecha= (default hoy) y NO sirve para BODY.FECHA: para eso va fecha_asistencia.'
