@@ -10,7 +10,7 @@
 -- RETURNS TABLE. Tras aplicar, REINICIAR query-service-eval-col (cachea el
 -- catalogo) o la ruta nueva responde 404.
 -- Depende de: V220 (modulo, vista, fn_asistencia_editar), V221 / V228 / V290
--- (catalogo HTTP), V436 (jornada/grado).
+-- (catalogo HTTP), V436 (jornada/grado), V496.18 (solicitud pendiente, Regla 75).
 
 SET search_path TO public;
 
@@ -102,7 +102,8 @@ RETURNS TABLE (
     asistieron            BIGINT,
     tarde                 BIGINT,
     ausentes              BIGINT,
-    total_count           BIGINT
+    total_count           BIGINT,
+    cambio_pendiente      BOOLEAN             -- Regla 75: algún registro de la corrida espera aprobación
 )
 LANGUAGE plpgsql STABLE AS $function$
 DECLARE
@@ -122,6 +123,11 @@ BEGIN
     v_dir := CASE WHEN lower(coalesce(p_sort_dir, '')) = 'asc' THEN 'ASC' ELSE 'DESC' END;
 
     RETURN QUERY EXECUTE format($q$
+      -- La solicitud pendiente se busca solo para la pagina, despues del LIMIT.
+      SELECT p.*,
+             EXISTS (SELECT 1 FROM unnest(p.pks) x
+                      WHERE academico_test.fn_asistencia_solicitud_pendiente(x) IS NOT NULL) AS cambio_pendiente
+        FROM (
         SELECT
             pk_tasistencia, pks, registros, estudiante, documento, grupo, grado, grado_valor, asignatura,
             fk_tactividad, actividad, es_formativa, fecha, bloque, bloques,
@@ -249,9 +255,11 @@ BEGIN
              -- se evalua primero), asi que las tarjetas cuentan lo filtrado.
              WHERE ($6 IS NULL OR g.tipo_asistencia_valor = $6::INT)
         ) q
-        ORDER BY %s %s, pk_tasistencia
+        ORDER BY %1$s %2$s, pk_tasistencia
         LIMIT NULLIF($9, 0)
        OFFSET COALESCE($8, 0) * COALESCE(NULLIF($9, 0), 0)
+        ) p
+       ORDER BY %1$s %2$s, pk_tasistencia
     $q$, v_col, v_dir)
     USING p_pk_usuario, p_fecha_desde, p_fecha_hasta, p_fk_tgrupo, p_fk_tasignatura,
           p_tipo_asistencia, NULLIF(TRIM(p_search), ''), p_page_index, p_page_size,
@@ -262,7 +270,7 @@ $function$;
 
 COMMENT ON FUNCTION academico_test.fn_asistencia_listar_seguimiento(
     BIGINT, DATE, DATE, BIGINT, BIGINT, NUMERIC, TEXT, INT, INT, TEXT, TEXT, BIGINT, TEXT, TEXT, BIGINT
-) IS 'Pantalla Seguimiento: listado paginado sobre v_asistencia_detalle. UNA FILA POR CORRIDA DE BLOQUES: los bloques CONSECUTIVOS de la misma (matricula, fecha, asignatura/actividad) colapsan en una sola fila -- antes la misma asignatura dictada en 5 bloques salia 5 veces. La fila trae grado/grado_valor (antes solo salia el grupo, y la pantalla pinta el curso junto al grupo), pks (todos los registros de la corrida, para editarla entera con fn_asistencia_editar_bulk), registros, bloques, y hora_inicio/hora_fin del bloque formado; su tipo_asistencia sale de fn_asistencia_tipo_prioridad, donde la tardanza manda sobre la inasistencia: llegar tarde a un bloque marca toda la corrida como Llego tarde aunque en otro bloque figure ausente. bloques_estado + hora_inicio_estado/hora_fin_estado dicen DONDE ocurrio eso: los bloques que llevan el estado ganador (todos, si la corrida entera comparte estado) -- es lo que la pantalla pinta bajo el estado ("Bloque 2 (8:30 - 10:00)"). Una toma sin bloque (manual suelta) no se agrupa con nadie. Filtros INDEPENDIENTES y combinables en AND: rango de fecha / SEDE / JORNADA / GRADO / grupo / asignatura / ACTIVIDAD / tipo (VALOR, comparado contra el estado YA resuelto de la fila: pedir "Llego tarde" trae la corrida entera, no solo el bloque tarde) / busqueda libre (estudiante, documento, grupo, asignatura, actividad, estado); p_jornada y p_grado comparan contra el NOMBRE (TLISTA_VALOR.NOMBRE / TGRADO.NOMBRE), los mismos valores que devuelve fn_asistencia_calendario. p_fk_tsede ACOTA, no autoriza: el alcance por rol sigue siendo fn_asistencia_puede_ver. total_estudiantes, asistieron (tipo 1), tarde (5/6) y ausentes (2/3) cuentan ESTUDIANTES DISTINTOS del set filtrado completo y NO suman entre si (un estudiante puede asistir a una sesion y faltar a otra); total_count cuenta FILAS AGRUPADAS, para que la paginacion del front cuadre. Orden por estudiante|documento|fecha|tipo|grupo|asignatura|actividad.';
+) IS 'Pantalla Seguimiento: listado paginado sobre v_asistencia_detalle. UNA FILA POR CORRIDA DE BLOQUES: los bloques CONSECUTIVOS de la misma (matricula, fecha, asignatura/actividad) colapsan en una sola fila -- antes la misma asignatura dictada en 5 bloques salia 5 veces. La fila trae grado/grado_valor (antes solo salia el grupo, y la pantalla pinta el curso junto al grupo), pks (todos los registros de la corrida, para editarla entera con fn_asistencia_editar_bulk), registros, bloques, y hora_inicio/hora_fin del bloque formado; su tipo_asistencia sale de fn_asistencia_tipo_prioridad, donde la tardanza manda sobre la inasistencia: llegar tarde a un bloque marca toda la corrida como Llego tarde aunque en otro bloque figure ausente. bloques_estado + hora_inicio_estado/hora_fin_estado dicen DONDE ocurrio eso: los bloques que llevan el estado ganador (todos, si la corrida entera comparte estado) -- es lo que la pantalla pinta bajo el estado ("Bloque 2 (8:30 - 10:00)"). Una toma sin bloque (manual suelta) no se agrupa con nadie. Filtros INDEPENDIENTES y combinables en AND: rango de fecha / SEDE / JORNADA / GRADO / grupo / asignatura / ACTIVIDAD / tipo (VALOR, comparado contra el estado YA resuelto de la fila: pedir "Llego tarde" trae la corrida entera, no solo el bloque tarde) / busqueda libre (estudiante, documento, grupo, asignatura, actividad, estado); p_jornada y p_grado comparan contra el NOMBRE (TLISTA_VALOR.NOMBRE / TGRADO.NOMBRE), los mismos valores que devuelve fn_asistencia_calendario. p_fk_tsede ACOTA, no autoriza: el alcance por rol sigue siendo fn_asistencia_puede_ver. total_estudiantes, asistieron (tipo 1), tarde (5/6) y ausentes (2/3) cuentan ESTUDIANTES DISTINTOS del set filtrado completo y NO suman entre si (un estudiante puede asistir a una sesion y faltar a otra); total_count cuenta FILAS AGRUPADAS, para que la paginacion del front cuadre. cambio_pendiente (Regla 75): algun registro de la corrida tiene una correccion esperando al Coordinador; se calcula solo para la pagina. Orden por estudiante|documento|fecha|tipo|grupo|asignatura|actividad.';
 
 
 -- ---------------------------------------------------------------------------
@@ -310,7 +318,7 @@ $$;
 
 COMMENT ON FUNCTION academico_test.fn_asistencia_editar_bulk(
     BIGINT, BIGINT[], NUMERIC, VARCHAR, BIGINT, BOOLEAN, BOOLEAN
-) IS 'Aplica la MISMA edicion (estado, observacion, soporte) a varios registros de TASISTENCIA: los pks de una fila agrupada de Seguimiento (columna pks de fn_asistencia_listar_seguimiento). Delega en fn_asistencia_editar uno por uno, de modo que cada registro pasa por su gate (capability EDITAR + scope del grupo + periodo academico cerrado + soporte de la sede correcta) y todo corre en una sola transaccion: si uno falla, no queda la corrida a medio editar. Devuelve cuantos registros toco. Rechaza (22023) el arreglo vacio o NULL.';
+) IS 'Aplica la MISMA edicion (estado, observacion, soporte) a varios registros de TASISTENCIA: los pks de una fila agrupada de Seguimiento (columna pks de fn_asistencia_listar_seguimiento). Delega en fn_asistencia_editar uno por uno, de modo que cada registro pasa por su gate (capability EDITAR + scope del grupo + periodo academico cerrado + soporte de la sede correcta) y por la Regla 75 (en periodo no calificable abre la solicitud en vez de editar), y todo corre en una sola transaccion: si uno falla, no queda la corrida a medio editar. Devuelve cuantos registros toco. Rechaza (22023) el arreglo vacio o NULL.';
 
 
 -- ---------------------------------------------------------------------------
