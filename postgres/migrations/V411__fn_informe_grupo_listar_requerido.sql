@@ -1,11 +1,11 @@
 -- ===========================================================================
--- V411 - fn_informe_grupo_listar agrego MODO_PERIODO al RETURNS TABLE; V428
--- la reescribe con CREATE OR REPLACE y sin DROP, asi que la firma de V335
--- tiene que desaparecer antes. La funcion vigente es la de V490.
+-- V411 - fn informe grupo listar requerido
+-- Recortada: las funciones de informes que V535-V541 reescriben en capas
+-- se quitaron de aqui y viven alli. Queda lo que sigue vivo y lo que una
+-- base limpia necesita al migrar (CREATE solo si la funcion no existe).
 -- ===========================================================================
 
 
--- Solo si aun tiene el retorno de V335: re-aplicar no tumba la vigente.
 DO $$
 DECLARE
     v_fn regprocedure := to_regprocedure('academico_test.fn_informe_grupo_listar(bigint,bigint,bigint[],varchar)');

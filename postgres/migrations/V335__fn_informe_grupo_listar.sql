@@ -1,128 +1,16 @@
 -- ===========================================================================
--- V335 - fn_informe_grupo_listar: la tabla principal del modulo de informes.
---
--- UNA FILA POR (ESTUDIANTE, PERIODO)
---   No por estudiante. La pantalla lo pide asi: al elegir "1. Primer periodo"
---   y "2. Segundo periodo" cada estudiante ocupa DOS sub-filas, con la columna
---   PE indicando cual, y PR / PU / AP / RE distintos en cada una. Devolver una
---   fila por estudiante obligaria a anidar los periodos en JSON y a que el
---   front los desarme para pintar filas -- trabajo de mas para reconstruir
---   algo que SQL ya sabe producir.
---
---   Ademas este grano coincide con el de TINFORME_PERIODO_MATRICULA, que es
---   de donde salen las metricas ya consolidadas.
---
---
--- UN SOLO ENDPOINT PARA LOS DOS MUNDOS
---   Sirve para el numerico y para el cualitativo (preescolar). No se partio en
---   dos funciones: el front pregunta una vez y la RESPUESTA le dice que
---   renderizar, en vez de tener que saber de antemano si el grupo es de
---   preescolar. Eso ademas resuelve el grupo mixto sin que nadie decida a mano.
---
---   La columna que manda es FORMATO:
---     'cualitativo'  ninguna asignatura califica con numero. Vale OBSERVACION;
---                    promedio, puesto, aprobadas y reprobadas vienen NULL / 0.
---     'numerico'     hay al menos una. Valen las columnas numericas.
---
---   Se decide por el RESULTADO y no por el grado: es cualitativo cuando
---   ninguna fila del detalle es numerica. Con CERO filas -- el caso tipico de
---   preescolar -- tambien. Por eso la formula es
---   NOT COALESCE(BOOL_OR(es_numerico), FALSE) y no BOOL_AND(NOT es_numerico):
---   BOOL_AND sobre conjunto vacio devuelve NULL, que al caer a FALSE habria
---   clasificado como numerico justo al grupo que menos lo es.
---
---
--- LAS ASIGNATURAS VIENEN DENTRO
---   ASIGNATURAS es un JSONB con una entrada por asignatura del periodo. Son
---   las columnas MAT / LEN / CN / ING ... de la tabla, y por eso van aca y no
---   en una segunda llamada: sin esto el front necesitaria 1 + N peticiones
---   -- una por estudiante -- para pintar UNA tabla.
---
---     {"asignatura": 4190, "nombre": "MATEMATICAS", "abreviacion": "MAT",
---      "area": "MATEMATICAS", "orden": 1,
---      "nota": 2.5,            <- homologada, lo que se muestra
---      "nota_propuesta": 2.3,  <- homologada, SOLO si hay cambio propuesto
---      "estado": "cambio_propuesto", "es_numerico": true,
---      "valoracion": null, "simbolo": null, "aprobada": true}
---
---   Se manda la nota HOMOLOGADA y no el porcentaje: es lo que se dibuja, y es
---   la escala en la que hay que compararlas. La direccion de la flecha
---   (subio / bajo) la calcula el front comparando esas dos, que ya tiene --
---   mandarla seria duplicar un dato derivado, y calcularla sobre porcentajes
---   daria flechas sin cambio visible cuando dos porcentajes distintos
---   redondean a la misma nota.
---
---   nota_propuesta solo aparece cuando el estado es 'cambio_propuesto'. Si
---   viene NULL con ese estado, la propuesta es que YA NO HAY NOTA: el docente
---   dio de baja las actividades que la sustentaban.
---
---
--- METRICAS: GUARDADAS SI EXISTEN, CALCULADAS SI NO
---   PROMEDIO_GUARDADO, APROBADAS, REPROBADAS y SIN_DEFINIR se leen de
---   TINFORME_PERIODO_MATRICULA cuando el periodo ya se consolido; mientras no
---   exista la fila se calculan al vuelo. La pantalla se ve igual antes y
---   despues de guardar, que es el punto.
---
---   PROMEDIO_PROYECTADO se calcula SIEMPRE, porque es el "gris": lo que daria
---   hoy si se volviera a consolidar. Compararlo con el guardado es lo que
---   delata que hubo cambios.
---
---   Los dos son media simple en PORCENTAJE, no de notas homologadas: mezclar
---   escalas distintas en una media no significa nada.
---
---
--- EL PUESTO SE RECALCULA SIEMPRE
---   Es la excepcion deliberada a lo anterior, y por eso no esta en
---   TINFORME_PERIODO_MATRICULA: no es un dato del estudiante sino de su
---   posicion RELATIVA en el grupo. Subir la nota de uno cambia el puesto de
---   otro que nadie toco, asi que guardarlo obligaria a reescribir todo el
---   grupo en cada guardado -- y a ese costo no se gana nada frente a este
---   RANK(), que corre sobre un conjunto que de todas formas hay que traer.
---
---   RANK y no ROW_NUMBER, para que dos empatados compartan puesto. Se ordena
---   por el promedio VISIBLE (guardado, o proyectado si aun no se consolido) y
---   se particiona por periodo, porque el puesto es del periodo. Quien no tiene
---   promedio queda con puesto NULL en vez de ultimo: no tener notas no es
---   rendir mal.
---
---
--- SIN PAGINACION
---   La pantalla muestra el grupo entero -- son decenas de estudiantes -- y
---   paginar solo romperia el puesto, que se calcula sobre el conjunto. Se
---   mantiene la busqueda por nombre y documento, que es lo que la vista si
---   ofrece, y el filtro se aplica DESPUES de calcular el puesto para que
---   buscar a un estudiante no cambie su posicion.
---
---
--- EL DOCENTE NO VIENE AQUI
---   Quien hizo los cambios se consulta con fn_informe_cambios_pendientes
---   (V337), que trabaja sobre VARIOS grupos a la vez y devuelve
---   (grupo, asignatura, docente) -- otro grano y otra pantalla: la alerta
---   naranja. Aca solo viaja TIENE_CAMBIOS_PROPUESTOS, que es lo que la fila
---   del estudiante necesita para marcarse.
---
--- Idempotente: CREATE OR REPLACE. DROP previo porque cambia el RETURNS TABLE.
+-- V335 - fn informe grupo listar
+-- Recortada: las funciones de informes que V535-V541 reescriben en capas
+-- se quitaron de aqui y viven alli. Queda lo que sigue vivo y lo que una
+-- base limpia necesita al migrar (CREATE solo si la funcion no existe).
 -- ===========================================================================
 
 
--- La firma ANTERIOR, de ocho argumentos: esta migracion le quita la
--- paginacion y el orden, asi que hay que retirarla o quedaria una sobrecarga.
-DROP FUNCTION IF EXISTS academico_test.fn_informe_grupo_listar(BIGINT, BIGINT, BIGINT[], VARCHAR, VARCHAR, BOOLEAN, INTEGER, INTEGER);
-
--- Y la PROPIA. No es redundante con el CREATE OR REPLACE de abajo: migraciones
--- posteriores (V411, V412) cambian el RETURNS TABLE de esta misma firma, y
--- CREATE OR REPLACE no puede cambiar un tipo de retorno. Sin este DROP, volver
--- a ejecutar V335 sobre un esquema que ya tiene esas migraciones falla con
--- "cannot change return type of existing function" -- que es justo lo que
--- comprueba el check de idempotencia del pipeline.
---
--- La regla general: si una migracion define una funcion con RETURNS TABLE,
--- debe DROPear su propia firma antes de crearla, porque no controla que forma
--- tendra esa funcion cuando alguien la re-ejecute.
-DROP FUNCTION IF EXISTS academico_test.fn_informe_grupo_listar(BIGINT, BIGINT, BIGINT[], VARCHAR);
-
-
-CREATE OR REPLACE FUNCTION academico_test.fn_informe_grupo_listar(
+-- La vigente es posterior; esta solo hace falta en una base limpia (V411:migracion, V411:migracion).
+DO $guarda$
+BEGIN
+    IF to_regprocedure('academico_test.fn_informe_grupo_listar(bigint,bigint,bigint[],varchar)') IS NULL THEN
+        EXECUTE $crear$CREATE OR REPLACE FUNCTION academico_test.fn_informe_grupo_listar(
     p_pk_usuario_solicitante BIGINT,
     p_fk_tgrupo              BIGINT,
     p_fk_periodos_evaluacion BIGINT[] DEFAULT NULL,
@@ -352,7 +240,9 @@ BEGIN
         OR cp.doc    ILIKE '%' || TRIM(p_search) || '%'
      ORDER BY cp.nombre NULLS LAST, cp.mat, cp.pe_inicio;
 END;
-$function$;
+$function$$crear$;
+    END IF;
+END $guarda$;
 
 COMMENT ON FUNCTION academico_test.fn_informe_grupo_listar(BIGINT, BIGINT, BIGINT[], VARCHAR)
     IS 'La tabla principal del modulo de informes: UNA FILA POR (ESTUDIANTE, PERIODO) de los periodos seleccionados (NULL o vacio = todos los del periodo academico del grupo). El grano es ese y no por estudiante porque la pantalla lo pide asi -- al elegir dos periodos cada estudiante ocupa dos sub-filas, con PE indicando cual y PR/PU/AP/RE distintos en cada una -- y ademas coincide con el de TINFORME_PERIODO_MATRICULA, de donde salen las metricas consolidadas. UN SOLO ENDPOINT PARA LOS DOS MUNDOS: la columna FORMATO dice cualitativo (ninguna asignatura califica con numero: vale OBSERVACION y las metricas vienen NULL/0) o numerico. Se decide por el RESULTADO y no por el grado, y con cero filas de detalle -- preescolar tipico -- tambien da cualitativo; por eso la formula es NOT COALESCE(BOOL_OR(es_numerico), FALSE) y no BOOL_AND(NOT es_numerico), que sobre conjunto vacio da NULL y habria clasificado como numerico justo al grupo que menos lo es. ASIGNATURAS viene DENTRO como JSONB -- son las columnas MAT/LEN/CN/ING de la tabla -- porque si no el front necesitaria 1+N peticiones, una por estudiante, para pintar una sola tabla; cada entrada trae la nota HOMOLOGADA (lo que se dibuja) y nota_propuesta homologada solo cuando el estado es cambio_propuesto, con NULL ahi significando "ya no hay nota" porque el docente dio de baja las actividades. La direccion de la flecha la calcula el front comparando esas dos: mandarla seria duplicar un dato derivado, y calcularla sobre porcentajes daria flechas sin cambio visible cuando dos porcentajes distintos redondean a la misma nota. METRICAS: promedio guardado, aprobadas, reprobadas y sin_definir se leen de TINFORME_PERIODO_MATRICULA si el periodo ya se consolido (CONSOLIDADO dice si fue asi) y se calculan al vuelo mientras no; PROMEDIO_PROYECTADO se calcula siempre porque es el gris, lo que daria hoy si se reconsolidara. Ambos son media simple en PORCENTAJE, no de notas homologadas, porque mezclar escalas en una media no significa nada. EL PUESTO SE RECALCULA SIEMPRE y por eso no esta en la tabla de metricas: es posicion RELATIVA, y guardarlo obligaria a reescribir todo el grupo en cada guardado para que no quedara viejo; es RANK() -- no ROW_NUMBER, para que los empatados compartan puesto -- particionado por periodo y sobre el promedio visible, NULL para quien no tiene promedio en vez de ultimo. SIN PAGINACION: la pantalla muestra el grupo entero y paginar romperia el puesto; queda la busqueda por nombre y documento, aplicada DESPUES de calcular el puesto para que buscar a alguien no cambie su posicion. El docente que hizo los cambios NO viene aqui: eso es fn_informe_cambios_pendientes (V337), que trabaja sobre varios grupos y devuelve (grupo, asignatura, docente) para la alerta naranja; aca solo viaja TIENE_CAMBIOS_PROPUESTOS, que es lo que la fila necesita para marcarse. Gate: INFORMES/VER.';
