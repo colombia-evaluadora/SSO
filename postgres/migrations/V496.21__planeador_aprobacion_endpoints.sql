@@ -1,10 +1,10 @@
 -- V496.21 - Aprobación del Coordinador, capa 4 de 4: endpoints. Pendientes,
 -- aprobar y rechazar para CEVAL-COORDINADOR y CEVAL-SUPER_ADMINISTRADOR; la
 -- marca de informe desactualizado con los roles de /informes/grupo. Las filas
--- de calificar y de editar asistencia suman solicitudes_pendientes: la
+-- de calificar y de registrar o editar asistencia suman solicitudes_pendientes: la
 -- escritura no falla cuando exige aprobación, devuelve qué solicitud abrió.
 -- Upsert por (microservicio, ruta, método), como V496.8.
--- Depende de: V496.20, V496.8 y V221 (filas que se envuelven), V342.
+-- Depende de: V496.20, V496.8, V221 y V438 (filas que se envuelven), V342.
 
 SET search_path TO academico_test, public;
 
@@ -14,7 +14,7 @@ INSERT INTO public.query (uuid, microservice_id, path_template, http_method, typ
 SELECT 'a88692e0-a70e-438e-8ed9-9f8e3b30eb71', m.id_microservice, '/aprobaciones/pendientes', 'GET', 'postgres', 'SELECT', NULL,
        'f', 'f', 'f', '60', NULL, NULL,
        '{"QUERY.TIPO": "VARCHAR", "QUERY.GRUPO": "BIGINT", "QUERY.ESTADO": "VARCHAR"}'::jsonb,
-       'Solicitudes de aprobación que el Coordinador puede resolver (fn_solicitud_aprobacion_listar; Regla 70): las de los grupos de las sedes donde es Coordinador, o todas para el super administrador. ?tipo= RECUPERACION_HABILITACION, RECUPERACION_REFUERZO, CORRECCION_RESULTADO o CORRECCION_ASISTENCIA; ?grupo= PK_TGRUPO; ?estado= PENDIENTE (por defecto), APROBADA o RECHAZADA. Cada fila trae grupo, asignatura, periodo, actividad, estudiante, valor_anterior y valor_propuesto, solicitante y fechas. Errores: 403 (42501) si no es Coordinador en ninguna sede.',
+       'Solicitudes de aprobación que el Coordinador puede resolver (fn_solicitud_aprobacion_listar; Regla 70): las de los grupos de las sedes donde es Coordinador, o todas para el super administrador. ?tipo= RECUPERACION_HABILITACION, RECUPERACION_REFUERZO, CORRECCION_RESULTADO o CORRECCION_ASISTENCIA; ?grupo= PK_TGRUPO; ?estado= PENDIENTE (por defecto), APROBADA o RECHAZADA. Cada fila trae grupo, asignatura, periodo, actividad, estudiante, valor_anterior y valor_propuesto, solicitante y fechas; en asistencia, además fk_tmatricula, fecha y bloque de la sesión. Errores: 403 (42501) si no es Coordinador en ninguna sede.',
        $q$SELECT * FROM academico_test.fn_solicitud_aprobacion_listar(
     public.fn_get_academico_usuario_id(:CONTEXT.USER_ID::BIGINT),
     CAST(:QUERY.TIPO AS VARCHAR),
@@ -85,7 +85,7 @@ ON CONFLICT (microservice_id, path_template, http_method) WHERE path_template IS
        cache_ttl_seconds = EXCLUDED.cache_ttl_seconds, action = EXCLUDED.action, style = EXCLUDED.style,
        param_types = EXCLUDED.param_types, detail = EXCLUDED.detail, query = EXCLUDED.query;
 
--- Editar asistencia (las filas de calificar se envuelven en V496.8, su dueña):
+-- Registrar y editar asistencia (las filas de calificar se envuelven en V496.8, su dueña):
 -- la escritura no cambia, se le suma la solicitud que abrió. MATERIALIZED garantiza que la función ya corrió cuando
 -- se lee la lista. El guard por prefijo hace el UPDATE idempotente.
 UPDATE public.query q
@@ -95,7 +95,9 @@ UPDATE public.query q
   FROM public.microservice m
  WHERE m.id_microservice = q.microservice_id AND m.serviceid = 'eval-col'
    AND q.query NOT LIKE 'WITH w AS MATERIALIZED (%'
-   AND (q.http_method, q.path_template) IN (('PATCH', '/asistencias/:ID'));
+   AND (q.http_method, q.path_template) IN (('PATCH', '/asistencias/:ID'),
+                                            ('POST', '/asistencias/registrar'),
+                                            ('POST', '/asistencias/editar-masivo'));
 
 INSERT INTO public.role_query (role_id, query_id)
 SELECT r.id_role, q.id_query

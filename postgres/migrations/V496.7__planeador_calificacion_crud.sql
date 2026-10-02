@@ -1,9 +1,10 @@
 -- V496.7 - Calificación y resultados de actividades: wrappers de los
 -- endpoints. Cada uno comprueba existencia, estado, alcance y la propiedad de
 -- los resultados (Regla 54), declara la etiqueta de auditoría y delega en su
--- _interno. Suma el estado de resultado por estudiante y en bloque (Regla 62);
--- el listado de calificaciones devuelve estado, momento, enlace y
--- resultados_completos. La definición del instrumento vive en V496.3.
+-- _interno. Suma el estado de resultado por estudiante y en bloque (Regla 62)
+-- y la asistencia marcada desde el Planeador (Regla 73); el listado devuelve
+-- estado, asistencia de la actividad, momento, enlace y resultados_completos.
+-- La definición del instrumento vive en V496.3.
 -- Depende de: V496.5 (validaciones y assert de propiedad), V496.6 (_interno),
 -- V496.3 (fn_actividad_auditar), V277 (alcance).
 
@@ -147,7 +148,9 @@ RETURNS TABLE (pk_tactividad_estudiante BIGINT, pk_tmatricula BIGINT, nombre_est
                asistencia_observacion VARCHAR, fk_soporte_archivo BIGINT, calificacion NUMERIC, calificable CHAR,
                nota_observacion VARCHAR, es_formativa BOOLEAN, fecha_asistencia DATE, nota_homologada NUMERIC,
                valoracion VARCHAR, formato_valor VARCHAR, resultado_instrumento JSONB,
-               estado_resultado VARCHAR, momento VARCHAR, evidencia_enlace VARCHAR, resultados_completos BOOLEAN)
+               estado_resultado VARCHAR, momento VARCHAR, evidencia_enlace VARCHAR, resultados_completos BOOLEAN,
+               tipo_asistencia_valor VARCHAR, asistencia_justificada BOOLEAN, origen_asistencia VARCHAR,
+               asistencia_editable BOOLEAN)
 LANGUAGE plpgsql
 STABLE
 AS $$
@@ -198,6 +201,29 @@ BEGIN
 END;
 $$;
 
+CREATE OR REPLACE FUNCTION academico_test.fn_actividad_asistencia_planeador_set(
+    p_pk_usuario_solicitante   BIGINT,
+    p_pk_tactividad_estudiante BIGINT,
+    p_tipo_asistencia          NUMERIC
+)
+RETURNS VARCHAR
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_pk BIGINT := academico_test.fn_actividad_estudiante_actividad(p_pk_tactividad_estudiante);
+BEGIN
+    PERFORM academico_test.fn_actividad_assert_resultados(p_pk_usuario_solicitante, v_pk, 'EDITAR');
+    PERFORM academico_test.fn_actividad_auditar(p_pk_usuario_solicitante, v_pk,
+        format('Asistencia %s de %s en %s desde el Planeador', p_tipo_asistencia,
+               academico_test.fn_actividad_estudiante_etiqueta(p_pk_tactividad_estudiante),
+               academico_test.fn_actividad_etiqueta(v_pk)));
+    RETURN academico_test.fn_actividad_asistencia_planeador_set_interno(
+        p_pk_usuario_solicitante, p_pk_tactividad_estudiante, p_tipo_asistencia);
+END;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_actividad_asistencia_planeador_set(BIGINT, BIGINT, NUMERIC)
+    IS 'PUT /planeador/actividades/estudiantes/:ID/asistencia. Wrapper: gate EDITAR, Regla 54 y etiqueta; delega en fn_actividad_asistencia_planeador_set_interno. Devuelve el estado de resultado que queda.';
 COMMENT ON FUNCTION academico_test.fn_actividad_assert_resultados(BIGINT, BIGINT, VARCHAR)
     IS 'Gate común de los endpoints de resultados: existencia (P0002), actividad no eliminada (22023), alcance p_accion sobre PLANEADOR (42501) y propiedad de los resultados (Regla 54, 42501).';
 COMMENT ON FUNCTION academico_test.fn_actividad_nota_calificar(BIGINT, BIGINT, JSONB, DATE)

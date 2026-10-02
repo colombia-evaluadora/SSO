@@ -3,7 +3,7 @@
 -- (RETURNS VOID), para que los wrappers de V138 no las lleven en linea.
 -- Por que aqui: Regla 74 -- un docente sin rol que administre solo escribe
 -- (y lee) la asignatura que el mismo dicta; Regla 72 -- dia de clase segun
--- horario y excusa solo en inasistencia o tardanza. Incluye
+-- horario, excusa solo en inasistencia o tardanza y tipos 1/2/5. Incluye
 -- fn_asistencia_periodo_estado (antes V220, consolidada en V136-V141).
 -- Depende de: TGRUPO/TGRADO/TPERIODO_ACADEMICO/TLISTA_VALOR/TASIGNATURA/
 -- TACTIVIDAD/TDOCENTE_ASIGNATURA/TFUNCIONARIO (V22), V29 (fn_usuario_es_docente_puro).
@@ -205,6 +205,25 @@ $$;
 
 COMMENT ON FUNCTION academico_test.fn_asistencia_validar_excusa_tipo(NUMERIC, BIGINT, BIGINT)
     IS 'Regla 72b: 22023 si se adjunta excusa a un registro de tipo Asistió (TIPO_ASISTENCIA VALOR 1). La usan fn_asistencia_validar_excusa_registros y fn_asistencia_editar (V138).';
+
+-- Regla 72: solo se escriben Asistió (1), No asistió (2) y Llegó tarde (5); la
+-- excusa es el archivo de soporte, no un tipo. 3 y 6 quedan en filas históricas.
+CREATE OR REPLACE FUNCTION academico_test.fn_asistencia_validar_tipo(p_valor NUMERIC)
+RETURNS BIGINT
+LANGUAGE plpgsql
+STABLE
+AS $$
+BEGIN
+    IF p_valor IS NULL OR p_valor NOT IN (1, 2, 5) OR academico_test.fn_asistencia_tipo_pk(p_valor) IS NULL THEN
+        RAISE EXCEPTION 'tipoAsistencia % invalido (validos: 1 Asistio, 2 No asistio, 5 Llego tarde; la excusa va como archivo de soporte)',
+            COALESCE(p_valor::TEXT, 'NULL') USING ERRCODE = '23503';
+    END IF;
+    RETURN academico_test.fn_asistencia_tipo_pk(p_valor);
+END;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_asistencia_validar_tipo(NUMERIC)
+    IS 'Regla 72: 23503 si el tipo de asistencia a escribir no es 1, 2 o 5 (3 y 6 solo se leen en filas históricas: la justificación es FK_SOPORTE_ARCHIVO). Devuelve su PK_LISTA_VALOR. La usan fn_asistencia_editar_interno (V137) y fn_actividad_asistencia_planeador_set_interno (V496.6).';
 
 CREATE OR REPLACE FUNCTION academico_test.fn_asistencia_validar_excusa_registros(
     p_registros          JSONB,

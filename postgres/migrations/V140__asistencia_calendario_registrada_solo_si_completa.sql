@@ -160,7 +160,8 @@ SELECT
     (lv.VALOR IN ('1','5','6'))               AS es_presente,
     (lv.VALOR IN ('5','6'))                   AS es_tarde,
     (lv.VALOR IN ('2','3'))                   AS es_ausente,
-    (lv.VALOR IN ('3','6'))                   AS es_justificado,
+    -- La excusa es el archivo de soporte; 3/6 solo en filas históricas.
+    (lv.VALOR IN ('3','6') OR (lv.VALOR IN ('2','5') AND a.FK_SOPORTE_ARCHIVO IS NOT NULL)) AS es_justificado,
     a.OBSERVACION                             AS observacion,
     a.FK_SOPORTE_ARCHIVO                      AS fk_soporte_archivo,
     (a.FK_SOPORTE_ARCHIVO IS NOT NULL)        AS tiene_soporte,
