@@ -227,14 +227,17 @@ RETURNS BOOLEAN
 LANGUAGE sql
 STABLE
 AS $$
-    -- Regla 75: manda el periodo DE EVALUACIÓN de la fecha de la sesión. NULL
-    -- si la fecha no cae en ninguno: el llamador aplica el bloqueo plano (V136).
-    SELECT NOT academico_test.fn_periodo_evaluacion_calificable(
-               academico_test.fn_asistencia_periodo_eval(p_fk_tgrupo, p_fecha));
+    -- Regla 75: manda el periodo DE EVALUACIÓN de la fecha de la sesión. Un
+    -- periodo que ya terminó por fechas también exige aprobación aunque siga
+    -- Calificable. NULL si la fecha no cae en ninguno: bloqueo plano (V136).
+    SELECT NOT academico_test.fn_periodo_evaluacion_calificable(pe.PK_TPERIODO_EVALUACION)
+           OR pe.FECHA_FIN < CURRENT_DATE
+      FROM academico_test.TPERIODO_EVALUACION pe
+     WHERE pe.PK_TPERIODO_EVALUACION = academico_test.fn_asistencia_periodo_eval(p_fk_tgrupo, p_fecha);
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_asistencia_fecha_requiere_aprobacion(BIGINT, DATE)
-    IS 'TRUE si escribir asistencia de esa fecha exige aprobación del Coordinador (Regla 75: su periodo de evaluación no es Calificable); NULL si la fecha no cae en ningún periodo. La usan fn_asistencia_correccion_requiere_aprobacion y fn_asistencia_registrar_bulk.';
+    IS 'TRUE si escribir asistencia de esa fecha exige aprobación del Coordinador (Regla 75: su periodo de evaluación no es Calificable o ya terminó por fechas); NULL si la fecha no cae en ningún periodo. La usan fn_asistencia_correccion_requiere_aprobacion y fn_asistencia_registrar_bulk.';
 
 CREATE OR REPLACE FUNCTION academico_test.fn_asistencia_correccion_requiere_aprobacion(p_pk_tasistencia BIGINT)
 RETURNS BOOLEAN
