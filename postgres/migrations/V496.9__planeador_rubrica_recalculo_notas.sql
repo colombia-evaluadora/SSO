@@ -4,7 +4,8 @@
 -- cambia las notas de rúbricas cuyos criterios tienen máximos distintos, y
 -- vuelve a consolidar su recuperación. Idempotente: parte de lo capturado.
 -- Depende de: V496.6 (fn_actividad_nota_rubrica_recalcular,
--- fn_actividad_nota_guardar_interno), V496.5 (instrumento efectivo).
+-- fn_actividad_nota_aplicar_interno), V496.5 (instrumento efectivo).
+-- Aplica sin pasar por la Regla 55: es la fórmula, no una corrección del docente.
 
 DO $$
 DECLARE
@@ -22,7 +23,7 @@ BEGIN
            AND academico_test.fn_actividad_instrumento_efectivo(a.PK_TACTIVIDAD) = 'RUBRICA'
     LOOP
         IF r.nueva IS NOT NULL AND r.nueva IS DISTINCT FROM r.CALIFICACION THEN
-            PERFORM academico_test.fn_actividad_nota_guardar_interno(0, r.pk_ae, r.nueva);
+            PERFORM academico_test.fn_actividad_nota_aplicar_interno(0, r.pk_ae, r.nueva);
             v_n := v_n + 1;
         END IF;
     END LOOP;
