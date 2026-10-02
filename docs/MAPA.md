@@ -1,7 +1,7 @@
 # Mapa del dominio
 
 **Generado** por `python scripts/generar-mapa.py` — no editar a mano.
-Estado: 470 migraciones (V1–V542), 1011 funciones vivas, 63 endpoints vivos. Ultima generacion: 2026-10-02.
+Estado: 469 migraciones (V1–V542), 1011 funciones vivas, 63 endpoints vivos. Ultima generacion: 2026-10-02.
 
 Para una **funcion**, la migracion dueña es la que hay que editar: es su ultima escritura viva, no la que la creo.
 
@@ -182,7 +182,7 @@ El detalle exacto (historial, firmas, dependencias) sale de `python .claude/skil
 | `academico_test.fn_actividad_disponibles_listar` | 5 | V223 | V492.4 |
 | `academico_test.fn_actividad_eliminar` | 2 | V496.3 | V246, V496.4 |
 | `academico_test.fn_actividad_eliminar_interno` | 2 | V482 | V496.3 |
-| `academico_test.fn_actividad_en_periodo_eval` | 2 | V332 | V333, V335, V428, V433, V439, V468… |
+| `academico_test.fn_actividad_en_periodo_eval` | 2 | V332 | V333, V335, V428, V433, V439, V469.3… |
 | `academico_test.fn_actividad_es_formativa` | 1 | V475 | V450, V469.3, V479, V481, V496.4, V496.5… |
 | `academico_test.fn_actividad_escala_aplicable` | 2 | V496.1 | V496.2 |
 | `academico_test.fn_actividad_escala_criterios_cantidad` | 1 | V496.5 | V496.6 |
@@ -392,7 +392,7 @@ El detalle exacto (historial, firmas, dependencias) sale de `python .claude/skil
 
 | Funcion | Params | Migracion dueña | La usan |
 |---|---|---|---|
-| `academico_test.fn_anio_lectivo_numero` | 1 | V417 | V418, V468, V537, V540 |
+| `academico_test.fn_anio_lectivo_numero` | 1 | V417 | V418, V537, V540 |
 
 ## app
 
@@ -765,7 +765,7 @@ El detalle exacto (historial, firmas, dependencias) sale de `python .claude/skil
 | `academico_test.fn_grado_crear` | 5 | V43 | V79 |
 | `academico_test.fn_grado_desempeno_minimo` | 1 | V334 | V346, V410, V428, V439, V490, V496.2… |
 | `academico_test.fn_grado_es_preescolar` | 1 | V285 | V286, V287, V437 |
-| `academico_test.fn_grado_grupo_etiqueta` | 3 | V224 | V251, V452, V468, V481, V490, V526… |
+| `academico_test.fn_grado_grupo_etiqueta` | 3 | V224 | V251, V452, V481, V490, V526, V528… |
 | `academico_test.fn_grado_grupo_reporte_listar` | 5 | V187 | V135 |
 | `academico_test.fn_grado_listar` | 7 | V43 | V79 |
 | `academico_test.fn_grado_obtener` | 2 | V43 | V79 |
@@ -822,7 +822,7 @@ El detalle exacto (historial, firmas, dependencias) sale de `python .claude/skil
 | `academico_test.fn_informe_final_guardar_interno` | 3 | V496.24 | — |
 | `academico_test.fn_informe_formativo_listar` | 4 | V496.25 | — |
 | `academico_test.fn_informe_formativo_listar_interno` | 3 | V496.25 | — |
-| `academico_test.fn_informe_grupo_listar` | 4 | V537 | V342, V439, V468, V496.25, V537, V539 |
+| `academico_test.fn_informe_grupo_listar` | 4 | V537 | V342, V439, V496.25, V537, V539 |
 | `academico_test.fn_informe_grupo_listar_interno` | 3 | V536 | V537, V540, V541 |
 | `academico_test.fn_informe_grupo_reporte` | 5 | V537 | V420, V539 |
 | `academico_test.fn_informe_grupo_tabla` | 4 | V496.25 | V434 |
