@@ -18,7 +18,7 @@ PANEL = '#E8EEF7'
 TARJETA = '#F2F6FC'
 BORDE = '#9FB3D1'
 
-X0, ANCHO = 40, 533          # columna de contenido: margenes de 40pt
+X0, ANCHO = 24, 565          # columna de contenido: margenes de 24pt
 GRUPO = 'boletin'
 
 
@@ -145,34 +145,38 @@ def encabezado(x, w, when):
 
 
 CABECERA = (
-    [rect(40, 8, 88, 88, BLANCO, radius=44, when=HAY_ESCUDO, borde='acento'),
-     img(50, 18, 68, 68, '$F{escudo_archivo}', when=HAY_ESCUDO, cache=True)]
-    + encabezado(140, 205, HAY_ESCUDO)
-    + encabezado(X0, 305, SIN_ESCUDO)
+    [rect(X0, 8, 88, 88, BLANCO, radius=44, when=HAY_ESCUDO, borde='acento'),
+     img(X0 + 10, 18, 68, 68, '$F{escudo_archivo}', when=HAY_ESCUDO, cache=True)]
+    + encabezado(X0 + 100, 345 - X0 - 100, HAY_ESCUDO)
+    + encabezado(X0, 345 - X0, SIN_ESCUDO)
     + [
-        # La fecha va en el hueco blanco de arriba a la derecha, pasada la
-        # diagonal: en los 14 fondos x=393..573, y=26..38 queda en blanco.
-        txt(393, 24, 180, 14, '"Expedido: " + $P{GENERADO}', size=8, align='Right',
-            valign='Middle', rol='gris'),
+        # La fecha de expedicion ("14/04/2025 9:55 AM") va a la derecha, justo
+        # encima de las lineas de la diagonal: en los 14 fondos x=450..573,
+        # y=36..49 queda en blanco. GENERADO lo comparten todos los reportes
+        # ("dd/MM/yyyy a las hh:mm a"), asi que se reformatea aqui.
+        txt(X0 + ANCHO - 180, 37, 180, 12,
+            '$P{GENERADO}.replace(" a las ", " ").replaceFirst(" 0(\\\\d:)", " $1")',
+            size=8.5, bold=True, align='Right', valign='Middle', rol='texto'),
         # En las hojas de continuacion no se repite el bloque del estudiante,
         # pero hay que poder saber de quien es la hoja suelta.
-        txt(X0, 112, 360, 12, '$F{estudiante} + " (continuacion)"', size=7, bold=True,
+        txt(X0, 105, 360, 9, '$F{estudiante} + " (continuacion)"', size=7, bold=True,
             when='$V{PAGE_NUMBER} > 1', rol='gris'),
     ])
-# Debajo de la banda oscura del fondo, que llega a y=105.
-ALTO_CABECERA = 126
+# Pegado a la banda oscura del fondo, que llega a y=105.
+ALTO_CABECERA = 114
 
 # ------------------------------------------------------ datos del estudiante
+DX, DW = X0 + 92, ANCHO - 92   # a la derecha de la foto
 DATOS = [
     rect(X0, 2, 80, 96, PANEL, radius=6, rol='panel'),
     img(X0 + 3, 5, 74, 90, '$F{foto_archivo}'),
-    txt(132, 0, 441, 22, '$F{estudiante}', size=15, bold=True, valign='Middle',
+    txt(DX, 0, DW, 22, '$F{estudiante}', size=15, bold=True, valign='Middle',
         extra='textAdjust="ScaleFont"', rol='titulo'),
     # "RC: 1234567890": la sigla del catalogo TIPO_DOCUMENTO; sin ella, "Documento:".
-    txt(132, 22, 441, 13,
+    txt(DX, 22, DW, 13,
         '("".equals($F{tipo_documento}) ? "Documento" : $F{tipo_documento}) + ": " + $F{documento}',
         size=9, bold=True, rol='acento'),
-    rect(132, 38, 441, 34, PANEL, radius=6, rol='panel'),
+    rect(DX, 38, DW, 34, PANEL, radius=6, rol='panel'),
 ]
 # El grupo lleva la jornada ("-101 Tarde"): el catalogo la guarda en mayusculas.
 GRUPO_JORNADA = ('$F{grupo_etiqueta} + ("".equals($F{jornada}) ? "" : " " + '
@@ -210,10 +214,13 @@ def vline(x, y, alto):
 # Las cuatro columnas NO son del mismo ancho: el nombre de una sede es largo y
 # con el reparto parejo se metia dentro de la columna de al lado. Cada una
 # lleva su icono a la izquierda y un separador entre columnas.
-COLUMNAS = [('Sede',  'sede',  '$F{sede_nombre}',     136, 158),
-            ('Nivel', 'nivel', '$F{nivel_ensenanza}', 298,  88),
-            ('Grado', 'grado', '$F{grado_nombre}',    390,  88),
-            ('Grupo', 'grupo', GRUPO_JORNADA,         482,  88)]
+_ANCHOS = [140, 112, 112, DW - 4 - 364]
+COLUMNAS = [(et, ic, campo, DX + 4 + sum(_ANCHOS[:k]), _ANCHOS[k])
+            for k, (et, ic, campo) in enumerate([
+                ('Sede',  'sede',  '$F{sede_nombre}'),
+                ('Nivel', 'nivel', '$F{nivel_ensenanza}'),
+                ('Grado', 'grado', '$F{grado_nombre}'),
+                ('Grupo', 'grupo', GRUPO_JORNADA)])]
 for n, (etiqueta, ic, campo, cx, cw) in enumerate(COLUMNAS):
     if n:
         DATOS.append(vline(cx - 3, 44, 22))
@@ -223,10 +230,10 @@ for n, (etiqueta, ic, campo, cx, cw) in enumerate(COLUMNAS):
     DATOS.append(txt(cx + 26, 53, cw - 28, 16, campo, size=9, extra='textAdjust="ScaleFont"',
                      rol='texto'))
 DATOS += [
-    rect(132, 78, 441, 20, PANEL, radius=6, rol='panel'),
-    icono(138, 80, 'periodo', lado=16),
-    static(160, 78, 50, 20, 'Periodo:', size=9, bold=True, rol='acento'),
-    txt(210, 78, 355, 20, '$F{anio} + " - " + $F{periodo_nombre}', size=9,
+    rect(DX, 78, DW, 20, PANEL, radius=6, rol='panel'),
+    icono(DX + 6, 80, 'periodo', lado=16),
+    static(DX + 28, 78, 50, 20, 'Periodo:', size=9, bold=True, rol='acento'),
+    txt(DX + 78, 78, DW - 86, 20, '$F{anio} + " - " + $F{periodo_nombre}', size=9,
         valign='Middle', rol='texto'),
 ]
 
