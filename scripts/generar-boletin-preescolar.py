@@ -229,27 +229,49 @@ DATOS += [
 # ------------------------------------------------------------- titulo
 # EL TITULO NO ES FIJO: es la lista de asignaturas que el estudiante cursa
 # (V541). Crece en alto en vez de cortarse, y la barra crece con el.
-TITULO = [
-    rect(X0, 0, ANCHO, 22, AZUL, radius=6, estirar=True, rol='acento'),
-    txt(52, 0, 509, 22,
+# Continuidad: el titulo es una pildora y su linea sigue a la derecha hasta el
+# borde, baja por los lados y enmarca la observacion (que no lleva borde
+# superior). Asi titulo y texto se leen como un solo bloque.
+PILDORA = 330
+GROSOR = 1.25
+
+
+def linea(x, y, w, h, estirar=False):
+    s_ = ' stretchType="ContainerHeight"' if estirar else ''
+    return ('\t\t\t<element kind="line" %s forecolor="%s"%s>\n%s'
+            '\t\t\t\t<pen lineWidth="%s"/>\n\t\t\t</element>\n'
+            % (_pos(x, y, w, h), AZUL, s_, _prop('forecolor', 'acento'), GROSOR))
+
+
+def pildora(alto=22, estirar=False):
+    return [linea(X0 + 10, 11, ANCHO - 10, 1),
+            rect(X0, 0, PILDORA, alto, AZUL, radius=11, estirar=estirar, rol='acento')]
+
+
+TITULO = pildora(estirar=True) + [
+    linea(X0, 11, 1, 13, estirar=True),
+    linea(X0 + ANCHO - 1, 11, 1, 13, estirar=True),
+    txt(54, 0, PILDORA - 26, 22,
         '$F{asignatura_nombre} == null || $F{asignatura_nombre}.trim().isEmpty() '
         '? "SEGUIMIENTO Y VALORACION" : $F{asignatura_nombre}.toUpperCase()',
         size=10, bold=True, color=BLANCO, blank=False, stretch=True, valign='Middle',
         box='\t\t\t\t<box topPadding="5" bottomPadding="5"/>\n'),
 ]
+ALTO_TITULO = 24
 
 # ----------------------------------------------------------- observacion
 # Sin alto fijo: la banda se parte entre hojas (splitType Stretch) y el borde
 # del recuadro se dibuja en cada trozo.
 OBSERVACION = [txt(
-    X0, 4, ANCHO, 22,
+    X0, 0, ANCHO, 30,
     '$F{observacion} == null || $F{observacion}.trim().isEmpty() '
     '? "Sin observaciones registradas para este periodo." : $F{observacion}',
     size=10, align='Justified', blank=False, stretch=True, rol='texto',
-    extra2=_prop('box.pen.lineColor', 'borde'),
-    box=('\t\t\t\t<box topPadding="8" leftPadding="10" bottomPadding="8" rightPadding="10">\n'
-         '\t\t\t\t\t<pen lineWidth="0.75" lineColor="%s"/>\n'
-         '\t\t\t\t</box>\n') % BORDE)]
+    extra2=_prop('box.pen.lineColor', 'acento'),
+    box=('\t\t\t\t<box topPadding="4" leftPadding="14" bottomPadding="12" rightPadding="14">\n'
+         '\t\t\t\t\t<pen lineWidth="%s" lineColor="%s"/>\n'
+         '\t\t\t\t\t<topPen lineWidth="0.0"/>\n'
+         '\t\t\t\t</box>\n') % (GROSOR, AZUL))]
 
 # ----------------------------------------------------------- evidencias
 # Cuenta por titulo o por foto: V541 las numera 1..n sin huecos, asi que la
@@ -305,9 +327,8 @@ def evidencias(cantidad):
     tarjetas, alto = DISTRIBUCION[cantidad]
     grande = cantidad <= 3
     pie = 36 if grande else 32
-    elementos = [
-        rect(X0, 0, ANCHO, 22, AZUL, radius=6, rol='acento'),
-        static(52, 0, 400, 22, 'EVIDENCIAS DE APRENDIZAJE', size=10, bold=True,
+    elementos = pildora() + [
+        static(54, 0, PILDORA - 26, 22, 'EVIDENCIAS DE APRENDIZAJE', size=10, bold=True,
                color=BLANCO),
     ]
     for n, (fx, fy, fw, fh) in enumerate(tarjetas, start=1):
@@ -324,9 +345,9 @@ def evidencias(cantidad):
                              color=GRIS, rol='gris'))
     return banda(GY + alto + 8, elementos, when=N_EVIDENCIAS + ' == %d' % cantidad)
 
-SIN_EVIDENCIAS = [
-    rect(X0, 0, ANCHO, 22, AZUL, radius=6, rol='acento'),
-    static(52, 0, 400, 22, 'EVIDENCIAS DE APRENDIZAJE', size=10, bold=True, color=BLANCO),
+SIN_EVIDENCIAS = pildora() + [
+    static(54, 0, PILDORA - 26, 22, 'EVIDENCIAS DE APRENDIZAJE', size=10, bold=True,
+           color=BLANCO),
     static(X0, 26, ANCHO, 18, 'Sin evidencias fotograficas registradas en este periodo.',
            size=8, color=GRIS, align='Center', rol='gris'),
 ]
@@ -428,8 +449,8 @@ def seccion(nombre, alto, elementos):
 
 
 detalle = (banda(104, DATOS)
-           + banda(28, TITULO, split='Stretch')
-           + banda(34, OBSERVACION, split='Stretch')
+           + banda(ALTO_TITULO, TITULO, split='Stretch')
+           + banda(42, OBSERVACION, split='Stretch')
            + ''.join(evidencias(n) for n in DISTRIBUCION)
            + banda(50, SIN_EVIDENCIAS, when=N_EVIDENCIAS + ' == 0')
            + banda(74, FIRMA))

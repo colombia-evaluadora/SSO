@@ -237,33 +237,50 @@
 				<expression><![CDATA[$F{anio} + " - " + $F{periodo_nombre}]]></expression>
 			</element>
 		</band>
-		<band height="28" splitType="Stretch">
-			<element kind="rectangle" x="40" y="0" width="533" height="22" backcolor="#16305C" mode="Opaque" radius="6" stretchType="ContainerHeight">
+		<band height="24" splitType="Stretch">
+			<element kind="line" x="50" y="11" width="523" height="1" forecolor="#16305C">
+				<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "acento")]]></propertyExpression>
+				<pen lineWidth="1.25"/>
+			</element>
+			<element kind="rectangle" x="40" y="0" width="330" height="22" backcolor="#16305C" mode="Opaque" radius="11" stretchType="ContainerHeight">
 				<propertyExpression name="net.sf.jasperreports.style.backcolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "acento")]]></propertyExpression>
 				<pen lineWidth="0.0"/>
 			</element>
-			<element kind="textField" x="52" y="0" width="509" height="22" fontName="DejaVu Sans" fontSize="10" forecolor="#FFFFFF" hTextAlign="Left" vTextAlign="Middle" bold="true" textAdjust="StretchHeight">
+			<element kind="line" x="40" y="11" width="1" height="13" forecolor="#16305C" stretchType="ContainerHeight">
+				<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "acento")]]></propertyExpression>
+				<pen lineWidth="1.25"/>
+			</element>
+			<element kind="line" x="572" y="11" width="1" height="13" forecolor="#16305C" stretchType="ContainerHeight">
+				<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "acento")]]></propertyExpression>
+				<pen lineWidth="1.25"/>
+			</element>
+			<element kind="textField" x="54" y="0" width="304" height="22" fontName="DejaVu Sans" fontSize="10" forecolor="#FFFFFF" hTextAlign="Left" vTextAlign="Middle" bold="true" textAdjust="StretchHeight">
 				<expression><![CDATA[$F{asignatura_nombre} == null || $F{asignatura_nombre}.trim().isEmpty() ? "SEGUIMIENTO Y VALORACION" : $F{asignatura_nombre}.toUpperCase()]]></expression>
 				<box topPadding="5" bottomPadding="5"/>
 			</element>
 		</band>
-		<band height="34" splitType="Stretch">
-			<element kind="textField" x="40" y="4" width="533" height="22" fontName="DejaVu Sans" fontSize="10" forecolor="#16305C" hTextAlign="Justified" vTextAlign="Top" textAdjust="StretchHeight">
+		<band height="42" splitType="Stretch">
+			<element kind="textField" x="40" y="0" width="533" height="30" fontName="DejaVu Sans" fontSize="10" forecolor="#16305C" hTextAlign="Justified" vTextAlign="Top" textAdjust="StretchHeight">
 				<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "texto")]]></propertyExpression>
-				<propertyExpression name="net.sf.jasperreports.style.box.pen.lineColor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "borde")]]></propertyExpression>
+				<propertyExpression name="net.sf.jasperreports.style.box.pen.lineColor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "acento")]]></propertyExpression>
 				<expression><![CDATA[$F{observacion} == null || $F{observacion}.trim().isEmpty() ? "Sin observaciones registradas para este periodo." : $F{observacion}]]></expression>
-				<box topPadding="8" leftPadding="10" bottomPadding="8" rightPadding="10">
-					<pen lineWidth="0.75" lineColor="#9FB3D1"/>
+				<box topPadding="4" leftPadding="14" bottomPadding="12" rightPadding="14">
+					<pen lineWidth="1.25" lineColor="#16305C"/>
+					<topPen lineWidth="0.0"/>
 				</box>
 			</element>
 		</band>
 		<band height="348" splitType="Prevent">
 			<printWhenExpression><![CDATA[(($F{evidencia1_archivo} != null || !"".equals($F{evidencia1_titulo} == null ? "" : $F{evidencia1_titulo}.trim()) ? 1 : 0) + ($F{evidencia2_archivo} != null || !"".equals($F{evidencia2_titulo} == null ? "" : $F{evidencia2_titulo}.trim()) ? 1 : 0) + ($F{evidencia3_archivo} != null || !"".equals($F{evidencia3_titulo} == null ? "" : $F{evidencia3_titulo}.trim()) ? 1 : 0) + ($F{evidencia4_archivo} != null || !"".equals($F{evidencia4_titulo} == null ? "" : $F{evidencia4_titulo}.trim()) ? 1 : 0) + ($F{evidencia5_archivo} != null || !"".equals($F{evidencia5_titulo} == null ? "" : $F{evidencia5_titulo}.trim()) ? 1 : 0) + ($F{evidencia6_archivo} != null || !"".equals($F{evidencia6_titulo} == null ? "" : $F{evidencia6_titulo}.trim()) ? 1 : 0)) == 1]]></printWhenExpression>
-			<element kind="rectangle" x="40" y="0" width="533" height="22" backcolor="#16305C" mode="Opaque" radius="6">
+			<element kind="line" x="50" y="11" width="523" height="1" forecolor="#16305C">
+				<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "acento")]]></propertyExpression>
+				<pen lineWidth="1.25"/>
+			</element>
+			<element kind="rectangle" x="40" y="0" width="330" height="22" backcolor="#16305C" mode="Opaque" radius="11">
 				<propertyExpression name="net.sf.jasperreports.style.backcolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "acento")]]></propertyExpression>
 				<pen lineWidth="0.0"/>
 			</element>
-			<element kind="staticText" x="52" y="0" width="400" height="22" fontName="DejaVu Sans" fontSize="10" forecolor="#FFFFFF" hTextAlign="Left" vTextAlign="Middle" bold="true">
+			<element kind="staticText" x="54" y="0" width="304" height="22" fontName="DejaVu Sans" fontSize="10" forecolor="#FFFFFF" hTextAlign="Left" vTextAlign="Middle" bold="true">
 				<text><![CDATA[EVIDENCIAS DE APRENDIZAJE]]></text>
 			</element>
 			<element kind="rectangle" x="96" y="30" width="420" height="310" backcolor="#F2F6FC" mode="Opaque" radius="6">
@@ -284,11 +301,15 @@
 		</band>
 		<band height="298" splitType="Prevent">
 			<printWhenExpression><![CDATA[(($F{evidencia1_archivo} != null || !"".equals($F{evidencia1_titulo} == null ? "" : $F{evidencia1_titulo}.trim()) ? 1 : 0) + ($F{evidencia2_archivo} != null || !"".equals($F{evidencia2_titulo} == null ? "" : $F{evidencia2_titulo}.trim()) ? 1 : 0) + ($F{evidencia3_archivo} != null || !"".equals($F{evidencia3_titulo} == null ? "" : $F{evidencia3_titulo}.trim()) ? 1 : 0) + ($F{evidencia4_archivo} != null || !"".equals($F{evidencia4_titulo} == null ? "" : $F{evidencia4_titulo}.trim()) ? 1 : 0) + ($F{evidencia5_archivo} != null || !"".equals($F{evidencia5_titulo} == null ? "" : $F{evidencia5_titulo}.trim()) ? 1 : 0) + ($F{evidencia6_archivo} != null || !"".equals($F{evidencia6_titulo} == null ? "" : $F{evidencia6_titulo}.trim()) ? 1 : 0)) == 2]]></printWhenExpression>
-			<element kind="rectangle" x="40" y="0" width="533" height="22" backcolor="#16305C" mode="Opaque" radius="6">
+			<element kind="line" x="50" y="11" width="523" height="1" forecolor="#16305C">
+				<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "acento")]]></propertyExpression>
+				<pen lineWidth="1.25"/>
+			</element>
+			<element kind="rectangle" x="40" y="0" width="330" height="22" backcolor="#16305C" mode="Opaque" radius="11">
 				<propertyExpression name="net.sf.jasperreports.style.backcolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "acento")]]></propertyExpression>
 				<pen lineWidth="0.0"/>
 			</element>
-			<element kind="staticText" x="52" y="0" width="400" height="22" fontName="DejaVu Sans" fontSize="10" forecolor="#FFFFFF" hTextAlign="Left" vTextAlign="Middle" bold="true">
+			<element kind="staticText" x="54" y="0" width="304" height="22" fontName="DejaVu Sans" fontSize="10" forecolor="#FFFFFF" hTextAlign="Left" vTextAlign="Middle" bold="true">
 				<text><![CDATA[EVIDENCIAS DE APRENDIZAJE]]></text>
 			</element>
 			<element kind="rectangle" x="40" y="30" width="261" height="260" backcolor="#F2F6FC" mode="Opaque" radius="6">
@@ -324,11 +345,15 @@
 		</band>
 		<band height="328" splitType="Prevent">
 			<printWhenExpression><![CDATA[(($F{evidencia1_archivo} != null || !"".equals($F{evidencia1_titulo} == null ? "" : $F{evidencia1_titulo}.trim()) ? 1 : 0) + ($F{evidencia2_archivo} != null || !"".equals($F{evidencia2_titulo} == null ? "" : $F{evidencia2_titulo}.trim()) ? 1 : 0) + ($F{evidencia3_archivo} != null || !"".equals($F{evidencia3_titulo} == null ? "" : $F{evidencia3_titulo}.trim()) ? 1 : 0) + ($F{evidencia4_archivo} != null || !"".equals($F{evidencia4_titulo} == null ? "" : $F{evidencia4_titulo}.trim()) ? 1 : 0) + ($F{evidencia5_archivo} != null || !"".equals($F{evidencia5_titulo} == null ? "" : $F{evidencia5_titulo}.trim()) ? 1 : 0) + ($F{evidencia6_archivo} != null || !"".equals($F{evidencia6_titulo} == null ? "" : $F{evidencia6_titulo}.trim()) ? 1 : 0)) == 3]]></printWhenExpression>
-			<element kind="rectangle" x="40" y="0" width="533" height="22" backcolor="#16305C" mode="Opaque" radius="6">
+			<element kind="line" x="50" y="11" width="523" height="1" forecolor="#16305C">
+				<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "acento")]]></propertyExpression>
+				<pen lineWidth="1.25"/>
+			</element>
+			<element kind="rectangle" x="40" y="0" width="330" height="22" backcolor="#16305C" mode="Opaque" radius="11">
 				<propertyExpression name="net.sf.jasperreports.style.backcolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "acento")]]></propertyExpression>
 				<pen lineWidth="0.0"/>
 			</element>
-			<element kind="staticText" x="52" y="0" width="400" height="22" fontName="DejaVu Sans" fontSize="10" forecolor="#FFFFFF" hTextAlign="Left" vTextAlign="Middle" bold="true">
+			<element kind="staticText" x="54" y="0" width="304" height="22" fontName="DejaVu Sans" fontSize="10" forecolor="#FFFFFF" hTextAlign="Left" vTextAlign="Middle" bold="true">
 				<text><![CDATA[EVIDENCIAS DE APRENDIZAJE]]></text>
 			</element>
 			<element kind="rectangle" x="40" y="30" width="261" height="290" backcolor="#F2F6FC" mode="Opaque" radius="6">
@@ -379,11 +404,15 @@
 		</band>
 		<band height="398" splitType="Prevent">
 			<printWhenExpression><![CDATA[(($F{evidencia1_archivo} != null || !"".equals($F{evidencia1_titulo} == null ? "" : $F{evidencia1_titulo}.trim()) ? 1 : 0) + ($F{evidencia2_archivo} != null || !"".equals($F{evidencia2_titulo} == null ? "" : $F{evidencia2_titulo}.trim()) ? 1 : 0) + ($F{evidencia3_archivo} != null || !"".equals($F{evidencia3_titulo} == null ? "" : $F{evidencia3_titulo}.trim()) ? 1 : 0) + ($F{evidencia4_archivo} != null || !"".equals($F{evidencia4_titulo} == null ? "" : $F{evidencia4_titulo}.trim()) ? 1 : 0) + ($F{evidencia5_archivo} != null || !"".equals($F{evidencia5_titulo} == null ? "" : $F{evidencia5_titulo}.trim()) ? 1 : 0) + ($F{evidencia6_archivo} != null || !"".equals($F{evidencia6_titulo} == null ? "" : $F{evidencia6_titulo}.trim()) ? 1 : 0)) == 4]]></printWhenExpression>
-			<element kind="rectangle" x="40" y="0" width="533" height="22" backcolor="#16305C" mode="Opaque" radius="6">
+			<element kind="line" x="50" y="11" width="523" height="1" forecolor="#16305C">
+				<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "acento")]]></propertyExpression>
+				<pen lineWidth="1.25"/>
+			</element>
+			<element kind="rectangle" x="40" y="0" width="330" height="22" backcolor="#16305C" mode="Opaque" radius="11">
 				<propertyExpression name="net.sf.jasperreports.style.backcolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "acento")]]></propertyExpression>
 				<pen lineWidth="0.0"/>
 			</element>
-			<element kind="staticText" x="52" y="0" width="400" height="22" fontName="DejaVu Sans" fontSize="10" forecolor="#FFFFFF" hTextAlign="Left" vTextAlign="Middle" bold="true">
+			<element kind="staticText" x="54" y="0" width="304" height="22" fontName="DejaVu Sans" fontSize="10" forecolor="#FFFFFF" hTextAlign="Left" vTextAlign="Middle" bold="true">
 				<text><![CDATA[EVIDENCIAS DE APRENDIZAJE]]></text>
 			</element>
 			<element kind="rectangle" x="40" y="30" width="261" height="175" backcolor="#F2F6FC" mode="Opaque" radius="6">
@@ -449,11 +478,15 @@
 		</band>
 		<band height="378" splitType="Prevent">
 			<printWhenExpression><![CDATA[(($F{evidencia1_archivo} != null || !"".equals($F{evidencia1_titulo} == null ? "" : $F{evidencia1_titulo}.trim()) ? 1 : 0) + ($F{evidencia2_archivo} != null || !"".equals($F{evidencia2_titulo} == null ? "" : $F{evidencia2_titulo}.trim()) ? 1 : 0) + ($F{evidencia3_archivo} != null || !"".equals($F{evidencia3_titulo} == null ? "" : $F{evidencia3_titulo}.trim()) ? 1 : 0) + ($F{evidencia4_archivo} != null || !"".equals($F{evidencia4_titulo} == null ? "" : $F{evidencia4_titulo}.trim()) ? 1 : 0) + ($F{evidencia5_archivo} != null || !"".equals($F{evidencia5_titulo} == null ? "" : $F{evidencia5_titulo}.trim()) ? 1 : 0) + ($F{evidencia6_archivo} != null || !"".equals($F{evidencia6_titulo} == null ? "" : $F{evidencia6_titulo}.trim()) ? 1 : 0)) == 5]]></printWhenExpression>
-			<element kind="rectangle" x="40" y="0" width="533" height="22" backcolor="#16305C" mode="Opaque" radius="6">
+			<element kind="line" x="50" y="11" width="523" height="1" forecolor="#16305C">
+				<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "acento")]]></propertyExpression>
+				<pen lineWidth="1.25"/>
+			</element>
+			<element kind="rectangle" x="40" y="0" width="330" height="22" backcolor="#16305C" mode="Opaque" radius="11">
 				<propertyExpression name="net.sf.jasperreports.style.backcolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "acento")]]></propertyExpression>
 				<pen lineWidth="0.0"/>
 			</element>
-			<element kind="staticText" x="52" y="0" width="400" height="22" fontName="DejaVu Sans" fontSize="10" forecolor="#FFFFFF" hTextAlign="Left" vTextAlign="Middle" bold="true">
+			<element kind="staticText" x="54" y="0" width="304" height="22" fontName="DejaVu Sans" fontSize="10" forecolor="#FFFFFF" hTextAlign="Left" vTextAlign="Middle" bold="true">
 				<text><![CDATA[EVIDENCIAS DE APRENDIZAJE]]></text>
 			</element>
 			<element kind="rectangle" x="40" y="30" width="171" height="165" backcolor="#F2F6FC" mode="Opaque" radius="6">
@@ -534,11 +567,15 @@
 		</band>
 		<band height="378" splitType="Prevent">
 			<printWhenExpression><![CDATA[(($F{evidencia1_archivo} != null || !"".equals($F{evidencia1_titulo} == null ? "" : $F{evidencia1_titulo}.trim()) ? 1 : 0) + ($F{evidencia2_archivo} != null || !"".equals($F{evidencia2_titulo} == null ? "" : $F{evidencia2_titulo}.trim()) ? 1 : 0) + ($F{evidencia3_archivo} != null || !"".equals($F{evidencia3_titulo} == null ? "" : $F{evidencia3_titulo}.trim()) ? 1 : 0) + ($F{evidencia4_archivo} != null || !"".equals($F{evidencia4_titulo} == null ? "" : $F{evidencia4_titulo}.trim()) ? 1 : 0) + ($F{evidencia5_archivo} != null || !"".equals($F{evidencia5_titulo} == null ? "" : $F{evidencia5_titulo}.trim()) ? 1 : 0) + ($F{evidencia6_archivo} != null || !"".equals($F{evidencia6_titulo} == null ? "" : $F{evidencia6_titulo}.trim()) ? 1 : 0)) == 6]]></printWhenExpression>
-			<element kind="rectangle" x="40" y="0" width="533" height="22" backcolor="#16305C" mode="Opaque" radius="6">
+			<element kind="line" x="50" y="11" width="523" height="1" forecolor="#16305C">
+				<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "acento")]]></propertyExpression>
+				<pen lineWidth="1.25"/>
+			</element>
+			<element kind="rectangle" x="40" y="0" width="330" height="22" backcolor="#16305C" mode="Opaque" radius="11">
 				<propertyExpression name="net.sf.jasperreports.style.backcolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "acento")]]></propertyExpression>
 				<pen lineWidth="0.0"/>
 			</element>
-			<element kind="staticText" x="52" y="0" width="400" height="22" fontName="DejaVu Sans" fontSize="10" forecolor="#FFFFFF" hTextAlign="Left" vTextAlign="Middle" bold="true">
+			<element kind="staticText" x="54" y="0" width="304" height="22" fontName="DejaVu Sans" fontSize="10" forecolor="#FFFFFF" hTextAlign="Left" vTextAlign="Middle" bold="true">
 				<text><![CDATA[EVIDENCIAS DE APRENDIZAJE]]></text>
 			</element>
 			<element kind="rectangle" x="40" y="30" width="171" height="165" backcolor="#F2F6FC" mode="Opaque" radius="6">
@@ -634,11 +671,15 @@
 		</band>
 		<band height="50" splitType="Prevent">
 			<printWhenExpression><![CDATA[(($F{evidencia1_archivo} != null || !"".equals($F{evidencia1_titulo} == null ? "" : $F{evidencia1_titulo}.trim()) ? 1 : 0) + ($F{evidencia2_archivo} != null || !"".equals($F{evidencia2_titulo} == null ? "" : $F{evidencia2_titulo}.trim()) ? 1 : 0) + ($F{evidencia3_archivo} != null || !"".equals($F{evidencia3_titulo} == null ? "" : $F{evidencia3_titulo}.trim()) ? 1 : 0) + ($F{evidencia4_archivo} != null || !"".equals($F{evidencia4_titulo} == null ? "" : $F{evidencia4_titulo}.trim()) ? 1 : 0) + ($F{evidencia5_archivo} != null || !"".equals($F{evidencia5_titulo} == null ? "" : $F{evidencia5_titulo}.trim()) ? 1 : 0) + ($F{evidencia6_archivo} != null || !"".equals($F{evidencia6_titulo} == null ? "" : $F{evidencia6_titulo}.trim()) ? 1 : 0)) == 0]]></printWhenExpression>
-			<element kind="rectangle" x="40" y="0" width="533" height="22" backcolor="#16305C" mode="Opaque" radius="6">
+			<element kind="line" x="50" y="11" width="523" height="1" forecolor="#16305C">
+				<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "acento")]]></propertyExpression>
+				<pen lineWidth="1.25"/>
+			</element>
+			<element kind="rectangle" x="40" y="0" width="330" height="22" backcolor="#16305C" mode="Opaque" radius="11">
 				<propertyExpression name="net.sf.jasperreports.style.backcolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "acento")]]></propertyExpression>
 				<pen lineWidth="0.0"/>
 			</element>
-			<element kind="staticText" x="52" y="0" width="400" height="22" fontName="DejaVu Sans" fontSize="10" forecolor="#FFFFFF" hTextAlign="Left" vTextAlign="Middle" bold="true">
+			<element kind="staticText" x="54" y="0" width="304" height="22" fontName="DejaVu Sans" fontSize="10" forecolor="#FFFFFF" hTextAlign="Left" vTextAlign="Middle" bold="true">
 				<text><![CDATA[EVIDENCIAS DE APRENDIZAJE]]></text>
 			</element>
 			<element kind="staticText" x="40" y="26" width="533" height="18" fontName="DejaVu Sans" fontSize="8" forecolor="#5A6B85" hTextAlign="Center" vTextAlign="Middle">

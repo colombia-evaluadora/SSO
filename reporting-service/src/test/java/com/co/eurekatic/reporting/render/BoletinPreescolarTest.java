@@ -257,13 +257,15 @@ class BoletinPreescolarTest {
                 continue;
             }
             byte[] fondo = java.nio.file.Files.readAllBytes(f);
+            // El escudo de muestra: el logo empaquetado del servicio.
+            byte[] escudo = getClass().getResourceAsStream("/logo.png").readAllBytes();
             Map<String, Object> corto = fila("NATALIA ANDREA CARPINTERO C", true, 3);
             corto.put("ee_nombre", "colegio chino");
             corto.put("escudo_archivo", null);
             List<Map<String, Object>> rows = List.of(fila("BRAYAN DE JESUS ALFARO BARRERA", true, 4), corto);
             byte[] pdf = new PdfRenderer().render(
                     "boletin-preescolar", definicion(), rows, new ReportMeta("test", Map.of()),
-                    null, pk -> pk != null && pk == 900L ? fondo : jpegOVacio(pk));
+                    null, pk -> pk != null && pk == 900L ? fondo : pk != null && pk == 902L ? escudo : jpegOVacio(pk));
             volcar("boletin-fondo" + i, pdf);
             assertEquals(2, paginas(pdf));
         }
