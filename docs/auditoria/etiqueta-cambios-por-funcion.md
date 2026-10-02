@@ -233,3 +233,12 @@ Resultado de la verificación de arriba: por decisión explícita ("priorizar lo
 - Migración `V78` necesitó `DROP FUNCTION` explícito antes del `CREATE OR REPLACE` para las 3 reversiones de firma (Postgres no permite cambiar cantidad/tipo de parámetros, ni renombrarlos, con `CREATE OR REPLACE` solo) — y para `fn_escala_bulk_delete`, cuyo único cambio de firma es el *nombre* del parámetro (`p_ids` → `p_escala_ids`), que también exige `DROP`.
 - `fn_periodo_actualizar` (versión de prod) hace `INSERT ... ON CONFLICT (FK_TESTABLECIMIENTO, NOMBRE) DO NOTHING` sobre `TANO_LECTIVO`. Local tiene esa restricción como **índice único parcial** (`WHERE active = true`, migración `V65`/PR #71) en vez de un `UNIQUE CONSTRAINT` normal como en prod — hubo que agregarle el mismo `WHERE active = true` al `ON CONFLICT` para que matcheara el índice parcial local.
 - Migración `V79` (nueva, separada) agrega 3 valores de catálogo (`TLISTA_VALOR`) que estas funciones necesitan y que el catálogo local no tenía **en absoluto**: la categoría `ESTADO_ESTABLECIMIENTO` (id `533` exacto, porque `fn_est_crear` lo trae hardcodeado como constante), la zona `id=216` ("Urbana y Rural", usada por la sede por defecto del REV4), y la categoría `ESTADOPERIODO` completa (antes ni existía localmente — el periodo semilla `PK=2` apuntaba, por error de seed, a un valor de la categoría `PLAN`, cosa que la validación estricta de la versión de prod ahora rechaza).
+
+## V538 — informes (guardado del periodo y de la planilla)
+
+Ninguno de los dos guardados declaraba etiqueta. Al partirlos en wrapper + núcleo (`V536`) la declaración queda en el wrapper, después de todas las validaciones y gates y antes de delegar; el núcleo y la escritura única que usa (`fn_informe_nota_periodo_escribir_interno`, que con una Habilitación llama a `fn_actividad_recuperacion_consolidar_interno`) no declaran, porque se ejecutan dentro del lazo por estudiante.
+
+| Función | Posición | Etiqueta | Info extra |
+|---|---|---|---|
+| `fn_informe_periodo_guardar` | Tras `fn_informe_assert_grupo_propio` (existencia → período del grupo → gate EDITAR → Regla 76 → grupo propio), antes de `fn_informe_periodo_guardar_interno`. | `Guardado del informe del periodo %s del grupo %s` | Sí — `v_fk_ee` y `v_fk_sede`, del mismo `SELECT` de contexto que alimenta el gate. |
+| `fn_informe_planilla_guardar` | Mismo punto; además va después de `fn_planilla_grupo_asignatura_assert`. | `Guardado de la planilla de %s del grupo %s, periodo %s` | Sí — mismo patrón. |
