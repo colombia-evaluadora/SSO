@@ -597,6 +597,8 @@ reporting:
         departamento: Departamento
         jornada: Jornada
         tipo_documento: Tipo de documento
+        director_nombre: Director de grupo
+        director_documento: Documento del director
         rector_nombre: Rector
         rector_documento: Documento del rector
 

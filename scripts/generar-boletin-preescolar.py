@@ -100,9 +100,9 @@ def rect(x, y, w, h, color, radius=0, when=None, estirar=False, rol=None, borde=
                                        _prop('backcolor', rol), _prop('forecolor', borde), pen)
 
 
-def line(x, y, w, color=AZUL, rol=None):
-    return ('\t\t\t<element kind="line" %s forecolor="%s">\n%s\t\t\t</element>\n'
-            % (_pos(x, y, w, 1), color, _prop('forecolor', rol)))
+def line(x, y, w, color=AZUL, rol=None, when=None):
+    return ('\t\t\t<element kind="line" %s forecolor="%s">\n%s%s\t\t\t</element>\n'
+            % (_pos(x, y, w, 1), color, _cuando(when), _prop('forecolor', rol)))
 
 
 def banda(alto, elementos, split='Prevent', when=None):
@@ -366,13 +366,29 @@ SIN_EVIDENCIAS = [
 # ---------------------------------------------------------------- firma
 # El documento va en su propia linea y solo si existe: CellValues.toText
 # convierte el null en "", y un "CC:" suelto se leeria como un dato roto.
-FIRMA = [
-    line(207, 32, 200, rol='acento'),
-    txt(157, 35, 300, 12, '$F{rector_nombre}', size=9, bold=True, align='Center', rol='titulo'),
-    static(157, 47, 300, 11, 'Rector(a)', size=7, align='Center', color=GRIS, rol='gris'),
-    txt(157, 58, 300, 11, '$F{rector_documento}', size=7, align='Center', color=GRIS, rol='gris',
-        when='$F{rector_documento} != null && !$F{rector_documento}.trim().isEmpty()'),
-]
+# Firman el director del grupo (izquierda) y el rector (derecha), con el mismo
+# formato. Sin director el rector queda solo y centrado: dos variantes con
+# printWhen, porque Jasper no acepta x por expresion.
+HAY_DIRECTOR = '!"".equals($F{director_nombre})'
+SIN_DIRECTOR = '"".equals($F{director_nombre})'
+
+
+def firma(centro, campo, cargo, when):
+    x = centro - 150
+    return [
+        line(centro - 100, 32, 200, rol='acento', when=when),
+        txt(x, 35, 300, 12, '$F{%s_nombre}' % campo, size=9, bold=True, align='Center',
+            rol='titulo', when=when),
+        static(x, 47, 300, 11, cargo, size=7, align='Center', color=GRIS, rol='gris', when=when),
+        txt(x, 58, 300, 11, '$F{%s_documento}' % campo, size=7, align='Center', color=GRIS,
+            rol='gris', when='(%s) && !"".equals($F{%s_documento})' % (when, campo)),
+    ]
+
+
+IZQ, DER, CENTRO = X0 + ANCHO // 4, X0 + 3 * ANCHO // 4, 306
+FIRMA = (firma(IZQ, 'director', 'Director(a) de grupo', HAY_DIRECTOR)
+         + firma(DER, 'rector', 'Rector(a)', HAY_DIRECTOR)
+         + firma(CENTRO, 'rector', 'Rector(a)', SIN_DIRECTOR))
 
 # ------------------------------------------------------------ pie de pagina
 # "Pagina N de M" cuenta las hojas DEL BOLETIN, no del PDF del curso: el grupo
@@ -390,7 +406,7 @@ campos = ['ee_nombre', 'ee_dane', 'ee_nit', 'ciudad', 'sede_nombre', 'nivel_ense
           'grado_nombre', 'grupo_etiqueta', 'periodo_nombre', 'anio', 'estudiante',
           'documento', 'asignatura_nombre',
           'observacion', 'observacion_estado', 'rector_nombre', 'rector_documento',
-          'departamento', 'jornada', 'tipo_documento']
+          'departamento', 'jornada', 'tipo_documento', 'director_nombre', 'director_documento']
 campos += ['evidencia%d_titulo' % i for i in range(1, 7)]
 # Las fechas se declaran como TEXTO: el datasource las entrega ya
 # formateadas por CellValues, no como objetos de fecha.

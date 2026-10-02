@@ -42,7 +42,7 @@ class BoletinPreescolarTest {
             "evidencia4_titulo", "evidencia4_fecha", "evidencia4_archivo",
             "evidencia5_titulo", "evidencia5_fecha", "evidencia5_archivo",
             "evidencia6_titulo", "evidencia6_fecha", "evidencia6_archivo",
-            "rector_nombre", "rector_documento", "escudo_archivo", "departamento", "jornada", "tipo_documento");
+            "rector_nombre", "rector_documento", "escudo_archivo", "departamento", "jornada", "tipo_documento", "director_nombre", "director_documento");
 
     private static final List<String> IMAGENES = List.of(
             "fondo_archivo", "escudo_archivo", "foto_archivo",
@@ -105,6 +105,8 @@ class BoletinPreescolarTest {
         }
         f.put("rector_nombre", "Payares Herazo Alejandra");
         f.put("rector_documento", "CC: 45123456");
+        f.put("director_nombre", "Martinez Ruiz Carolina");
+        f.put("director_documento", "CC: 1047123456");
         return f;
     }
 
@@ -262,6 +264,8 @@ class BoletinPreescolarTest {
             Map<String, Object> corto = fila("NATALIA ANDREA CARPINTERO C", true, 3);
             corto.put("ee_nombre", "colegio chino");
             corto.put("escudo_archivo", null);
+            corto.put("director_nombre", null);
+            corto.put("director_documento", null);
             List<Map<String, Object>> rows = List.of(fila("BRAYAN DE JESUS ALFARO BARRERA", true, 4), corto);
             byte[] pdf = new PdfRenderer().render(
                     "boletin-preescolar", definicion(), rows, new ReportMeta("test", Map.of()),
