@@ -5,7 +5,8 @@
 -- consolidado en V136-V141). Incluye fn_asistencia_periodo_eval y
 -- fn_asistencia_tipo_pk, que vivian solo en V220. Al escribir sugiere No
 -- asistido en las actividades del dia aun Pendientes (Regla 73, V496.6).
--- Solo escribe tipos 1/2/5 y marca ORIGEN ASISTENCIA (la Vista predomina).
+-- Solo escribe tipos 1/2/5 y marca ORIGEN ASISTENCIA (la Vista predomina). En
+-- periodo no calificable registrar abre solicitudes (Regla 75, V496.19).
 -- Depende de: TASISTENCIA/TMATRICULA/TARCHIVO/TGRUPO/TGRADO/
 -- TPERIODO_EVALUACION/TLISTA_VALOR (V22), fn_periodo_sede/fn_grupo_periodo (V40).
 -- ===========================================================================
@@ -134,6 +135,15 @@ BEGIN
         RAISE EXCEPTION '%', v_invalido USING ERRCODE = '23503';
     END IF;
 
+    -- Regla 75: en un periodo no calificable no se escribe; corregir y capturar
+    -- tarde quedan como solicitudes del Coordinador.
+    IF COALESCE(academico_test.fn_asistencia_fecha_requiere_aprobacion(p_fk_tgrupo, p_fecha), FALSE) THEN
+        PERFORM academico_test.fn_asistencia_registrar_solicitar_interno(
+            p_pk_usuario_solicitante, p_fk_tgrupo, p_fk_tasignatura, p_fk_tactividad, p_fecha, p_bloque,
+            v_fk_periodo, v_entrada, p_marcar_todos_valor);
+        RETURN 0;
+    END IF;
+
     WITH entrada AS (
         SELECT (r->>'fkMatricula')::BIGINT                                   AS fk_matricula,
                academico_test.fn_asistencia_tipo_pk(
@@ -190,7 +200,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_asistencia_registrar_bulk_interno(BIGINT, BIGINT, DATE, NUMERIC, JSONB, NUMERIC, BIGINT, BIGINT)
-    IS 'INTERNO: nucleo de fn_asistencia_registrar_bulk, sin gate ni reglas de negocio. Resuelve periodo de evaluacion y sede del grupo, normaliza p_registros (o "Marcar todo"), valida la forma de cada fila, hace el upsert por UQ_TASISTENCIA_SESION con ORIGEN ASISTENCIA, retira la fila del Planeador de ese dia (la Vista predomina) y sincroniza el estado de resultado de las actividades del dia (fn_actividad_resultado_desde_asistencia_interno, Regla 73). p_pk_usuario_solicitante solo para CREATED_BY/MODIFIED_BY.';
+    IS 'INTERNO: nucleo de fn_asistencia_registrar_bulk, sin gate ni reglas de negocio. Resuelve periodo de evaluacion y sede del grupo, normaliza p_registros (o "Marcar todo"), valida la forma de cada fila; si el periodo de evaluacion no es calificable no escribe y delega en fn_asistencia_registrar_solicitar_interno (Regla 75: devuelve 0, las solicitudes salen por fn_solicitud_aprobacion_creadas); si no, hace el upsert por UQ_TASISTENCIA_SESION con ORIGEN ASISTENCIA, retira la fila del Planeador de ese dia (la Vista predomina) y sincroniza el estado de resultado de las actividades del dia (fn_actividad_resultado_desde_asistencia_interno, Regla 73). p_pk_usuario_solicitante solo para CREATED_BY/MODIFIED_BY.';
 
 CREATE OR REPLACE FUNCTION academico_test.fn_asistencia_editar_interno(
     p_pk_tasistencia         BIGINT,

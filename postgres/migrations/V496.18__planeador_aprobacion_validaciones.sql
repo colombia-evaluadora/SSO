@@ -222,7 +222,7 @@ AS $$
        AND a.ES_RECUPERACION IS DISTINCT FROM 'S';
 $$;
 
-CREATE OR REPLACE FUNCTION academico_test.fn_asistencia_correccion_requiere_aprobacion(p_pk_tasistencia BIGINT)
+CREATE OR REPLACE FUNCTION academico_test.fn_asistencia_fecha_requiere_aprobacion(p_fk_tgrupo BIGINT, p_fecha DATE)
 RETURNS BOOLEAN
 LANGUAGE sql
 STABLE
@@ -230,11 +230,39 @@ AS $$
     -- Regla 75: manda el periodo DE EVALUACIÓN de la fecha de la sesión. NULL
     -- si la fecha no cae en ninguno: el llamador aplica el bloqueo plano (V136).
     SELECT NOT academico_test.fn_periodo_evaluacion_calificable(
-               academico_test.fn_asistencia_periodo_eval(m.FK_TGRUPO, a.FECHA))
+               academico_test.fn_asistencia_periodo_eval(p_fk_tgrupo, p_fecha));
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_asistencia_fecha_requiere_aprobacion(BIGINT, DATE)
+    IS 'TRUE si escribir asistencia de esa fecha exige aprobación del Coordinador (Regla 75: su periodo de evaluación no es Calificable); NULL si la fecha no cae en ningún periodo. La usan fn_asistencia_correccion_requiere_aprobacion y fn_asistencia_registrar_bulk.';
+
+CREATE OR REPLACE FUNCTION academico_test.fn_asistencia_correccion_requiere_aprobacion(p_pk_tasistencia BIGINT)
+RETURNS BOOLEAN
+LANGUAGE sql
+STABLE
+AS $$
+    SELECT academico_test.fn_asistencia_fecha_requiere_aprobacion(m.FK_TGRUPO, a.FECHA)
       FROM academico_test.TASISTENCIA a
       JOIN academico_test.TMATRICULA m ON m.PK_TMATRICULA = a.FK_TMATRICULA
      WHERE a.PK_TASISTENCIA = p_pk_tasistencia;
 $$;
+
+CREATE OR REPLACE FUNCTION academico_test.fn_asistencia_solicitud_pendiente(p_pk_tasistencia BIGINT)
+RETURNS BIGINT
+LANGUAGE sql
+STABLE
+AS $$
+    SELECT s.PK_TSOLICITUD_APROBACION
+      FROM academico_test.TSOLICITUD_APROBACION s
+     WHERE s.TABLA_OBJETO = 'TASISTENCIA' AND s.FK_OBJETO = p_pk_tasistencia
+       AND s.FK_TLV_TIPO = academico_test.fn_tlv_solicitud_tipo_pk('CORRECCION_ASISTENCIA')
+       AND s.FK_TLV_ESTADO = academico_test.fn_tlv_solicitud_estado_pk('PENDIENTE')
+       AND s.ACTIVE = TRUE
+     LIMIT 1;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_asistencia_solicitud_pendiente(BIGINT)
+    IS 'PK de la solicitud CORRECCION_ASISTENCIA pendiente sobre un registro de TASISTENCIA (activo, o el inactivo que espera una captura tardía), o NULL. La usan el padrón de la sesión, Seguimiento y registrar.';
 
 -- Regla 70: una recuperación ya aprobada con ESA nota se reconsolida sin pedir
 -- de nuevo (cambió la base, no lo aprobado); otra nota vuelve a pedirla.

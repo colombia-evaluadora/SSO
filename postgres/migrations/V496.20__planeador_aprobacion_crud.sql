@@ -102,6 +102,8 @@ $$;
 COMMENT ON FUNCTION academico_test.fn_solicitud_aprobacion_assert_coordinador(BIGINT, BIGINT)
     IS 'Gate base del Coordinador: nivel 0 o Coordinador de p_fk_tsede (NULL = en alguna). La usan fn_solicitud_aprobacion_listar (sede NULL, el alcance por fila lo filtra fn_solicitud_aprobacion_puede_aprobar) y fn_solicitud_aprobacion_assert_aprobador (sede del grupo, con su propio mensaje). 42501 si no.';
 
+DROP FUNCTION IF EXISTS academico_test.fn_solicitud_aprobacion_listar(BIGINT, VARCHAR, BIGINT, VARCHAR);
+
 CREATE OR REPLACE FUNCTION academico_test.fn_solicitud_aprobacion_listar(
     p_pk_usuario_solicitante BIGINT,
     p_tipo                   VARCHAR DEFAULT NULL,
@@ -131,7 +133,10 @@ RETURNS TABLE (
     motivo                   VARCHAR,
     aprobador                VARCHAR,
     fecha_resolucion         TIMESTAMP,
-    motivo_resolucion        VARCHAR
+    motivo_resolucion        VARCHAR,
+    fk_tmatricula            BIGINT,
+    fecha                    DATE,
+    bloque                   NUMERIC
 )
 LANGUAGE plpgsql
 STABLE
