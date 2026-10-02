@@ -404,6 +404,7 @@ BEGIN
         p_pk_usuario_solicitante, 'INFORMES', 'EDITAR',
         v_fk_ee, v_fk_sede, v_fk_jornada
     );
+    PERFORM academico_test.fn_informe_assert_puede_escribir(p_pk_usuario_solicitante);
     PERFORM academico_test.fn_informe_assert_grupo_propio(
         p_pk_usuario_solicitante, p_fk_tgrupo);
 
