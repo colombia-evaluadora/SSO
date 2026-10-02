@@ -1,44 +1,16 @@
 -- ===========================================================================
--- V491 - Las alertas y el historial dejan de mostrar grupos ajenos.
---
---   fn_informe_planillas_pendientes   la alerta roja
---   fn_informe_cambios_pendientes     la alerta naranja
---   fn_informe_historial_listar       el modal de historial
---
---
--- QUE FALTABA
---   V490 dejo estas tres fuera a proposito: reciben un ARREGLO de grupos y
---   son agregados, no accesos -- devuelven alertas y registros de lo que ya
---   paso, no los datos del informe --, asi que no abrian nada que el
---   usuario no pudiera pedir por otro lado.
---
---   Pero si producian RUIDO: un docente veia alertas e historial de grupos
---   que no puede abrir. Eso es lo que se corrige aca. No es un agujero de
---   seguridad que se cierra, es una pantalla que deja de mentir.
---
---
--- SE DESCARTA, NO SE FALLA -- Y NO ES LO MISMO QUE EN V490
---   En V490 pedir por id un grupo ajeno responde 42501, porque ahi el
---   usuario eligio ese grupo: es una peticion equivocada y decirlo es lo
---   correcto.
---
---   Aca no. El front manda la lista de PESTAÑAS ABIERTAS, que el usuario no
---   escribio: salen de la URL y de lo que quedo guardado de la sesion
---   anterior. Si una de ellas ya no le corresponde, fallar tumbaria las
---   alertas de todos los grupos que SI puede ver -- por un grupo que el ni
---   siquiera pidio. Asi que ese se descarta y el resto se responde.
---
---   El gate TERRITORIAL de adentro del bucle se conserva tal cual, fallando:
---   pedir un grupo de otra sede si es un error de quien llama, y ahi callar
---   seria esconder un problema real.
---
--- Idempotente: solo CREATE OR REPLACE, ninguna cambia de firma.
+-- V491 - informes alertas e historial solo mis grupos
+-- Recortada: las funciones de informes que V535-V541 reescriben en capas
+-- se quitaron de aqui y viven alli. Queda lo que sigue vivo y lo que una
+-- base limpia necesita al migrar (CREATE solo si la funcion no existe).
 -- ===========================================================================
 
--- ---------------------------------------------------------------------------
--- fn_informe_planillas_pendientes
--- ---------------------------------------------------------------------------
-CREATE OR REPLACE FUNCTION academico_test.fn_informe_planillas_pendientes(p_pk_usuario_solicitante bigint, p_fk_tgrupos bigint[], p_fk_periodos_evaluacion bigint[] DEFAULT NULL::bigint[])
+
+-- La vigente es posterior; esta solo hace falta en una base limpia (V514:objeto).
+DO $guarda$
+BEGIN
+    IF to_regprocedure('academico_test.fn_informe_planillas_pendientes(bigint,bigint[],bigint[])') IS NULL THEN
+        EXECUTE $crear$CREATE OR REPLACE FUNCTION academico_test.fn_informe_planillas_pendientes(p_pk_usuario_solicitante bigint, p_fk_tgrupos bigint[], p_fk_periodos_evaluacion bigint[] DEFAULT NULL::bigint[])
  RETURNS TABLE(fk_tgrupo bigint, grupo_nombre character varying, fk_tasignatura bigint, asignatura_nombre character varying, fk_tfuncionario bigint, fk_tusuario_docente bigint, docente character varying, docentes_asignados bigint, fk_tperiodo_evaluacion bigint, periodo_nombre character varying, periodo_abreviacion character varying, periodo_fin date, estudiantes bigint, actividades bigint)
  LANGUAGE plpgsql
  STABLE
@@ -216,13 +188,15 @@ BEGIN
      )
      ORDER BY c.grupo_nombre, c.periodo_inicio, asg.NOMBRE;
 END;
-$function$
-;
+$function$$crear$;
+    END IF;
+END $guarda$;
 
--- ---------------------------------------------------------------------------
--- fn_informe_cambios_pendientes
--- ---------------------------------------------------------------------------
-CREATE OR REPLACE FUNCTION academico_test.fn_informe_cambios_pendientes(p_pk_usuario_solicitante bigint, p_fk_tgrupos bigint[], p_fk_periodos_evaluacion bigint[] DEFAULT NULL::bigint[])
+-- La vigente es posterior; esta solo hace falta en una base limpia (V514:objeto).
+DO $guarda$
+BEGIN
+    IF to_regprocedure('academico_test.fn_informe_cambios_pendientes(bigint,bigint[],bigint[])') IS NULL THEN
+        EXECUTE $crear$CREATE OR REPLACE FUNCTION academico_test.fn_informe_cambios_pendientes(p_pk_usuario_solicitante bigint, p_fk_tgrupos bigint[], p_fk_periodos_evaluacion bigint[] DEFAULT NULL::bigint[])
  RETURNS TABLE(fk_tgrupo bigint, grupo_nombre character varying, fk_tasignatura bigint, asignatura_nombre character varying, fk_tperiodo_evaluacion bigint, periodo_nombre character varying, periodo_abreviacion character varying, fk_tfuncionario bigint, fk_tusuario_docente bigint, docente character varying, docentes_asignados bigint, estudiantes_afectados bigint, ultimo_cambio timestamp without time zone)
  LANGUAGE plpgsql
  STABLE
@@ -363,13 +337,15 @@ BEGIN
              ON ud.PK_TUSUARIO = fd.FK_TUSUARIO
      ORDER BY gr.NOMBRE, a.periodo_inicio, a.asignatura_nombre;
 END;
-$function$
-;
+$function$$crear$;
+    END IF;
+END $guarda$;
 
--- ---------------------------------------------------------------------------
--- fn_informe_historial_listar
--- ---------------------------------------------------------------------------
-CREATE OR REPLACE FUNCTION academico_test.fn_informe_historial_listar(p_pk_usuario_solicitante bigint, p_fk_tgrupos bigint[] DEFAULT NULL::bigint[], p_fk_periodos_evaluacion bigint[] DEFAULT NULL::bigint[], p_anio integer DEFAULT NULL::integer, p_limite integer DEFAULT 100)
+-- La vigente es posterior; esta solo hace falta en una base limpia (V491.1:objeto).
+DO $guarda$
+BEGIN
+    IF to_regprocedure('academico_test.fn_informe_historial_listar(bigint,bigint[],bigint[],integer,integer)') IS NULL THEN
+        EXECUTE $crear$CREATE OR REPLACE FUNCTION academico_test.fn_informe_historial_listar(p_pk_usuario_solicitante bigint, p_fk_tgrupos bigint[] DEFAULT NULL::bigint[], p_fk_periodos_evaluacion bigint[] DEFAULT NULL::bigint[], p_anio integer DEFAULT NULL::integer, p_limite integer DEFAULT 100)
  RETURNS TABLE(pk_tinforme_guardado bigint, fecha date, momento timestamp without time zone, fk_tgrupo bigint, grupo_nombre character varying, fk_tasignatura bigint, asignatura_nombre character varying, origen character varying, fk_tperiodo_evaluacion bigint, periodo_nombre character varying, periodo_abreviacion character varying, fk_tusuario bigint, guardado_por character varying, estudiantes bigint, detalle jsonb)
  LANGUAGE plpgsql
  STABLE
@@ -480,5 +456,6 @@ BEGIN
      ORDER BY ig.CREATED_AT DESC, ig.PK_TINFORME_GUARDADO DESC
      LIMIT GREATEST(COALESCE(p_limite, 100), 1);
 END;
-$function$
-;
+$function$$crear$;
+    END IF;
+END $guarda$;

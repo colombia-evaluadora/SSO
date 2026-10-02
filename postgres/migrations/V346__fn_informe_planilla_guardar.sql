@@ -1,12 +1,16 @@
 -- ===========================================================================
--- V346 - fn_informe_metricas_recalcular: recalcula TINFORME_PERIODO_MATRICULA,
--- punto unico tras guardar una planilla o un periodo.
--- fn_informe_periodo_guardar y fn_informe_planilla_guardar viven hoy en V490;
--- aqui se crean solo si faltan, porque V348 las comenta al migrar.
+-- V346 - fn informe planilla guardar
+-- Recortada: las funciones de informes que V535-V541 reescriben en capas
+-- se quitaron de aqui y viven alli. Queda lo que sigue vivo y lo que una
+-- base limpia necesita al migrar (CREATE solo si la funcion no existe).
 -- ===========================================================================
 
 
-CREATE OR REPLACE FUNCTION academico_test.fn_informe_metricas_recalcular(
+-- La vigente es posterior; esta solo hace falta en una base limpia (V346:migracion, V346:migracion).
+DO $guarda$
+BEGIN
+    IF to_regprocedure('academico_test.fn_informe_metricas_recalcular(bigint,bigint,bigint)') IS NULL THEN
+        EXECUTE $crear$CREATE OR REPLACE FUNCTION academico_test.fn_informe_metricas_recalcular(
     p_pk_usuario_solicitante BIGINT,
     p_fk_tmatricula          BIGINT,
     p_fk_tperiodo_evaluacion BIGINT
@@ -99,12 +103,10 @@ BEGIN
                   MODIFIED_BY = p_pk_usuario_solicitante::VARCHAR,
                   MODIFIED_AT = CURRENT_TIMESTAMP;
 END;
-$function$;
+$function$$crear$;
+    END IF;
+END $guarda$;
 
-COMMENT ON FUNCTION academico_test.fn_informe_metricas_recalcular(BIGINT, BIGINT, BIGINT)
-    IS 'Recalcula y persiste la fila de TINFORME_PERIODO_MATRICULA de un (estudiante, periodo) a partir de lo que HAY GUARDADO en TASIGNATURA_NOTA. Es el punto UNICO de ese calculo y lo llaman los dos guardados -- el del informe completo y el de una sola asignatura desde la planilla -- porque esa fila agrega TODAS las asignaturas: guardar una sola y no recalcularla la deja describiendo un estado que ya no existe, en silencio y de forma consistente consigo misma (medido: notas 70 y 20, promedio real 45, fila diciendo 77.71). Calcula DESPUES de escribir y solo desde lo guardado, no desde lo que se iba a guardar: la version anterior acumulaba dentro del bucle leyendo la aprobacion del detalle, que la decide sobre la nota VISIBLE -- COALESCE(guardada, proyectada), es decir la VIEJA -- mientras escribia la proyectada, de modo que las metricas podian describir un numero distinto del que quedaba en la tabla (reproducido: re-guardar sin cambiar nada movia aprobadas de 2 a 1). El universo de asignaturas sale de fn_informe_estudiante_asignaturas, el mismo que ve el usuario, asi que una asignatura sin nota guardada cuenta en SIN_DEFINIR en vez de desaparecer del total; y una nota guardada cuyo grado no tiene DESEMPENHO_MINIMO tambien va a SIN_DEFINIR, nunca a reprobadas. Si no queda NINGUNA nota guardada la fila se da de BAJA en vez de quedar en cero: un promedio 0 se leeria como "saco cero" cuando lo que pasa es que el periodo no esta consolidado, y con la fila inactiva el listado vuelve a calcular al vuelo y CONSOLIDADO vuelve a FALSE.';
-
--- V348 la comenta al migrar; la vigente vive en V490
 DO $guarda$
 BEGIN
     IF to_regprocedure('academico_test.fn_informe_periodo_guardar(bigint,bigint,bigint,bigint[])') IS NULL THEN
@@ -291,7 +293,6 @@ $function$$crear$;
     END IF;
 END $guarda$;
 
--- V348 la comenta al migrar; la vigente vive en V490
 DO $guarda$
 BEGIN
     IF to_regprocedure('academico_test.fn_informe_planilla_guardar(bigint,bigint,bigint,bigint,bigint[])') IS NULL THEN
