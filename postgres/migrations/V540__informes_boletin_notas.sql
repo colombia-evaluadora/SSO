@@ -88,6 +88,30 @@ $function$;
 COMMENT ON FUNCTION academico_test.fn_informe_boletin_rector_interno(BIGINT, BIGINT)
     IS 'INTERNO: nombre y documento ("CC: ...") de quien firma un boletin: el usuario con rol RECTOR en una sede del establecimiento, la sede del grupo primero. Sin gate. La usan los dos boletines.';
 
+CREATE OR REPLACE FUNCTION academico_test.fn_informe_boletin_director_interno(
+    p_fk_tgrupo BIGINT
+)
+RETURNS TABLE(nombre character varying, documento character varying)
+LANGUAGE sql
+STABLE
+AS $function$
+    SELECT NULLIF(TRIM(CONCAT_WS(' ', u.PRIMER_APELLIDO, u.SEGUNDO_APELLIDO,
+                                      u.PRIMER_NOMBRE,   u.SEGUNDO_NOMBRE)), '')::VARCHAR,
+           CASE WHEN NULLIF(TRIM(u.IDENTIFICACION), '') IS NOT NULL
+                THEN CONCAT_WS(' ', td.VALOR || ':', TRIM(u.IDENTIFICACION))
+           END::VARCHAR
+      FROM academico_test.TGRUPO gr
+      JOIN academico_test.TFUNCIONARIO f ON f.PK_TFUNCIONARIO = gr.FK_TFUNCIONARIO
+      JOIN academico_test.TUSUARIO u
+        ON u.PK_TUSUARIO = f.FK_TUSUARIO AND u.ACTIVE = TRUE
+      LEFT JOIN academico_test.TLISTA_VALOR td
+             ON td.PK_LISTA_VALOR = u.FK_TLV_TIPO_DOCUMENTO
+     WHERE gr.PK_TGRUPO = p_fk_tgrupo;
+$function$;
+
+COMMENT ON FUNCTION academico_test.fn_informe_boletin_director_interno(BIGINT)
+    IS 'INTERNO: nombre y documento ("CC: ...") del director del grupo (TGRUPO.FK_TFUNCIONARIO), que firma el boletin junto al rector. Sin fila si el grupo no tiene director. Sin gate.';
+
 CREATE OR REPLACE FUNCTION academico_test.fn_informe_boletin_foto_interno(
     p_fk_tmatricula BIGINT
 )
