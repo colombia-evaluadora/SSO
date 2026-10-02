@@ -1,7 +1,7 @@
 # Mapa del dominio
 
 **Generado** por `python scripts/generar-mapa.py` — no editar a mano.
-Estado: 469 migraciones (V1–V542), 1011 funciones vivas, 63 endpoints vivos. Ultima generacion: 2026-10-02.
+Estado: 465 migraciones (V1–V542), 1010 funciones vivas, 63 endpoints vivos. Ultima generacion: 2026-10-02.
 
 Para una **funcion**, la migracion dueña es la que hay que editar: es su ultima escritura viva, no la que la creo.
 
@@ -45,7 +45,7 @@ El detalle exacto (historial, firmas, dependencias) sale de `python .claude/skil
 - [grado](#grado) — 10 funcion(es), 0 endpoint(s)
 - [grupo](#grupo) — 10 funcion(es), 0 endpoint(s)
 - [horario](#horario) — 5 funcion(es), 0 endpoint(s)
-- [informe](#informe) — 48 funcion(es), 0 endpoint(s)
+- [informe](#informe) — 47 funcion(es), 0 endpoint(s)
 - [instrumento](#instrumento) — 2 funcion(es), 0 endpoint(s)
 - [jornada](#jornada) — 1 funcion(es), 0 endpoint(s)
 - [matricula](#matricula) — 49 funcion(es), 0 endpoint(s)
@@ -392,7 +392,7 @@ El detalle exacto (historial, firmas, dependencias) sale de `python .claude/skil
 
 | Funcion | Params | Migracion dueña | La usan |
 |---|---|---|---|
-| `academico_test.fn_anio_lectivo_numero` | 1 | V417 | V418, V537, V540 |
+| `academico_test.fn_anio_lectivo_numero` | 1 | V417 | V537, V540 |
 
 ## app
 
@@ -801,7 +801,7 @@ El detalle exacto (historial, firmas, dependencias) sale de `python .claude/skil
 | Funcion | Params | Migracion dueña | La usan |
 |---|---|---|---|
 | `academico_test.fn_informe_alcanza_sede_jornada` | 3 | V535 | V537 |
-| `academico_test.fn_informe_anos_listar` | 2 | V537 | V539 |
+| `academico_test.fn_informe_anos_listar` | 2 | V537 | V417, V539 |
 | `academico_test.fn_informe_assert_grupo_propio` | 2 | V535 | V490, V496.20, V496.24, V496.25, V537, V538… |
 | `academico_test.fn_informe_assert_puede_escribir` | 1 | V535 | V490, V496.24, V538 |
 | `academico_test.fn_informe_boletin_cabecera_interno` | 1 | V540 | V541 |
@@ -816,29 +816,28 @@ El detalle exacto (historial, firmas, dependencias) sale de `python .claude/skil
 | `academico_test.fn_informe_desactualizado` | 3 | V496.20 | V496.21 |
 | `academico_test.fn_informe_desactualizado_interno` | 2 | V496.19 | V496.20 |
 | `academico_test.fn_informe_desactualizado_marcar_interno` | 2 | V496.19 | — |
-| `academico_test.fn_informe_estudiante_asignaturas` | 4 | V428 | V335, V346, V439, V490, V491, V496.24 |
+| `academico_test.fn_informe_estudiante_asignaturas` | 4 | V428 | V335, V346, V439, V491, V496.24 |
 | `academico_test.fn_informe_estudiante_asignaturas_interno` | 3 | V536 | V537 |
 | `academico_test.fn_informe_final_guardar` | 3 | V496.24 | — |
 | `academico_test.fn_informe_final_guardar_interno` | 3 | V496.24 | — |
 | `academico_test.fn_informe_formativo_listar` | 4 | V496.25 | — |
 | `academico_test.fn_informe_formativo_listar_interno` | 3 | V496.25 | — |
-| `academico_test.fn_informe_grupo_listar` | 4 | V537 | V342, V439, V496.25, V537, V539 |
+| `academico_test.fn_informe_grupo_listar` | 4 | V537 | V342, V496.25, V537, V539 |
 | `academico_test.fn_informe_grupo_listar_interno` | 3 | V536 | V537, V540, V541 |
 | `academico_test.fn_informe_grupo_reporte` | 5 | V537 | V420, V539 |
-| `academico_test.fn_informe_grupo_tabla` | 4 | V496.25 | V434 |
+| `academico_test.fn_informe_grupo_tabla` | 4 | V496.25 | V434, V439 |
 | `academico_test.fn_informe_grupos_listar` | 5 | V537 | V419, V539 |
 | `academico_test.fn_informe_historial_listar` | 5 | V537 | V349, V539 |
-| `academico_test.fn_informe_historial_registrar` | 6 | V348 | V490 |
 | `academico_test.fn_informe_historial_registrar_interno` | 6 | V536 | — |
-| `academico_test.fn_informe_jornadas_listar` | 3 | V537 | V539 |
-| `academico_test.fn_informe_metricas_recalcular` | 3 | V346 | V490 |
+| `academico_test.fn_informe_jornadas_listar` | 3 | V537 | V417, V539 |
+| `academico_test.fn_informe_metricas_recalcular` | 3 | V346 | — |
 | `academico_test.fn_informe_metricas_recalcular_interno` | 3 | V536 | — |
 | `academico_test.fn_informe_nota_periodo_escribir_interno` | 5 | V536 | — |
-| `academico_test.fn_informe_periodo_academico_resolver` | 4 | V537 | V490, V537 |
+| `academico_test.fn_informe_periodo_academico_resolver` | 4 | V537 | V490 |
 | `academico_test.fn_informe_periodo_evidencias_listar` | 3 | V537 | V434, V539 |
 | `academico_test.fn_informe_periodo_guardar` | 4 | V538 | V342, V539 |
 | `academico_test.fn_informe_periodo_guardar_interno` | 4 | V536 | V538 |
-| `academico_test.fn_informe_periodo_requerido` | 3 | V428 | V439, V490, V496.24 |
+| `academico_test.fn_informe_periodo_requerido` | 3 | V428 | V439, V496.24 |
 | `academico_test.fn_informe_periodo_requerido_interno` | 2 | V536 | — |
 | `academico_test.fn_informe_periodos_evaluacion_listar` | 4 | V537 | V539 |
 | `academico_test.fn_informe_planilla_guardar` | 5 | V538 | V347, V539 |
@@ -846,7 +845,7 @@ El detalle exacto (historial, firmas, dependencias) sale de `python .claude/skil
 | `academico_test.fn_informe_planilla_listar` | 5 | V537 | V345, V539 |
 | `academico_test.fn_informe_planillas_pendientes` | 3 | V537 | V342, V539 |
 | `academico_test.fn_informe_recuperacion_nota_final_vigente` | 3 | V536 | — |
-| `academico_test.fn_informe_sedes_listar` | 1 | V537 | V539 |
+| `academico_test.fn_informe_sedes_listar` | 1 | V537 | V417, V539 |
 | `academico_test.fn_informe_validar_periodo_del_grupo` | 2 | V535 | V537, V538, V540, V541 |
 
 ## instrumento
@@ -1161,7 +1160,7 @@ El detalle exacto (historial, firmas, dependencias) sale de `python .claude/skil
 
 | Funcion | Params | Migracion dueña | La usan |
 |---|---|---|---|
-| `academico_test.fn_promedio_homologar` | 2 | V474 | V490, V493, V496.24, V536 |
+| `academico_test.fn_promedio_homologar` | 2 | V474 | V493, V496.24, V536 |
 
 ## puede
 
@@ -1630,7 +1629,7 @@ El detalle exacto (historial, firmas, dependencias) sale de `python .claude/skil
 | `academico_test.fn_usuario_sedes_coordinador` | 1 | V496.18 | V496.20, V496.22 |
 | `academico_test.fn_usuario_sedes_jornadas_accesibles` | 1 | V29 | V40, V51, V116, V140, V297, V300… |
 | `academico_test.fn_usuario_sedes_lectura` | 1 | V29 | V52, V116, V224, V244, V251, V396… |
-| `academico_test.fn_usuario_solo_sus_grupos` | 3 | V535 | V136, V140, V490, V491, V496.26, V535… |
+| `academico_test.fn_usuario_solo_sus_grupos` | 3 | V535 | V136, V140, V490, V491, V537, V542 |
 | `pigse.fn_usuario_categoria_rol_nivel` | 1 | V370 | V390 |
 | `pigse.fn_usuario_ee_accesibles` | 1 | V370 | V390 |
 | `pigse.fn_usuario_ente_crear` | 11 | V263 | — |
