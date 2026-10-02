@@ -42,10 +42,10 @@ class BoletinPreescolarTest {
             "evidencia4_titulo", "evidencia4_fecha", "evidencia4_archivo",
             "evidencia5_titulo", "evidencia5_fecha", "evidencia5_archivo",
             "evidencia6_titulo", "evidencia6_fecha", "evidencia6_archivo",
-            "rector_nombre", "rector_documento");
+            "rector_nombre", "rector_documento", "escudo_archivo", "departamento", "jornada", "tipo_documento");
 
     private static final List<String> IMAGENES = List.of(
-            "fondo_archivo", "foto_archivo",
+            "fondo_archivo", "escudo_archivo", "foto_archivo",
             "evidencia1_archivo", "evidencia2_archivo", "evidencia3_archivo",
             "evidencia4_archivo", "evidencia5_archivo", "evidencia6_archivo");
 
@@ -66,14 +66,18 @@ class BoletinPreescolarTest {
     /** Una fila como la que devuelve fn_informe_boletin_preescolar. */
     private Map<String, Object> fila(String estudiante, boolean conObservacion, int evidencias) {
         Map<String, Object> f = new LinkedHashMap<>();
-        f.put("ee_nombre", "Institucion Educativa Fundacion Pies Descalzos");
+        f.put("ee_nombre", "Institución Educativa Fundación Pies Descalzos Villas de Aranjuez");
         f.put("ee_dane", "113001800019");
         f.put("ee_nit", "9018038088");
         f.put("ciudad", "Cartagena");
         f.put("sede_nombre", "Sede principal");
         f.put("nivel_ensenanza", "Preescolar");
         f.put("grado_nombre", "Jardin I");
-        f.put("grupo_etiqueta", "101 Tarde");
+        f.put("grupo_etiqueta", "-101");
+        f.put("jornada", "TARDE");
+        f.put("tipo_documento", "RC");
+        f.put("departamento", "Bolívar");
+        f.put("escudo_archivo", 902L);
         f.put("periodo_nombre", "Segundo periodo");
         f.put("anio", 2026);
         f.put("fondo_archivo", 900L);
@@ -81,7 +85,7 @@ class BoletinPreescolarTest {
         f.put("documento", "1234567890");
         f.put("foto_archivo", 901L);
         // El titulo del bloque no es fijo, y no es UNA asignatura: es la lista
-        // de las que el estudiante cursa, unidas en una linea (V468).
+        // de las que el estudiante cursa, unidas en una linea (V541).
         f.put("asignatura_nombre", "Comunicacion y exploracion, Valores, Corporalidad");
         f.put("observacion", conObservacion
                 ? "Durante este segundo periodo, el estudiante ha demostrado avances "
@@ -239,6 +243,29 @@ class BoletinPreescolarTest {
             return jpeg(400, 300, new Color((int) (pk * 37 % 200), 120, 180));
         } catch (Exception e) {
             return null;
+        }
+    }
+
+    @Test
+    void cadaFondoRealCombinaColores() throws Exception {
+        // Los 14 fondos institucionales de images/: la paleta sale de cada uno.
+        java.nio.file.Path dir = java.nio.file.Path.of("..", "images", "fondos");
+        org.junit.jupiter.api.Assumptions.assumeTrue(java.nio.file.Files.isDirectory(dir));
+        for (int i = 1; i <= 14; i++) {
+            java.nio.file.Path f = dir.resolve("fondo" + i).resolve("boletinOficio.jpg");
+            if (!java.nio.file.Files.exists(f)) {
+                continue;
+            }
+            byte[] fondo = java.nio.file.Files.readAllBytes(f);
+            Map<String, Object> corto = fila("NATALIA ANDREA CARPINTERO C", true, 3);
+            corto.put("ee_nombre", "colegio chino");
+            corto.put("escudo_archivo", null);
+            List<Map<String, Object>> rows = List.of(fila("BRAYAN DE JESUS ALFARO BARRERA", true, 4), corto);
+            byte[] pdf = new PdfRenderer().render(
+                    "boletin-preescolar", definicion(), rows, new ReportMeta("test", Map.of()),
+                    null, pk -> pk != null && pk == 900L ? fondo : jpegOVacio(pk));
+            volcar("boletin-fondo" + i, pdf);
+            assertEquals(2, paginas(pdf));
         }
     }
 

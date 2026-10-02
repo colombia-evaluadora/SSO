@@ -549,6 +549,7 @@ reporting:
         - pdf
       image-fields:
         - fondo_archivo
+        - escudo_archivo
         - foto_archivo
         - evidencia1_archivo
         - evidencia2_archivo
@@ -592,6 +593,10 @@ reporting:
         evidencia6_titulo: Evidencia 6
         evidencia6_fecha: Fecha evidencia 6
         evidencia6_archivo: Foto evidencia 6
+        escudo_archivo: Escudo
+        departamento: Departamento
+        jornada: Jornada
+        tipo_documento: Tipo de documento
         rector_nombre: Rector
         rector_documento: Documento del rector
 
