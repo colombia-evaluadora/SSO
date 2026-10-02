@@ -87,20 +87,31 @@ COMMENT ON FUNCTION academico_test.fn_solicitud_aprobacion_creadas()
 -- ---------------------------------------------------------------------------
 -- Regla 55: solicitud de corrección de un resultado (la decide fn_actividad_nota_guardar_interno, V496.6)
 -- ---------------------------------------------------------------------------
+DROP FUNCTION IF EXISTS academico_test.fn_actividad_resultado_correccion_solicitar_interno(BIGINT, BIGINT, NUMERIC);
+
 CREATE OR REPLACE FUNCTION academico_test.fn_actividad_resultado_correccion_solicitar_interno(
     p_pk_usuario_solicitante   BIGINT,
     p_pk_tactividad_estudiante BIGINT,
-    p_porcentaje               NUMERIC
+    p_porcentaje               NUMERIC,
+    p_captura                  JSONB
 )
 RETURNS BIGINT
 LANGUAGE sql
 AS $$
+    -- Las capturas se acumulan sobre la pendiente: en bloque la rúbrica y la
+    -- lista de cotejo se corrigen un criterio o un elemento a la vez.
     SELECT academico_test.fn_solicitud_aprobacion_crear_interno(
                p_pk_usuario_solicitante, 'CORRECCION_RESULTADO', 'TACTIVIDAD_ESTUDIANTE', ae.PK_TACTIVIDAD_ESTUDIANTE,
                m.FK_TGRUPO, a.FK_TASIGNATURA,
                academico_test.fn_actividad_periodo_evaluacion(a.PK_TACTIVIDAD, ae.FK_TMATRICULA), a.PK_TACTIVIDAD,
                jsonb_build_object('porcentaje', n.CALIFICACION),
-               jsonb_build_object('porcentaje', p_porcentaje))
+               jsonb_build_object('porcentaje', p_porcentaje,
+                                  'capturas', COALESCE((
+                                      SELECT s.VALOR_PROPUESTO->'capturas' FROM academico_test.TSOLICITUD_APROBACION s
+                                       WHERE s.TABLA_OBJETO = 'TACTIVIDAD_ESTUDIANTE' AND s.FK_OBJETO = ae.PK_TACTIVIDAD_ESTUDIANTE
+                                         AND s.FK_TLV_TIPO = academico_test.fn_tlv_solicitud_tipo_pk('CORRECCION_RESULTADO')
+                                         AND s.FK_TLV_ESTADO = academico_test.fn_tlv_solicitud_estado_pk('PENDIENTE')
+                                         AND s.ACTIVE = TRUE), '[]'::jsonb) || jsonb_build_array(p_captura)))
       FROM academico_test.TACTIVIDAD_ESTUDIANTE ae
       JOIN academico_test.TACTIVIDAD a  ON a.PK_TACTIVIDAD = ae.FK_TACTIVIDAD
       JOIN academico_test.TMATRICULA m  ON m.PK_TMATRICULA = ae.FK_TMATRICULA
@@ -109,8 +120,70 @@ AS $$
      WHERE ae.PK_TACTIVIDAD_ESTUDIANTE = p_pk_tactividad_estudiante;
 $$;
 
-COMMENT ON FUNCTION academico_test.fn_actividad_resultado_correccion_solicitar_interno(BIGINT, BIGINT, NUMERIC)
-    IS 'INTERNO: abre (o actualiza) la solicitud CORRECCION_RESULTADO con la nota vigente y la propuesta (Regla 55). Devuelve su PK. La usa fn_actividad_nota_guardar_interno.';
+COMMENT ON FUNCTION academico_test.fn_actividad_resultado_correccion_solicitar_interno(BIGINT, BIGINT, NUMERIC, JSONB)
+    IS 'INTERNO: abre (o actualiza) la solicitud CORRECCION_RESULTADO con la nota vigente y la propuesta (Regla 55): {porcentaje, capturas:[{operacion,...}]}, capturas acumuladas en orden. Devuelve su PK. La usa fn_actividad_resultado_correccion_diferir_interno.';
+
+CREATE OR REPLACE FUNCTION academico_test.fn_actividad_resultado_correccion_diferir_interno(
+    p_pk_usuario_solicitante   BIGINT,
+    p_pk_tactividad_estudiante BIGINT,
+    p_porcentaje               NUMERIC,
+    p_captura                  JSONB
+)
+RETURNS NUMERIC
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    PERFORM academico_test.fn_actividad_resultado_correccion_solicitar_interno(
+        p_pk_usuario_solicitante, p_pk_tactividad_estudiante, p_porcentaje, p_captura);
+    -- Regla 55: mientras se aprueba manda el valor anterior.
+    RETURN (SELECT n.CALIFICACION FROM academico_test.TACTIVIDAD_NOTA n
+             WHERE n.FK_TACTIVIDAD_ESTUDIANTE = p_pk_tactividad_estudiante AND n.ACTIVE = TRUE);
+END;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_actividad_resultado_correccion_diferir_interno(BIGINT, BIGINT, NUMERIC, JSONB)
+    IS 'INTERNO: tras revertir una captura que exige aprobación (PA055 de fn_actividad_nota_guardar_interno), abre la solicitud con la captura propuesta y devuelve la nota vigente. La usan fn_actividad_nota_calificar_interno y los calificar en bloque.';
+
+CREATE OR REPLACE FUNCTION academico_test.fn_actividad_resultado_correccion_reaplicar_interno(
+    p_pk_usuario_solicitante   BIGINT,
+    p_pk_tactividad_estudiante BIGINT,
+    p_capturas                 JSONB
+)
+RETURNS NUMERIC
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_c   JSONB;
+    v_pct NUMERIC;
+BEGIN
+    -- Ya aprobada: la captura se repite con el núcleo de siempre sin volver a pedirla.
+    PERFORM set_config('academico_test.aprobacion_en_curso', 'on', TRUE);
+    FOR v_c IN SELECT * FROM jsonb_array_elements(p_capturas) LOOP
+        CASE v_c->>'operacion'
+            WHEN 'CALIFICAR' THEN
+                v_pct := academico_test.fn_actividad_nota_calificar_interno(
+                             p_pk_usuario_solicitante, p_pk_tactividad_estudiante, v_c->'calificacion', CURRENT_DATE);
+            WHEN 'RUBRICA_CRITERIO' THEN
+                PERFORM academico_test.fn_actividad_rubrica_captura_guardar(p_pk_usuario_solicitante, p_pk_tactividad_estudiante,
+                    (v_c->>'pkCriterio')::BIGINT, (v_c->>'pkNivel')::BIGINT);
+                v_pct := academico_test.fn_actividad_nota_guardar_interno(p_pk_usuario_solicitante, p_pk_tactividad_estudiante,
+                             academico_test.fn_actividad_nota_rubrica_recalcular(p_pk_tactividad_estudiante));
+            WHEN 'COTEJO_ITEM' THEN
+                PERFORM academico_test.fn_actividad_cotejo_captura_guardar(p_pk_usuario_solicitante, p_pk_tactividad_estudiante,
+                    (v_c->>'pkItem')::BIGINT, v_c->>'cumplido');
+                v_pct := academico_test.fn_actividad_nota_guardar_interno(p_pk_usuario_solicitante, p_pk_tactividad_estudiante,
+                             academico_test.fn_actividad_nota_cotejo_recalcular(p_pk_tactividad_estudiante));
+            ELSE
+                RAISE EXCEPTION 'La solicitud trae una captura desconocida (%)', v_c->>'operacion' USING ERRCODE = '22023';
+        END CASE;
+    END LOOP;
+    PERFORM set_config('academico_test.aprobacion_en_curso', 'off', TRUE);
+    RETURN v_pct;
+END;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_actividad_resultado_correccion_reaplicar_interno(BIGINT, BIGINT, JSONB)
+    IS 'INTERNO: repite, en orden, las capturas de una corrección de resultado ya aprobada (CALIFICAR, RUBRICA_CRITERIO, COTEJO_ITEM) y devuelve la nota resultante. La usa fn_solicitud_aprobacion_aprobar_interno.';
 
 -- ---------------------------------------------------------------------------
 -- Recuperación: combinar sin redondear (redondea una sola vez quien escribe)
@@ -563,9 +636,13 @@ BEGIN
         v_resultado := academico_test.fn_actividad_recuperacion_consolidar_interno(
                            p_pk_usuario_solicitante, v_s.FK_OBJETO, (v_p->>'excluir')::BIGINT);
     ELSIF v_tipo = 'CORRECCION_RESULTADO' THEN
+        -- Una solicitud sin captura guardada solo trae el porcentaje.
         v_resultado := jsonb_build_object('aplicada', TRUE, 'porcentaje',
-                           academico_test.fn_actividad_nota_aplicar_interno(
-                               p_pk_usuario_solicitante, v_s.FK_OBJETO, (v_p->>'porcentaje')::NUMERIC));
+                           CASE WHEN jsonb_typeof(v_p->'capturas') = 'array'
+                                THEN academico_test.fn_actividad_resultado_correccion_reaplicar_interno(
+                                         p_pk_usuario_solicitante, v_s.FK_OBJETO, v_p->'capturas')
+                                ELSE academico_test.fn_actividad_nota_aplicar_interno(
+                                         p_pk_usuario_solicitante, v_s.FK_OBJETO, (v_p->>'porcentaje')::NUMERIC) END);
     ELSE
         PERFORM academico_test.fn_asistencia_editar_interno(
             v_s.FK_OBJETO, v_s.FK_TGRUPO, (v_p->>'tipoAsistencia')::NUMERIC, v_p->>'observacion',

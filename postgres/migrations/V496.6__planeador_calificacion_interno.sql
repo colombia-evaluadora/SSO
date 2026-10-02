@@ -325,16 +325,18 @@ DECLARE
                          academico_test.fn_actividad_estudiante_actividad(p_pk_tactividad_estudiante), p_porcentaje);
 BEGIN
     PERFORM academico_test.fn_actividad_validar_permite_calificar(p_pk_tactividad_estudiante);
-    -- La rama de aprobación exige su tabla (V496.18): V496.9 ejecuta esta función
-    -- al migrar una base limpia, antes de que exista. Se compara ya redondeado:
-    -- el mismo número digitado otra vez no es una corrección.
+    -- Regla 55: con aprobación pendiente tampoco vale la captura, y ya se
+    -- escribió. Se aborta con PA055 (porcentaje en DETAIL) para que quien
+    -- capturó lo atrape, revierta y abra la solicitud. Se compara ya
+    -- redondeado: el mismo número otra vez no es una corrección. Al aprobar,
+    -- la captura se repite con academico_test.aprobacion_en_curso = 'on'.
     IF v_pct IS NOT NULL
        AND to_regclass('academico_test.tsolicitud_aprobacion') IS NOT NULL
+       AND current_setting('academico_test.aprobacion_en_curso', TRUE) IS DISTINCT FROM 'on'
        AND academico_test.fn_resultado_correccion_requiere_aprobacion(p_pk_tactividad_estudiante, v_pct) IS TRUE THEN
-        PERFORM academico_test.fn_actividad_resultado_correccion_solicitar_interno(
-            p_pk_usuario_solicitante, p_pk_tactividad_estudiante, v_pct);
-        RETURN (SELECT n.CALIFICACION FROM academico_test.TACTIVIDAD_NOTA n
-                 WHERE n.FK_TACTIVIDAD_ESTUDIANTE = p_pk_tactividad_estudiante AND n.ACTIVE = TRUE);
+        RAISE EXCEPTION 'Corregir el resultado de % requiere aprobación del Coordinador académico',
+            academico_test.fn_actividad_estudiante_etiqueta(p_pk_tactividad_estudiante)
+            USING ERRCODE = 'PA055', DETAIL = v_pct::TEXT;
     END IF;
     -- Redondea una sola vez quien escribe.
     RETURN academico_test.fn_actividad_nota_aplicar_interno(p_pk_usuario_solicitante, p_pk_tactividad_estudiante, p_porcentaje);
@@ -567,13 +569,15 @@ RETURNS NUMERIC
 LANGUAGE plpgsql
 AS $$
 DECLARE
-    v_pk BIGINT := academico_test.fn_actividad_estudiante_actividad(p_pk_tactividad_estudiante);
+    v_pk  BIGINT := academico_test.fn_actividad_estudiante_actividad(p_pk_tactividad_estudiante);
+    v_pct TEXT;
 BEGIN
     PERFORM academico_test.fn_actividad_validar_calificacion(p_pk_tactividad_estudiante, p_fecha);
     IF p_calificacion IS NULL OR jsonb_typeof(p_calificacion) <> 'object' THEN
         RAISE EXCEPTION 'La calificación de % no tiene el formato esperado',
             academico_test.fn_actividad_etiqueta(v_pk) USING ERRCODE = '22023';
     END IF;
+    BEGIN
     CASE academico_test.fn_actividad_instrumento_efectivo(v_pk)
         WHEN 'RUBRICA' THEN
             RETURN academico_test.fn_actividad_nota_calificar_rubrica_interno(
@@ -603,6 +607,12 @@ BEGIN
             RETURN academico_test.fn_actividad_nota_calificar_otro_interno(
                 p_pk_usuario_solicitante, p_pk_tactividad_estudiante, (p_calificacion->>'porcentaje')::NUMERIC);
     END CASE;
+    EXCEPTION WHEN SQLSTATE 'PA055' THEN
+        GET STACKED DIAGNOSTICS v_pct = PG_EXCEPTION_DETAIL;
+        RETURN academico_test.fn_actividad_resultado_correccion_diferir_interno(p_pk_usuario_solicitante,
+            p_pk_tactividad_estudiante, v_pct::NUMERIC,
+            jsonb_build_object('operacion', 'CALIFICAR', 'calificacion', p_calificacion));
+    END;
 END;
 $$;
 
@@ -626,6 +636,7 @@ DECLARE
     v_total INT;
     v_ae    BIGINT;
     v_pct   NUMERIC;
+    v_det   TEXT;
 BEGIN
     PERFORM academico_test.fn_actividad_validar_calificable(p_pk_tactividad);
     PERFORM academico_test.fn_actividad_validar_instrumento(p_pk_tactividad, 'RUBRICA');
@@ -634,10 +645,19 @@ BEGIN
     SELECT COUNT(*) INTO v_total FROM academico_test.TACTIVIDAD_RUBRICA_CRITERIO
      WHERE FK_TACTIVIDAD = p_pk_tactividad AND ACTIVE = TRUE;
     FOREACH v_ae IN ARRAY p_pk_tactividad_estudiante LOOP
-        PERFORM academico_test.fn_actividad_rubrica_captura_guardar(p_pk_usuario_solicitante, v_ae, p_pk_criterio, p_pk_nivel);
-        -- Los demás criterios ya capturados no se tocan; la nota sale al completarlos.
-        v_pct := academico_test.fn_actividad_nota_guardar_interno(p_pk_usuario_solicitante, v_ae,
-                     academico_test.fn_actividad_nota_rubrica_recalcular(v_ae));
+        BEGIN
+            PERFORM academico_test.fn_actividad_rubrica_captura_guardar(p_pk_usuario_solicitante, v_ae, p_pk_criterio, p_pk_nivel);
+            -- Los demás criterios ya capturados no se tocan; la nota sale al completarlos.
+            v_pct := academico_test.fn_actividad_nota_guardar_interno(p_pk_usuario_solicitante, v_ae,
+                         academico_test.fn_actividad_nota_rubrica_recalcular(v_ae));
+            calificacion_actualizada := v_pct IS NOT NULL;
+        EXCEPTION WHEN SQLSTATE 'PA055' THEN
+            GET STACKED DIAGNOSTICS v_det = PG_EXCEPTION_DETAIL;
+            v_pct := academico_test.fn_actividad_resultado_correccion_diferir_interno(p_pk_usuario_solicitante, v_ae,
+                         v_det::NUMERIC, jsonb_build_object('operacion', 'RUBRICA_CRITERIO',
+                                                            'pkCriterio', p_pk_criterio, 'pkNivel', p_pk_nivel));
+            calificacion_actualizada := FALSE;
+        END;
         pk_tactividad_estudiante := v_ae;
         criterios_totales        := v_total;
         criterios_cubiertos      := (SELECT COUNT(*) FROM academico_test.TACTIVIDAD_RUBRICA_EVALUACION re
@@ -646,7 +666,6 @@ BEGIN
                                         AND c.FK_TACTIVIDAD = p_pk_tactividad AND c.ACTIVE = TRUE
                                       WHERE re.FK_TACTIVIDAD_ESTUDIANTE = v_ae AND re.ACTIVE = TRUE);
         calificacion             := v_pct;
-        calificacion_actualizada := v_pct IS NOT NULL;
         RETURN NEXT;
     END LOOP;
 END;
@@ -667,6 +686,7 @@ AS $$
 DECLARE
     v_total INT;
     v_ae    BIGINT;
+    v_det   TEXT;
 BEGIN
     PERFORM academico_test.fn_actividad_validar_calificable(p_pk_tactividad);
     PERFORM academico_test.fn_actividad_validar_instrumento(p_pk_tactividad, 'LISTA_COTEJO');
@@ -676,10 +696,17 @@ BEGIN
     SELECT COUNT(*) INTO v_total FROM academico_test.TACTIVIDAD_COTEJO_ITEM
      WHERE FK_TACTIVIDAD = p_pk_tactividad AND ACTIVE = TRUE;
     FOREACH v_ae IN ARRAY p_pk_tactividad_estudiante LOOP
-        PERFORM academico_test.fn_actividad_cotejo_captura_guardar(p_pk_usuario_solicitante, v_ae, p_pk_item, p_cumplido);
-        -- Un elemento sin captura cuenta como no cumplido: siempre hay nota.
-        calificacion := academico_test.fn_actividad_nota_guardar_interno(p_pk_usuario_solicitante, v_ae,
-                            academico_test.fn_actividad_nota_cotejo_recalcular(v_ae));
+        BEGIN
+            PERFORM academico_test.fn_actividad_cotejo_captura_guardar(p_pk_usuario_solicitante, v_ae, p_pk_item, p_cumplido);
+            -- Un elemento sin captura cuenta como no cumplido: siempre hay nota.
+            calificacion := academico_test.fn_actividad_nota_guardar_interno(p_pk_usuario_solicitante, v_ae,
+                                academico_test.fn_actividad_nota_cotejo_recalcular(v_ae));
+        EXCEPTION WHEN SQLSTATE 'PA055' THEN
+            GET STACKED DIAGNOSTICS v_det = PG_EXCEPTION_DETAIL;
+            calificacion := academico_test.fn_actividad_resultado_correccion_diferir_interno(p_pk_usuario_solicitante, v_ae,
+                                v_det::NUMERIC, jsonb_build_object('operacion', 'COTEJO_ITEM',
+                                                                   'pkItem', p_pk_item, 'cumplido', p_cumplido));
+        END;
         pk_tactividad_estudiante := v_ae;
         items_totales            := v_total;
         items_cumplidos          := (SELECT COUNT(*) FROM academico_test.TACTIVIDAD_COTEJO_EVALUACION ce
@@ -709,6 +736,7 @@ DECLARE
     v_criterios JSONB := CASE WHEN jsonb_typeof(p_criterios) = 'null' THEN NULL ELSE p_criterios END;
     v_n         INT;
     v_ae        BIGINT;
+    v_det       TEXT;
 BEGIN
     PERFORM academico_test.fn_actividad_validar_calificable(p_pk_tactividad);
     PERFORM academico_test.fn_actividad_validar_instrumento(p_pk_tactividad, 'ESCALA_VALORACION');
@@ -728,9 +756,18 @@ BEGIN
     END IF;
     FOREACH v_ae IN ARRAY p_pk_tactividad_estudiante LOOP
         pk_tactividad_estudiante := v_ae;
-        calificacion := CASE WHEN v_criterios IS NOT NULL
-            THEN academico_test.fn_actividad_nota_calificar_escala_criterios_interno(p_pk_usuario_solicitante, v_ae, v_criterios)
-            ELSE academico_test.fn_actividad_nota_calificar_escala_interno(p_pk_usuario_solicitante, v_ae, p_pk_nivel, p_valor_numerico)
+        BEGIN
+            calificacion := CASE WHEN v_criterios IS NOT NULL
+                THEN academico_test.fn_actividad_nota_calificar_escala_criterios_interno(p_pk_usuario_solicitante, v_ae, v_criterios)
+                ELSE academico_test.fn_actividad_nota_calificar_escala_interno(p_pk_usuario_solicitante, v_ae, p_pk_nivel, p_valor_numerico)
+            END;
+        EXCEPTION WHEN SQLSTATE 'PA055' THEN
+            GET STACKED DIAGNOSTICS v_det = PG_EXCEPTION_DETAIL;
+            -- Se guarda con la forma del calificar individual, que es la que se repite al aprobar.
+            calificacion := academico_test.fn_actividad_resultado_correccion_diferir_interno(p_pk_usuario_solicitante, v_ae,
+                                v_det::NUMERIC, jsonb_build_object('operacion', 'CALIFICAR', 'calificacion',
+                                    CASE WHEN v_criterios IS NOT NULL THEN jsonb_build_object('criterios', v_criterios)
+                                         ELSE jsonb_strip_nulls(jsonb_build_object('pkNivel', p_pk_nivel, 'valorNumerico', p_valor_numerico)) END));
         END;
         RETURN NEXT;
     END LOOP;
@@ -1559,9 +1596,9 @@ COMMENT ON FUNCTION academico_test.fn_actividad_nota_rubrica_recalcular(BIGINT)
 COMMENT ON FUNCTION academico_test.fn_actividad_nota_cotejo_recalcular(BIGINT)
     IS 'INTERNO: nota (0-100) de la lista de cotejo: suma de los puntajes cumplidos sobre el total posible (sin puntaje pesa 1), con piso y tope. No escribe.';
 COMMENT ON FUNCTION academico_test.fn_actividad_nota_guardar_interno(BIGINT, BIGINT, NUMERIC)
-    IS 'INTERNO: decide cómo guardar la nota de un estudiante (porcentaje 0-100). Si es una corrección con el periodo de evaluación ya no calificable abre la solicitud CORRECCION_RESULTADO y devuelve la nota vigente sin cambiarla (Reglas 55 y 70); si no, la escribe con fn_actividad_nota_aplicar_interno. Lo usan todos los _interno de calificación, individuales y en bloque.';
+    IS 'INTERNO: decide cómo guardar la nota de un estudiante (porcentaje 0-100). Si es una corrección con el periodo de evaluación ya no calificable lanza PA055 con el porcentaje en DETAIL, para que quien capturó revierta la captura y abra la solicitud (Reglas 55 y 70); si no, la escribe con fn_actividad_nota_aplicar_interno. Con academico_test.aprobacion_en_curso = on (aprobación) escribe directo. Lo usan todos los _interno de calificación, individuales y en bloque.';
 COMMENT ON FUNCTION academico_test.fn_actividad_nota_calificar_interno(BIGINT, BIGINT, JSONB, DATE)
-    IS 'INTERNO: valida la calificación (fn_actividad_validar_calificacion) y la despacha según el instrumento efectivo: {niveles}, {itemsMarcados}, {pkNivel|valorNumerico} o {criterios}, {porcentaje}. Lo usa fn_actividad_nota_calificar.';
+    IS 'INTERNO: valida la calificación (fn_actividad_validar_calificacion) y la despacha según el instrumento efectivo: {niveles}, {itemsMarcados}, {pkNivel|valorNumerico} o {criterios}, {porcentaje}. Si la corrección exige aprobación (PA055) revierte la captura, abre la solicitud con fn_actividad_resultado_correccion_diferir_interno y devuelve la nota vigente. Lo usan fn_actividad_nota_calificar y la aprobación de una corrección.';
 COMMENT ON FUNCTION academico_test.fn_actividad_nota_obtener_interno(BIGINT)
     IS 'INTERNO: detalle de la nota de un estudiante (instrumento, %, captura cruda, soportes, homologación y resultado con etiquetas). Lo usa fn_actividad_nota_obtener.';
 COMMENT ON FUNCTION academico_test.fn_actividad_estudiantes_calificaciones_listar_interno(BIGINT, DATE, VARCHAR)
