@@ -1,7 +1,7 @@
 # Mapa del dominio
 
 **Generado** por `python scripts/generar-mapa.py` — no editar a mano.
-Estado: 457 migraciones (V1–V531), 981 funciones vivas, 66 endpoints vivos. Ultima generacion: 2026-10-01.
+Estado: 459 migraciones (V1–V533), 987 funciones vivas, 66 endpoints vivos. Ultima generacion: 2026-10-01.
 
 Para una **funcion**, la migracion dueña es la que hay que editar: es su ultima escritura viva, no la que la creo.
 
@@ -19,7 +19,7 @@ El detalle exacto (historial, firmas, dependencias) sale de `python .claude/skil
 - [area](#area) — 7 funcion(es), 0 endpoint(s)
 - [asignacion](#asignacion) — 5 funcion(es), 0 endpoint(s)
 - [asignatura](#asignatura) — 13 funcion(es), 0 endpoint(s)
-- [asistencia](#asistencia) — 36 funcion(es), 1 endpoint(s)
+- [asistencia](#asistencia) — 41 funcion(es), 1 endpoint(s)
 - [audit](#audit) — 0 funcion(es), 5 endpoint(s)
 - [audit-table](#audit-table) — 0 funcion(es), 7 endpoint(s)
 - [available](#available) — 1 funcion(es), 0 endpoint(s)
@@ -48,7 +48,7 @@ El detalle exacto (historial, firmas, dependencias) sale de `python .claude/skil
 - [informe](#informe) — 30 funcion(es), 0 endpoint(s)
 - [instrumento](#instrumento) — 2 funcion(es), 0 endpoint(s)
 - [jornada](#jornada) — 1 funcion(es), 0 endpoint(s)
-- [matricula](#matricula) — 48 funcion(es), 0 endpoint(s)
+- [matricula](#matricula) — 49 funcion(es), 0 endpoint(s)
 - [menu](#menu) — 5 funcion(es), 5 endpoint(s)
 - [mi](#mi) — 3 funcion(es), 0 endpoint(s)
 - [microservice](#microservice) — 1 funcion(es), 0 endpoint(s)
@@ -298,7 +298,7 @@ El detalle exacto (historial, firmas, dependencias) sale de `python .claude/skil
 | `academico_test.fn_actividad_referente_tipo_evaluacion` | 1 | V479 | V214.2, V496.5 |
 | `academico_test.fn_actividad_refuerzo_vigente` | 3 | V408 | V496.19 |
 | `academico_test.fn_actividad_resultado_correccion_solicitar_interno` | 3 | V496.19 | V496.6 |
-| `academico_test.fn_actividad_resultado_desde_asistencia_interno` | 5 | V496.6 | V137 |
+| `academico_test.fn_actividad_resultado_desde_asistencia_interno` | 5 | V496.6 | V137, V496.19 |
 | `academico_test.fn_actividad_resultado_estado_set` | 3 | V496.7 | V496.8 |
 | `academico_test.fn_actividad_resultado_estado_set_bulk` | 4 | V496.7 | V496.8 |
 | `academico_test.fn_actividad_resultado_estado_set_bulk_interno` | 4 | V496.6 | V496.7 |
@@ -450,6 +450,8 @@ El detalle exacto (historial, firmas, dependencias) sale de `python .claude/skil
 |---|---|---|---|
 | `academico_test.fn_asistencia_actividades_dia` | 4 | V141 | V221 |
 | `academico_test.fn_asistencia_actividades_programadas` | 6 | V457 | V140 |
+| `academico_test.fn_asistencia_alta_aplicar_interno` | 3 | V496.19 | — |
+| `academico_test.fn_asistencia_alta_solicitar_interno` | 11 | V496.19 | — |
 | `academico_test.fn_asistencia_asignaturas_sesion` | 4 | V141 | V221 |
 | `academico_test.fn_asistencia_assert_puede_ver` | 3 | V136 | V141 |
 | `academico_test.fn_asistencia_bloques_programados` | 4 | V485 | V496.6 |
@@ -460,6 +462,7 @@ El detalle exacto (historial, firmas, dependencias) sale de `python .claude/skil
 | `academico_test.fn_asistencia_editar_bulk` | 7 | V438 | — |
 | `academico_test.fn_asistencia_editar_interno` | 8 | V137 | V138, V496.19 |
 | `academico_test.fn_asistencia_estudiantes_sesion` | 6 | V141 | V221 |
+| `academico_test.fn_asistencia_fecha_requiere_aprobacion` | 2 | V496.18 | V137, V138, V141 |
 | `academico_test.fn_asistencia_franja_bloque` | 5 | V140 | V141, V457 |
 | `academico_test.fn_asistencia_gate_escritura` | 3 | V138 | — |
 | `academico_test.fn_asistencia_grupo_es_formativo` | 1 | V436 | V140, V457 |
@@ -472,9 +475,11 @@ El detalle exacto (historial, firmas, dependencias) sale de `python .claude/skil
 | `academico_test.fn_asistencia_puede_ver_asignatura` | 3 | V136 | V140, V141, V438, V457 |
 | `academico_test.fn_asistencia_registrar_bulk` | 8 | V138 | V221 |
 | `academico_test.fn_asistencia_registrar_bulk_interno` | 8 | V137 | V138 |
+| `academico_test.fn_asistencia_registrar_solicitar_interno` | 9 | V496.19 | V137 |
 | `academico_test.fn_asistencia_resumen_horas` | 6 | V140 | V221 |
 | `academico_test.fn_asistencia_sesiones_programadas` | 7 | V457 | V136, V140, V485 |
-| `academico_test.fn_asistencia_tipo_pk` | 1 | V137 | V136, V450, V469, V496.6 |
+| `academico_test.fn_asistencia_solicitud_pendiente` | 1 | V496.18 | V141, V438, V496.19 |
+| `academico_test.fn_asistencia_tipo_pk` | 1 | V137 | V136, V450, V469, V496.6, V496.19 |
 | `academico_test.fn_asistencia_tipo_prioridad` | 1 | V438 | — |
 | `academico_test.fn_asistencia_validar_contexto` | 3 | V136 | V138 |
 | `academico_test.fn_asistencia_validar_docente_asignado` | 4 | V136 | V138 |
@@ -867,6 +872,7 @@ El detalle exacto (historial, firmas, dependencias) sale de `python .claude/skil
 | `academico_test.fn_matricula_directa_eliminar` | 2 | V166 | V127, V169 |
 | `academico_test.fn_matricula_directa_eliminar_bulk` | 2 | V166 | V127, V169 |
 | `academico_test.fn_matricula_documento_otro_agregar` | 3 | V201 | — |
+| `academico_test.fn_matricula_es_cursando` | 1 | V421 | V422, V496.1, V496.2 |
 | `academico_test.fn_matricula_gate_escritura` | 3 | V40 | V163, V164, V165, V415 |
 | `academico_test.fn_matricula_grupo` | 1 | V40 | V163, V164, V165, V490 |
 | `academico_test.fn_matricula_listar` | 11 | V270 | V127, V206 |
@@ -1084,7 +1090,7 @@ El detalle exacto (historial, firmas, dependencias) sale de `python .claude/skil
 | `/planeador/periodos-evaluacion` | GET | V254 | `fn_docente_periodo_vigente` (V250), `fn_funcionario_actual` (V224), `fn_periodo_usuario_puede_ver` (V37)… |
 | `/planeador/planilla/calificaciones` | GET | V248, V441, V450, V469 | `fn_actividad_asistencia_fecha_resolver` (V496.5), `fn_actividad_buscar_por_pk` (V452), `fn_actividad_en_periodo_eval` (V332)… |
 | `/planeador/planilla/columnas` | GET | V248, V441 | `fn_asignatura_grado_ponderacion_disponible` (V239), `fn_docente_grado_asignatura_listar` (V497), `fn_docente_grupos_listar` (V250)… |
-| `/planeador/referente-curricular` | GET | V278, V422 | `fn_planeador_assert_alcance` (V277), `fn_assert_permiso_seccion` (V370), `fn_get_academico_usuario_id` (V299) |
+| `/planeador/referente-curricular` | GET | V278, V422 | `fn_matricula_es_cursando` (V421), `fn_planeador_assert_alcance` (V277), `fn_assert_permiso_seccion` (V370)… |
 
 | Funcion | Params | Migracion dueña | La usan |
 |---|---|---|---|
