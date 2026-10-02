@@ -110,6 +110,21 @@ class BoletinPreescolarTest {
         return f;
     }
 
+    /** Una "foto" de muestra: fondo de color con un circulo blanco centrado. */
+    private static byte[] foto(int ancho, int alto, Color color) throws Exception {
+        BufferedImage img = new BufferedImage(ancho, alto, BufferedImage.TYPE_INT_RGB);
+        Graphics2D g = img.createGraphics();
+        g.setColor(color);
+        g.fillRect(0, 0, ancho, alto);
+        g.setColor(Color.WHITE);
+        int d = Math.min(ancho, alto) / 2;
+        g.fillOval((ancho - d) / 2, (alto - d) / 2, d, d);
+        g.dispose();
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        ImageIO.write(img, "jpg", out);
+        return out.toByteArray();
+    }
+
     /** Un JPEG de verdad, porque Jasper decodifica la imagen al llenar el reporte. */
     private static byte[] jpeg(int ancho, int alto, Color color) throws Exception {
         BufferedImage img = new BufferedImage(ancho, alto, BufferedImage.TYPE_INT_RGB);
@@ -242,7 +257,11 @@ class BoletinPreescolarTest {
             if (pk == 900L) {
                 return jpeg(613, 894, new Color(0xF5, 0xF0, 0xE0));
             }
-            return jpeg(400, 300, new Color((int) (pk * 37 % 200), 120, 180));
+            // Pares verticales, impares apaisadas, con un circulo: si la foto
+            // se deformara al llenar la tarjeta, el circulo saldria ovalado.
+            boolean vertical = pk % 2 == 0;
+            return foto(vertical ? 300 : 400, vertical ? 400 : 300,
+                    new Color((int) (pk * 37 % 200), 120, 180));
         } catch (Exception e) {
             return null;
         }

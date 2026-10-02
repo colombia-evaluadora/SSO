@@ -288,13 +288,20 @@ SEGUIMIENTO = [
 ]
 
 # ----------------------------------------------------------- evidencias
-# Cuenta por titulo o por foto: V541 las numera 1..n sin huecos, asi que la
-# cantidad dice tambien cuales ranuras estan llenas. Ojo: CellValues.toText
-# convierte el null en "", asi que un titulo vacio NO es una evidencia.
+# Cuenta SOLO las que tienen imagen: una ranura puede llegar sin foto (la
+# descarga fallo o supero el tope) y no debe gastar un hueco. Las que si
+# tienen se compactan: la tarjeta k pinta la k-esima con imagen, cuya
+# posicion original da la variable EVk (Evidencias.indice), y las demas
+# tarjetas se agrandan porque la distribucion es la de la cantidad real.
+ARCHIVOS = ', '.join('$F{evidencia%d_archivo}' % i for i in range(1, 7))
 N_EVIDENCIAS = '(%s)' % ' + '.join(
-    '($F{evidencia%d_archivo} != null || !"".equals($F{evidencia%d_titulo} == null'
-    ' ? "" : $F{evidencia%d_titulo}.trim()) ? 1 : 0)' % (i, i, i)
-    for i in range(1, 7))
+    '($F{evidencia%d_archivo} != null ? 1 : 0)' % i for i in range(1, 7))
+EVIDENCIAS = 'com.co.eurekatic.reporting.render.Evidencias'
+
+
+def _de_la_ranura(n, campo):
+    return '(String) %s.en($V{EV%d}, %s)' % (
+        EVIDENCIAS, n, ', '.join('$F{evidencia%d_%s}' % (i, campo) for i in range(1, 7)))
 
 # El TAMAÑO de cada foto depende de cuantas haya. Jasper no acepta x, y ni
 # ancho por expresion (tampoco en 7.0.8), y una banda tiene alto fijo: por eso
@@ -344,15 +351,20 @@ def evidencias(cantidad):
     elementos = [marco(GY + alto + 12), pildora('EVIDENCIAS DE APRENDIZAJE', 'camara')]
     for n, (fx, fy, fw, fh) in enumerate(tarjetas, start=1):
         elementos.append(rect(fx, fy, fw, fh, TARJETA, radius=6, rol='panel'))
-        elementos.append(img(fx + 4, fy + 4, fw - 8, fh - pie - 4,
-                             '$F{evidencia%d_archivo}' % n))
+        # La foto llena la tarjeta: Evidencias.cubrir la recorta al centro con
+        # la proporcion del hueco y FillFrame la pinta sin deformarla.
+        iw, ih = fw - 8, fh - pie - 4
+        elementos.append(img(fx + 4, fy + 4, iw, ih,
+                             '%s.cubrir(%s.en($V{EV%d}, %s), %d, %d)'
+                             % (EVIDENCIAS, EVIDENCIAS, n, ARCHIVOS, iw, ih),
+                             scale='FillFrame'))
         # La fecha ya viene formateada: CellValues.toText la convierte antes
         # de llegar aqui, igual que en cualquier otro reporte.
         elementos.append(txt(fx + 6, fy + fh - pie, fw - 12, pie - 14,
-                             '$F{evidencia%d_titulo}' % n, size=8 if grande else 7,
+                             _de_la_ranura(n, 'titulo'), size=8 if grande else 7,
                              bold=True, valign='Middle', rol='titulo'))
         elementos.append(txt(fx + 6, fy + fh - 13, fw - 12, 10,
-                             '$F{evidencia%d_fecha}' % n, size=6, align='Right',
+                             _de_la_ranura(n, 'fecha'), size=6, align='Right',
                              color=GRIS, rol='gris'))
     return banda(GY + alto + 14, elementos, when=N_EVIDENCIAS + ' == %d' % cantidad)
 
@@ -416,6 +428,11 @@ decl = ''.join('\t<field name="%s" class="java.lang.String"/>\n' % c for c in ca
 decl += ''.join('\t<field name="%s" class="java.io.InputStream"/>\n' % c
                 for c in ['fondo_archivo', 'escudo_archivo', 'foto_archivo']
                 + ['evidencia%d_archivo' % i for i in range(1, 7)])
+
+# EVk: posicion original (1..6) de la k-esima evidencia con imagen, 0 si no hay.
+decl += ''.join('\t<variable name="EV%d" class="java.lang.Integer" calculation="Nothing">\n'
+                '\t\t<expression><![CDATA[%s.indice(%d, %s)]]></expression>\n'
+                '\t</variable>\n' % (k, EVIDENCIAS, k, ARCHIVOS) for k in range(1, 7))
 
 # Un grupo por estudiante: hoja nueva y numeracion desde 1. V541 da una fila
 # por matricula, asi que documento + nombre no se repite dentro del curso.

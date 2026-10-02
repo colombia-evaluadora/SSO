@@ -85,6 +85,24 @@
 	<field name="evidencia4_archivo" class="java.io.InputStream"/>
 	<field name="evidencia5_archivo" class="java.io.InputStream"/>
 	<field name="evidencia6_archivo" class="java.io.InputStream"/>
+	<variable name="EV1" class="java.lang.Integer" calculation="Nothing">
+		<expression><![CDATA[com.co.eurekatic.reporting.render.Evidencias.indice(1, $F{evidencia1_archivo}, $F{evidencia2_archivo}, $F{evidencia3_archivo}, $F{evidencia4_archivo}, $F{evidencia5_archivo}, $F{evidencia6_archivo})]]></expression>
+	</variable>
+	<variable name="EV2" class="java.lang.Integer" calculation="Nothing">
+		<expression><![CDATA[com.co.eurekatic.reporting.render.Evidencias.indice(2, $F{evidencia1_archivo}, $F{evidencia2_archivo}, $F{evidencia3_archivo}, $F{evidencia4_archivo}, $F{evidencia5_archivo}, $F{evidencia6_archivo})]]></expression>
+	</variable>
+	<variable name="EV3" class="java.lang.Integer" calculation="Nothing">
+		<expression><![CDATA[com.co.eurekatic.reporting.render.Evidencias.indice(3, $F{evidencia1_archivo}, $F{evidencia2_archivo}, $F{evidencia3_archivo}, $F{evidencia4_archivo}, $F{evidencia5_archivo}, $F{evidencia6_archivo})]]></expression>
+	</variable>
+	<variable name="EV4" class="java.lang.Integer" calculation="Nothing">
+		<expression><![CDATA[com.co.eurekatic.reporting.render.Evidencias.indice(4, $F{evidencia1_archivo}, $F{evidencia2_archivo}, $F{evidencia3_archivo}, $F{evidencia4_archivo}, $F{evidencia5_archivo}, $F{evidencia6_archivo})]]></expression>
+	</variable>
+	<variable name="EV5" class="java.lang.Integer" calculation="Nothing">
+		<expression><![CDATA[com.co.eurekatic.reporting.render.Evidencias.indice(5, $F{evidencia1_archivo}, $F{evidencia2_archivo}, $F{evidencia3_archivo}, $F{evidencia4_archivo}, $F{evidencia5_archivo}, $F{evidencia6_archivo})]]></expression>
+	</variable>
+	<variable name="EV6" class="java.lang.Integer" calculation="Nothing">
+		<expression><![CDATA[com.co.eurekatic.reporting.render.Evidencias.indice(6, $F{evidencia1_archivo}, $F{evidencia2_archivo}, $F{evidencia3_archivo}, $F{evidencia4_archivo}, $F{evidencia5_archivo}, $F{evidencia6_archivo})]]></expression>
+	</variable>
 	<group name="boletin" startNewPage="true" resetPageNumber="true">
 		<expression><![CDATA[$F{documento} + "|" + $F{estudiante}]]></expression>
 	</group>
@@ -265,7 +283,7 @@
 		<band height="10" splitType="Prevent">
 		</band>
 		<band height="354" splitType="Prevent">
-			<printWhenExpression><![CDATA[(($F{evidencia1_archivo} != null || !"".equals($F{evidencia1_titulo} == null ? "" : $F{evidencia1_titulo}.trim()) ? 1 : 0) + ($F{evidencia2_archivo} != null || !"".equals($F{evidencia2_titulo} == null ? "" : $F{evidencia2_titulo}.trim()) ? 1 : 0) + ($F{evidencia3_archivo} != null || !"".equals($F{evidencia3_titulo} == null ? "" : $F{evidencia3_titulo}.trim()) ? 1 : 0) + ($F{evidencia4_archivo} != null || !"".equals($F{evidencia4_titulo} == null ? "" : $F{evidencia4_titulo}.trim()) ? 1 : 0) + ($F{evidencia5_archivo} != null || !"".equals($F{evidencia5_titulo} == null ? "" : $F{evidencia5_titulo}.trim()) ? 1 : 0) + ($F{evidencia6_archivo} != null || !"".equals($F{evidencia6_titulo} == null ? "" : $F{evidencia6_titulo}.trim()) ? 1 : 0)) == 1]]></printWhenExpression>
+			<printWhenExpression><![CDATA[(($F{evidencia1_archivo} != null ? 1 : 0) + ($F{evidencia2_archivo} != null ? 1 : 0) + ($F{evidencia3_archivo} != null ? 1 : 0) + ($F{evidencia4_archivo} != null ? 1 : 0) + ($F{evidencia5_archivo} != null ? 1 : 0) + ($F{evidencia6_archivo} != null ? 1 : 0)) == 1]]></printWhenExpression>
 			<element kind="rectangle" x="16" y="11" width="581" height="341" mode="Transparent" radius="12" stretchType="ContainerBottom" forecolor="#16305C">
 				<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "acento")]]></propertyExpression>
 				<pen lineWidth="1.25"/>
@@ -286,20 +304,20 @@
 				<propertyExpression name="net.sf.jasperreports.style.backcolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "panel")]]></propertyExpression>
 				<pen lineWidth="0.0"/>
 			</element>
-			<element kind="image" x="100" y="34" width="412" height="270" scaleImage="RetainShape" hImageAlign="Center" vImageAlign="Middle" onErrorType="Blank">
-				<expression><![CDATA[$F{evidencia1_archivo}]]></expression>
+			<element kind="image" x="100" y="34" width="412" height="270" scaleImage="FillFrame" hImageAlign="Center" vImageAlign="Middle" onErrorType="Blank">
+				<expression><![CDATA[com.co.eurekatic.reporting.render.Evidencias.cubrir(com.co.eurekatic.reporting.render.Evidencias.en($V{EV1}, $F{evidencia1_archivo}, $F{evidencia2_archivo}, $F{evidencia3_archivo}, $F{evidencia4_archivo}, $F{evidencia5_archivo}, $F{evidencia6_archivo}), 412, 270)]]></expression>
 			</element>
 			<element kind="textField" x="102" y="304" width="408" height="22" fontName="DejaVu Sans" fontSize="8" forecolor="#16305C" hTextAlign="Left" vTextAlign="Middle" bold="true" blankWhenNull="true">
 				<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "titulo")]]></propertyExpression>
-				<expression><![CDATA[$F{evidencia1_titulo}]]></expression>
+				<expression><![CDATA[(String) com.co.eurekatic.reporting.render.Evidencias.en($V{EV1}, $F{evidencia1_titulo}, $F{evidencia2_titulo}, $F{evidencia3_titulo}, $F{evidencia4_titulo}, $F{evidencia5_titulo}, $F{evidencia6_titulo})]]></expression>
 			</element>
 			<element kind="textField" x="102" y="327" width="408" height="10" fontName="DejaVu Sans" fontSize="6" forecolor="#5A6B85" hTextAlign="Right" vTextAlign="Top" blankWhenNull="true">
 				<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "gris")]]></propertyExpression>
-				<expression><![CDATA[$F{evidencia1_fecha}]]></expression>
+				<expression><![CDATA[(String) com.co.eurekatic.reporting.render.Evidencias.en($V{EV1}, $F{evidencia1_fecha}, $F{evidencia2_fecha}, $F{evidencia3_fecha}, $F{evidencia4_fecha}, $F{evidencia5_fecha}, $F{evidencia6_fecha})]]></expression>
 			</element>
 		</band>
 		<band height="304" splitType="Prevent">
-			<printWhenExpression><![CDATA[(($F{evidencia1_archivo} != null || !"".equals($F{evidencia1_titulo} == null ? "" : $F{evidencia1_titulo}.trim()) ? 1 : 0) + ($F{evidencia2_archivo} != null || !"".equals($F{evidencia2_titulo} == null ? "" : $F{evidencia2_titulo}.trim()) ? 1 : 0) + ($F{evidencia3_archivo} != null || !"".equals($F{evidencia3_titulo} == null ? "" : $F{evidencia3_titulo}.trim()) ? 1 : 0) + ($F{evidencia4_archivo} != null || !"".equals($F{evidencia4_titulo} == null ? "" : $F{evidencia4_titulo}.trim()) ? 1 : 0) + ($F{evidencia5_archivo} != null || !"".equals($F{evidencia5_titulo} == null ? "" : $F{evidencia5_titulo}.trim()) ? 1 : 0) + ($F{evidencia6_archivo} != null || !"".equals($F{evidencia6_titulo} == null ? "" : $F{evidencia6_titulo}.trim()) ? 1 : 0)) == 2]]></printWhenExpression>
+			<printWhenExpression><![CDATA[(($F{evidencia1_archivo} != null ? 1 : 0) + ($F{evidencia2_archivo} != null ? 1 : 0) + ($F{evidencia3_archivo} != null ? 1 : 0) + ($F{evidencia4_archivo} != null ? 1 : 0) + ($F{evidencia5_archivo} != null ? 1 : 0) + ($F{evidencia6_archivo} != null ? 1 : 0)) == 2]]></printWhenExpression>
 			<element kind="rectangle" x="16" y="11" width="581" height="291" mode="Transparent" radius="12" stretchType="ContainerBottom" forecolor="#16305C">
 				<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "acento")]]></propertyExpression>
 				<pen lineWidth="1.25"/>
@@ -320,35 +338,35 @@
 				<propertyExpression name="net.sf.jasperreports.style.backcolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "panel")]]></propertyExpression>
 				<pen lineWidth="0.0"/>
 			</element>
-			<element kind="image" x="28" y="34" width="269" height="220" scaleImage="RetainShape" hImageAlign="Center" vImageAlign="Middle" onErrorType="Blank">
-				<expression><![CDATA[$F{evidencia1_archivo}]]></expression>
+			<element kind="image" x="28" y="34" width="269" height="220" scaleImage="FillFrame" hImageAlign="Center" vImageAlign="Middle" onErrorType="Blank">
+				<expression><![CDATA[com.co.eurekatic.reporting.render.Evidencias.cubrir(com.co.eurekatic.reporting.render.Evidencias.en($V{EV1}, $F{evidencia1_archivo}, $F{evidencia2_archivo}, $F{evidencia3_archivo}, $F{evidencia4_archivo}, $F{evidencia5_archivo}, $F{evidencia6_archivo}), 269, 220)]]></expression>
 			</element>
 			<element kind="textField" x="30" y="254" width="265" height="22" fontName="DejaVu Sans" fontSize="8" forecolor="#16305C" hTextAlign="Left" vTextAlign="Middle" bold="true" blankWhenNull="true">
 				<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "titulo")]]></propertyExpression>
-				<expression><![CDATA[$F{evidencia1_titulo}]]></expression>
+				<expression><![CDATA[(String) com.co.eurekatic.reporting.render.Evidencias.en($V{EV1}, $F{evidencia1_titulo}, $F{evidencia2_titulo}, $F{evidencia3_titulo}, $F{evidencia4_titulo}, $F{evidencia5_titulo}, $F{evidencia6_titulo})]]></expression>
 			</element>
 			<element kind="textField" x="30" y="277" width="265" height="10" fontName="DejaVu Sans" fontSize="6" forecolor="#5A6B85" hTextAlign="Right" vTextAlign="Top" blankWhenNull="true">
 				<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "gris")]]></propertyExpression>
-				<expression><![CDATA[$F{evidencia1_fecha}]]></expression>
+				<expression><![CDATA[(String) com.co.eurekatic.reporting.render.Evidencias.en($V{EV1}, $F{evidencia1_fecha}, $F{evidencia2_fecha}, $F{evidencia3_fecha}, $F{evidencia4_fecha}, $F{evidencia5_fecha}, $F{evidencia6_fecha})]]></expression>
 			</element>
 			<element kind="rectangle" x="311" y="30" width="277" height="260" backcolor="#F2F6FC" mode="Opaque" radius="6">
 				<propertyExpression name="net.sf.jasperreports.style.backcolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "panel")]]></propertyExpression>
 				<pen lineWidth="0.0"/>
 			</element>
-			<element kind="image" x="315" y="34" width="269" height="220" scaleImage="RetainShape" hImageAlign="Center" vImageAlign="Middle" onErrorType="Blank">
-				<expression><![CDATA[$F{evidencia2_archivo}]]></expression>
+			<element kind="image" x="315" y="34" width="269" height="220" scaleImage="FillFrame" hImageAlign="Center" vImageAlign="Middle" onErrorType="Blank">
+				<expression><![CDATA[com.co.eurekatic.reporting.render.Evidencias.cubrir(com.co.eurekatic.reporting.render.Evidencias.en($V{EV2}, $F{evidencia1_archivo}, $F{evidencia2_archivo}, $F{evidencia3_archivo}, $F{evidencia4_archivo}, $F{evidencia5_archivo}, $F{evidencia6_archivo}), 269, 220)]]></expression>
 			</element>
 			<element kind="textField" x="317" y="254" width="265" height="22" fontName="DejaVu Sans" fontSize="8" forecolor="#16305C" hTextAlign="Left" vTextAlign="Middle" bold="true" blankWhenNull="true">
 				<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "titulo")]]></propertyExpression>
-				<expression><![CDATA[$F{evidencia2_titulo}]]></expression>
+				<expression><![CDATA[(String) com.co.eurekatic.reporting.render.Evidencias.en($V{EV2}, $F{evidencia1_titulo}, $F{evidencia2_titulo}, $F{evidencia3_titulo}, $F{evidencia4_titulo}, $F{evidencia5_titulo}, $F{evidencia6_titulo})]]></expression>
 			</element>
 			<element kind="textField" x="317" y="277" width="265" height="10" fontName="DejaVu Sans" fontSize="6" forecolor="#5A6B85" hTextAlign="Right" vTextAlign="Top" blankWhenNull="true">
 				<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "gris")]]></propertyExpression>
-				<expression><![CDATA[$F{evidencia2_fecha}]]></expression>
+				<expression><![CDATA[(String) com.co.eurekatic.reporting.render.Evidencias.en($V{EV2}, $F{evidencia1_fecha}, $F{evidencia2_fecha}, $F{evidencia3_fecha}, $F{evidencia4_fecha}, $F{evidencia5_fecha}, $F{evidencia6_fecha})]]></expression>
 			</element>
 		</band>
 		<band height="334" splitType="Prevent">
-			<printWhenExpression><![CDATA[(($F{evidencia1_archivo} != null || !"".equals($F{evidencia1_titulo} == null ? "" : $F{evidencia1_titulo}.trim()) ? 1 : 0) + ($F{evidencia2_archivo} != null || !"".equals($F{evidencia2_titulo} == null ? "" : $F{evidencia2_titulo}.trim()) ? 1 : 0) + ($F{evidencia3_archivo} != null || !"".equals($F{evidencia3_titulo} == null ? "" : $F{evidencia3_titulo}.trim()) ? 1 : 0) + ($F{evidencia4_archivo} != null || !"".equals($F{evidencia4_titulo} == null ? "" : $F{evidencia4_titulo}.trim()) ? 1 : 0) + ($F{evidencia5_archivo} != null || !"".equals($F{evidencia5_titulo} == null ? "" : $F{evidencia5_titulo}.trim()) ? 1 : 0) + ($F{evidencia6_archivo} != null || !"".equals($F{evidencia6_titulo} == null ? "" : $F{evidencia6_titulo}.trim()) ? 1 : 0)) == 3]]></printWhenExpression>
+			<printWhenExpression><![CDATA[(($F{evidencia1_archivo} != null ? 1 : 0) + ($F{evidencia2_archivo} != null ? 1 : 0) + ($F{evidencia3_archivo} != null ? 1 : 0) + ($F{evidencia4_archivo} != null ? 1 : 0) + ($F{evidencia5_archivo} != null ? 1 : 0) + ($F{evidencia6_archivo} != null ? 1 : 0)) == 3]]></printWhenExpression>
 			<element kind="rectangle" x="16" y="11" width="581" height="321" mode="Transparent" radius="12" stretchType="ContainerBottom" forecolor="#16305C">
 				<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "acento")]]></propertyExpression>
 				<pen lineWidth="1.25"/>
@@ -369,50 +387,50 @@
 				<propertyExpression name="net.sf.jasperreports.style.backcolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "panel")]]></propertyExpression>
 				<pen lineWidth="0.0"/>
 			</element>
-			<element kind="image" x="28" y="34" width="269" height="250" scaleImage="RetainShape" hImageAlign="Center" vImageAlign="Middle" onErrorType="Blank">
-				<expression><![CDATA[$F{evidencia1_archivo}]]></expression>
+			<element kind="image" x="28" y="34" width="269" height="250" scaleImage="FillFrame" hImageAlign="Center" vImageAlign="Middle" onErrorType="Blank">
+				<expression><![CDATA[com.co.eurekatic.reporting.render.Evidencias.cubrir(com.co.eurekatic.reporting.render.Evidencias.en($V{EV1}, $F{evidencia1_archivo}, $F{evidencia2_archivo}, $F{evidencia3_archivo}, $F{evidencia4_archivo}, $F{evidencia5_archivo}, $F{evidencia6_archivo}), 269, 250)]]></expression>
 			</element>
 			<element kind="textField" x="30" y="284" width="265" height="22" fontName="DejaVu Sans" fontSize="8" forecolor="#16305C" hTextAlign="Left" vTextAlign="Middle" bold="true" blankWhenNull="true">
 				<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "titulo")]]></propertyExpression>
-				<expression><![CDATA[$F{evidencia1_titulo}]]></expression>
+				<expression><![CDATA[(String) com.co.eurekatic.reporting.render.Evidencias.en($V{EV1}, $F{evidencia1_titulo}, $F{evidencia2_titulo}, $F{evidencia3_titulo}, $F{evidencia4_titulo}, $F{evidencia5_titulo}, $F{evidencia6_titulo})]]></expression>
 			</element>
 			<element kind="textField" x="30" y="307" width="265" height="10" fontName="DejaVu Sans" fontSize="6" forecolor="#5A6B85" hTextAlign="Right" vTextAlign="Top" blankWhenNull="true">
 				<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "gris")]]></propertyExpression>
-				<expression><![CDATA[$F{evidencia1_fecha}]]></expression>
+				<expression><![CDATA[(String) com.co.eurekatic.reporting.render.Evidencias.en($V{EV1}, $F{evidencia1_fecha}, $F{evidencia2_fecha}, $F{evidencia3_fecha}, $F{evidencia4_fecha}, $F{evidencia5_fecha}, $F{evidencia6_fecha})]]></expression>
 			</element>
 			<element kind="rectangle" x="311" y="30" width="277" height="140" backcolor="#F2F6FC" mode="Opaque" radius="6">
 				<propertyExpression name="net.sf.jasperreports.style.backcolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "panel")]]></propertyExpression>
 				<pen lineWidth="0.0"/>
 			</element>
-			<element kind="image" x="315" y="34" width="269" height="100" scaleImage="RetainShape" hImageAlign="Center" vImageAlign="Middle" onErrorType="Blank">
-				<expression><![CDATA[$F{evidencia2_archivo}]]></expression>
+			<element kind="image" x="315" y="34" width="269" height="100" scaleImage="FillFrame" hImageAlign="Center" vImageAlign="Middle" onErrorType="Blank">
+				<expression><![CDATA[com.co.eurekatic.reporting.render.Evidencias.cubrir(com.co.eurekatic.reporting.render.Evidencias.en($V{EV2}, $F{evidencia1_archivo}, $F{evidencia2_archivo}, $F{evidencia3_archivo}, $F{evidencia4_archivo}, $F{evidencia5_archivo}, $F{evidencia6_archivo}), 269, 100)]]></expression>
 			</element>
 			<element kind="textField" x="317" y="134" width="265" height="22" fontName="DejaVu Sans" fontSize="8" forecolor="#16305C" hTextAlign="Left" vTextAlign="Middle" bold="true" blankWhenNull="true">
 				<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "titulo")]]></propertyExpression>
-				<expression><![CDATA[$F{evidencia2_titulo}]]></expression>
+				<expression><![CDATA[(String) com.co.eurekatic.reporting.render.Evidencias.en($V{EV2}, $F{evidencia1_titulo}, $F{evidencia2_titulo}, $F{evidencia3_titulo}, $F{evidencia4_titulo}, $F{evidencia5_titulo}, $F{evidencia6_titulo})]]></expression>
 			</element>
 			<element kind="textField" x="317" y="157" width="265" height="10" fontName="DejaVu Sans" fontSize="6" forecolor="#5A6B85" hTextAlign="Right" vTextAlign="Top" blankWhenNull="true">
 				<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "gris")]]></propertyExpression>
-				<expression><![CDATA[$F{evidencia2_fecha}]]></expression>
+				<expression><![CDATA[(String) com.co.eurekatic.reporting.render.Evidencias.en($V{EV2}, $F{evidencia1_fecha}, $F{evidencia2_fecha}, $F{evidencia3_fecha}, $F{evidencia4_fecha}, $F{evidencia5_fecha}, $F{evidencia6_fecha})]]></expression>
 			</element>
 			<element kind="rectangle" x="311" y="180" width="277" height="140" backcolor="#F2F6FC" mode="Opaque" radius="6">
 				<propertyExpression name="net.sf.jasperreports.style.backcolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "panel")]]></propertyExpression>
 				<pen lineWidth="0.0"/>
 			</element>
-			<element kind="image" x="315" y="184" width="269" height="100" scaleImage="RetainShape" hImageAlign="Center" vImageAlign="Middle" onErrorType="Blank">
-				<expression><![CDATA[$F{evidencia3_archivo}]]></expression>
+			<element kind="image" x="315" y="184" width="269" height="100" scaleImage="FillFrame" hImageAlign="Center" vImageAlign="Middle" onErrorType="Blank">
+				<expression><![CDATA[com.co.eurekatic.reporting.render.Evidencias.cubrir(com.co.eurekatic.reporting.render.Evidencias.en($V{EV3}, $F{evidencia1_archivo}, $F{evidencia2_archivo}, $F{evidencia3_archivo}, $F{evidencia4_archivo}, $F{evidencia5_archivo}, $F{evidencia6_archivo}), 269, 100)]]></expression>
 			</element>
 			<element kind="textField" x="317" y="284" width="265" height="22" fontName="DejaVu Sans" fontSize="8" forecolor="#16305C" hTextAlign="Left" vTextAlign="Middle" bold="true" blankWhenNull="true">
 				<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "titulo")]]></propertyExpression>
-				<expression><![CDATA[$F{evidencia3_titulo}]]></expression>
+				<expression><![CDATA[(String) com.co.eurekatic.reporting.render.Evidencias.en($V{EV3}, $F{evidencia1_titulo}, $F{evidencia2_titulo}, $F{evidencia3_titulo}, $F{evidencia4_titulo}, $F{evidencia5_titulo}, $F{evidencia6_titulo})]]></expression>
 			</element>
 			<element kind="textField" x="317" y="307" width="265" height="10" fontName="DejaVu Sans" fontSize="6" forecolor="#5A6B85" hTextAlign="Right" vTextAlign="Top" blankWhenNull="true">
 				<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "gris")]]></propertyExpression>
-				<expression><![CDATA[$F{evidencia3_fecha}]]></expression>
+				<expression><![CDATA[(String) com.co.eurekatic.reporting.render.Evidencias.en($V{EV3}, $F{evidencia1_fecha}, $F{evidencia2_fecha}, $F{evidencia3_fecha}, $F{evidencia4_fecha}, $F{evidencia5_fecha}, $F{evidencia6_fecha})]]></expression>
 			</element>
 		</band>
 		<band height="404" splitType="Prevent">
-			<printWhenExpression><![CDATA[(($F{evidencia1_archivo} != null || !"".equals($F{evidencia1_titulo} == null ? "" : $F{evidencia1_titulo}.trim()) ? 1 : 0) + ($F{evidencia2_archivo} != null || !"".equals($F{evidencia2_titulo} == null ? "" : $F{evidencia2_titulo}.trim()) ? 1 : 0) + ($F{evidencia3_archivo} != null || !"".equals($F{evidencia3_titulo} == null ? "" : $F{evidencia3_titulo}.trim()) ? 1 : 0) + ($F{evidencia4_archivo} != null || !"".equals($F{evidencia4_titulo} == null ? "" : $F{evidencia4_titulo}.trim()) ? 1 : 0) + ($F{evidencia5_archivo} != null || !"".equals($F{evidencia5_titulo} == null ? "" : $F{evidencia5_titulo}.trim()) ? 1 : 0) + ($F{evidencia6_archivo} != null || !"".equals($F{evidencia6_titulo} == null ? "" : $F{evidencia6_titulo}.trim()) ? 1 : 0)) == 4]]></printWhenExpression>
+			<printWhenExpression><![CDATA[(($F{evidencia1_archivo} != null ? 1 : 0) + ($F{evidencia2_archivo} != null ? 1 : 0) + ($F{evidencia3_archivo} != null ? 1 : 0) + ($F{evidencia4_archivo} != null ? 1 : 0) + ($F{evidencia5_archivo} != null ? 1 : 0) + ($F{evidencia6_archivo} != null ? 1 : 0)) == 4]]></printWhenExpression>
 			<element kind="rectangle" x="16" y="11" width="581" height="391" mode="Transparent" radius="12" stretchType="ContainerBottom" forecolor="#16305C">
 				<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "acento")]]></propertyExpression>
 				<pen lineWidth="1.25"/>
@@ -433,65 +451,65 @@
 				<propertyExpression name="net.sf.jasperreports.style.backcolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "panel")]]></propertyExpression>
 				<pen lineWidth="0.0"/>
 			</element>
-			<element kind="image" x="28" y="34" width="269" height="139" scaleImage="RetainShape" hImageAlign="Center" vImageAlign="Middle" onErrorType="Blank">
-				<expression><![CDATA[$F{evidencia1_archivo}]]></expression>
+			<element kind="image" x="28" y="34" width="269" height="139" scaleImage="FillFrame" hImageAlign="Center" vImageAlign="Middle" onErrorType="Blank">
+				<expression><![CDATA[com.co.eurekatic.reporting.render.Evidencias.cubrir(com.co.eurekatic.reporting.render.Evidencias.en($V{EV1}, $F{evidencia1_archivo}, $F{evidencia2_archivo}, $F{evidencia3_archivo}, $F{evidencia4_archivo}, $F{evidencia5_archivo}, $F{evidencia6_archivo}), 269, 139)]]></expression>
 			</element>
 			<element kind="textField" x="30" y="173" width="265" height="18" fontName="DejaVu Sans" fontSize="7" forecolor="#16305C" hTextAlign="Left" vTextAlign="Middle" bold="true" blankWhenNull="true">
 				<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "titulo")]]></propertyExpression>
-				<expression><![CDATA[$F{evidencia1_titulo}]]></expression>
+				<expression><![CDATA[(String) com.co.eurekatic.reporting.render.Evidencias.en($V{EV1}, $F{evidencia1_titulo}, $F{evidencia2_titulo}, $F{evidencia3_titulo}, $F{evidencia4_titulo}, $F{evidencia5_titulo}, $F{evidencia6_titulo})]]></expression>
 			</element>
 			<element kind="textField" x="30" y="192" width="265" height="10" fontName="DejaVu Sans" fontSize="6" forecolor="#5A6B85" hTextAlign="Right" vTextAlign="Top" blankWhenNull="true">
 				<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "gris")]]></propertyExpression>
-				<expression><![CDATA[$F{evidencia1_fecha}]]></expression>
+				<expression><![CDATA[(String) com.co.eurekatic.reporting.render.Evidencias.en($V{EV1}, $F{evidencia1_fecha}, $F{evidencia2_fecha}, $F{evidencia3_fecha}, $F{evidencia4_fecha}, $F{evidencia5_fecha}, $F{evidencia6_fecha})]]></expression>
 			</element>
 			<element kind="rectangle" x="311" y="30" width="277" height="175" backcolor="#F2F6FC" mode="Opaque" radius="6">
 				<propertyExpression name="net.sf.jasperreports.style.backcolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "panel")]]></propertyExpression>
 				<pen lineWidth="0.0"/>
 			</element>
-			<element kind="image" x="315" y="34" width="269" height="139" scaleImage="RetainShape" hImageAlign="Center" vImageAlign="Middle" onErrorType="Blank">
-				<expression><![CDATA[$F{evidencia2_archivo}]]></expression>
+			<element kind="image" x="315" y="34" width="269" height="139" scaleImage="FillFrame" hImageAlign="Center" vImageAlign="Middle" onErrorType="Blank">
+				<expression><![CDATA[com.co.eurekatic.reporting.render.Evidencias.cubrir(com.co.eurekatic.reporting.render.Evidencias.en($V{EV2}, $F{evidencia1_archivo}, $F{evidencia2_archivo}, $F{evidencia3_archivo}, $F{evidencia4_archivo}, $F{evidencia5_archivo}, $F{evidencia6_archivo}), 269, 139)]]></expression>
 			</element>
 			<element kind="textField" x="317" y="173" width="265" height="18" fontName="DejaVu Sans" fontSize="7" forecolor="#16305C" hTextAlign="Left" vTextAlign="Middle" bold="true" blankWhenNull="true">
 				<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "titulo")]]></propertyExpression>
-				<expression><![CDATA[$F{evidencia2_titulo}]]></expression>
+				<expression><![CDATA[(String) com.co.eurekatic.reporting.render.Evidencias.en($V{EV2}, $F{evidencia1_titulo}, $F{evidencia2_titulo}, $F{evidencia3_titulo}, $F{evidencia4_titulo}, $F{evidencia5_titulo}, $F{evidencia6_titulo})]]></expression>
 			</element>
 			<element kind="textField" x="317" y="192" width="265" height="10" fontName="DejaVu Sans" fontSize="6" forecolor="#5A6B85" hTextAlign="Right" vTextAlign="Top" blankWhenNull="true">
 				<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "gris")]]></propertyExpression>
-				<expression><![CDATA[$F{evidencia2_fecha}]]></expression>
+				<expression><![CDATA[(String) com.co.eurekatic.reporting.render.Evidencias.en($V{EV2}, $F{evidencia1_fecha}, $F{evidencia2_fecha}, $F{evidencia3_fecha}, $F{evidencia4_fecha}, $F{evidencia5_fecha}, $F{evidencia6_fecha})]]></expression>
 			</element>
 			<element kind="rectangle" x="24" y="215" width="277" height="175" backcolor="#F2F6FC" mode="Opaque" radius="6">
 				<propertyExpression name="net.sf.jasperreports.style.backcolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "panel")]]></propertyExpression>
 				<pen lineWidth="0.0"/>
 			</element>
-			<element kind="image" x="28" y="219" width="269" height="139" scaleImage="RetainShape" hImageAlign="Center" vImageAlign="Middle" onErrorType="Blank">
-				<expression><![CDATA[$F{evidencia3_archivo}]]></expression>
+			<element kind="image" x="28" y="219" width="269" height="139" scaleImage="FillFrame" hImageAlign="Center" vImageAlign="Middle" onErrorType="Blank">
+				<expression><![CDATA[com.co.eurekatic.reporting.render.Evidencias.cubrir(com.co.eurekatic.reporting.render.Evidencias.en($V{EV3}, $F{evidencia1_archivo}, $F{evidencia2_archivo}, $F{evidencia3_archivo}, $F{evidencia4_archivo}, $F{evidencia5_archivo}, $F{evidencia6_archivo}), 269, 139)]]></expression>
 			</element>
 			<element kind="textField" x="30" y="358" width="265" height="18" fontName="DejaVu Sans" fontSize="7" forecolor="#16305C" hTextAlign="Left" vTextAlign="Middle" bold="true" blankWhenNull="true">
 				<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "titulo")]]></propertyExpression>
-				<expression><![CDATA[$F{evidencia3_titulo}]]></expression>
+				<expression><![CDATA[(String) com.co.eurekatic.reporting.render.Evidencias.en($V{EV3}, $F{evidencia1_titulo}, $F{evidencia2_titulo}, $F{evidencia3_titulo}, $F{evidencia4_titulo}, $F{evidencia5_titulo}, $F{evidencia6_titulo})]]></expression>
 			</element>
 			<element kind="textField" x="30" y="377" width="265" height="10" fontName="DejaVu Sans" fontSize="6" forecolor="#5A6B85" hTextAlign="Right" vTextAlign="Top" blankWhenNull="true">
 				<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "gris")]]></propertyExpression>
-				<expression><![CDATA[$F{evidencia3_fecha}]]></expression>
+				<expression><![CDATA[(String) com.co.eurekatic.reporting.render.Evidencias.en($V{EV3}, $F{evidencia1_fecha}, $F{evidencia2_fecha}, $F{evidencia3_fecha}, $F{evidencia4_fecha}, $F{evidencia5_fecha}, $F{evidencia6_fecha})]]></expression>
 			</element>
 			<element kind="rectangle" x="311" y="215" width="277" height="175" backcolor="#F2F6FC" mode="Opaque" radius="6">
 				<propertyExpression name="net.sf.jasperreports.style.backcolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "panel")]]></propertyExpression>
 				<pen lineWidth="0.0"/>
 			</element>
-			<element kind="image" x="315" y="219" width="269" height="139" scaleImage="RetainShape" hImageAlign="Center" vImageAlign="Middle" onErrorType="Blank">
-				<expression><![CDATA[$F{evidencia4_archivo}]]></expression>
+			<element kind="image" x="315" y="219" width="269" height="139" scaleImage="FillFrame" hImageAlign="Center" vImageAlign="Middle" onErrorType="Blank">
+				<expression><![CDATA[com.co.eurekatic.reporting.render.Evidencias.cubrir(com.co.eurekatic.reporting.render.Evidencias.en($V{EV4}, $F{evidencia1_archivo}, $F{evidencia2_archivo}, $F{evidencia3_archivo}, $F{evidencia4_archivo}, $F{evidencia5_archivo}, $F{evidencia6_archivo}), 269, 139)]]></expression>
 			</element>
 			<element kind="textField" x="317" y="358" width="265" height="18" fontName="DejaVu Sans" fontSize="7" forecolor="#16305C" hTextAlign="Left" vTextAlign="Middle" bold="true" blankWhenNull="true">
 				<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "titulo")]]></propertyExpression>
-				<expression><![CDATA[$F{evidencia4_titulo}]]></expression>
+				<expression><![CDATA[(String) com.co.eurekatic.reporting.render.Evidencias.en($V{EV4}, $F{evidencia1_titulo}, $F{evidencia2_titulo}, $F{evidencia3_titulo}, $F{evidencia4_titulo}, $F{evidencia5_titulo}, $F{evidencia6_titulo})]]></expression>
 			</element>
 			<element kind="textField" x="317" y="377" width="265" height="10" fontName="DejaVu Sans" fontSize="6" forecolor="#5A6B85" hTextAlign="Right" vTextAlign="Top" blankWhenNull="true">
 				<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "gris")]]></propertyExpression>
-				<expression><![CDATA[$F{evidencia4_fecha}]]></expression>
+				<expression><![CDATA[(String) com.co.eurekatic.reporting.render.Evidencias.en($V{EV4}, $F{evidencia1_fecha}, $F{evidencia2_fecha}, $F{evidencia3_fecha}, $F{evidencia4_fecha}, $F{evidencia5_fecha}, $F{evidencia6_fecha})]]></expression>
 			</element>
 		</band>
 		<band height="384" splitType="Prevent">
-			<printWhenExpression><![CDATA[(($F{evidencia1_archivo} != null || !"".equals($F{evidencia1_titulo} == null ? "" : $F{evidencia1_titulo}.trim()) ? 1 : 0) + ($F{evidencia2_archivo} != null || !"".equals($F{evidencia2_titulo} == null ? "" : $F{evidencia2_titulo}.trim()) ? 1 : 0) + ($F{evidencia3_archivo} != null || !"".equals($F{evidencia3_titulo} == null ? "" : $F{evidencia3_titulo}.trim()) ? 1 : 0) + ($F{evidencia4_archivo} != null || !"".equals($F{evidencia4_titulo} == null ? "" : $F{evidencia4_titulo}.trim()) ? 1 : 0) + ($F{evidencia5_archivo} != null || !"".equals($F{evidencia5_titulo} == null ? "" : $F{evidencia5_titulo}.trim()) ? 1 : 0) + ($F{evidencia6_archivo} != null || !"".equals($F{evidencia6_titulo} == null ? "" : $F{evidencia6_titulo}.trim()) ? 1 : 0)) == 5]]></printWhenExpression>
+			<printWhenExpression><![CDATA[(($F{evidencia1_archivo} != null ? 1 : 0) + ($F{evidencia2_archivo} != null ? 1 : 0) + ($F{evidencia3_archivo} != null ? 1 : 0) + ($F{evidencia4_archivo} != null ? 1 : 0) + ($F{evidencia5_archivo} != null ? 1 : 0) + ($F{evidencia6_archivo} != null ? 1 : 0)) == 5]]></printWhenExpression>
 			<element kind="rectangle" x="16" y="11" width="581" height="371" mode="Transparent" radius="12" stretchType="ContainerBottom" forecolor="#16305C">
 				<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "acento")]]></propertyExpression>
 				<pen lineWidth="1.25"/>
@@ -512,80 +530,80 @@
 				<propertyExpression name="net.sf.jasperreports.style.backcolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "panel")]]></propertyExpression>
 				<pen lineWidth="0.0"/>
 			</element>
-			<element kind="image" x="29" y="34" width="173" height="129" scaleImage="RetainShape" hImageAlign="Center" vImageAlign="Middle" onErrorType="Blank">
-				<expression><![CDATA[$F{evidencia1_archivo}]]></expression>
+			<element kind="image" x="29" y="34" width="173" height="129" scaleImage="FillFrame" hImageAlign="Center" vImageAlign="Middle" onErrorType="Blank">
+				<expression><![CDATA[com.co.eurekatic.reporting.render.Evidencias.cubrir(com.co.eurekatic.reporting.render.Evidencias.en($V{EV1}, $F{evidencia1_archivo}, $F{evidencia2_archivo}, $F{evidencia3_archivo}, $F{evidencia4_archivo}, $F{evidencia5_archivo}, $F{evidencia6_archivo}), 173, 129)]]></expression>
 			</element>
 			<element kind="textField" x="31" y="163" width="169" height="18" fontName="DejaVu Sans" fontSize="7" forecolor="#16305C" hTextAlign="Left" vTextAlign="Middle" bold="true" blankWhenNull="true">
 				<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "titulo")]]></propertyExpression>
-				<expression><![CDATA[$F{evidencia1_titulo}]]></expression>
+				<expression><![CDATA[(String) com.co.eurekatic.reporting.render.Evidencias.en($V{EV1}, $F{evidencia1_titulo}, $F{evidencia2_titulo}, $F{evidencia3_titulo}, $F{evidencia4_titulo}, $F{evidencia5_titulo}, $F{evidencia6_titulo})]]></expression>
 			</element>
 			<element kind="textField" x="31" y="182" width="169" height="10" fontName="DejaVu Sans" fontSize="6" forecolor="#5A6B85" hTextAlign="Right" vTextAlign="Top" blankWhenNull="true">
 				<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "gris")]]></propertyExpression>
-				<expression><![CDATA[$F{evidencia1_fecha}]]></expression>
+				<expression><![CDATA[(String) com.co.eurekatic.reporting.render.Evidencias.en($V{EV1}, $F{evidencia1_fecha}, $F{evidencia2_fecha}, $F{evidencia3_fecha}, $F{evidencia4_fecha}, $F{evidencia5_fecha}, $F{evidencia6_fecha})]]></expression>
 			</element>
 			<element kind="rectangle" x="216" y="30" width="181" height="165" backcolor="#F2F6FC" mode="Opaque" radius="6">
 				<propertyExpression name="net.sf.jasperreports.style.backcolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "panel")]]></propertyExpression>
 				<pen lineWidth="0.0"/>
 			</element>
-			<element kind="image" x="220" y="34" width="173" height="129" scaleImage="RetainShape" hImageAlign="Center" vImageAlign="Middle" onErrorType="Blank">
-				<expression><![CDATA[$F{evidencia2_archivo}]]></expression>
+			<element kind="image" x="220" y="34" width="173" height="129" scaleImage="FillFrame" hImageAlign="Center" vImageAlign="Middle" onErrorType="Blank">
+				<expression><![CDATA[com.co.eurekatic.reporting.render.Evidencias.cubrir(com.co.eurekatic.reporting.render.Evidencias.en($V{EV2}, $F{evidencia1_archivo}, $F{evidencia2_archivo}, $F{evidencia3_archivo}, $F{evidencia4_archivo}, $F{evidencia5_archivo}, $F{evidencia6_archivo}), 173, 129)]]></expression>
 			</element>
 			<element kind="textField" x="222" y="163" width="169" height="18" fontName="DejaVu Sans" fontSize="7" forecolor="#16305C" hTextAlign="Left" vTextAlign="Middle" bold="true" blankWhenNull="true">
 				<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "titulo")]]></propertyExpression>
-				<expression><![CDATA[$F{evidencia2_titulo}]]></expression>
+				<expression><![CDATA[(String) com.co.eurekatic.reporting.render.Evidencias.en($V{EV2}, $F{evidencia1_titulo}, $F{evidencia2_titulo}, $F{evidencia3_titulo}, $F{evidencia4_titulo}, $F{evidencia5_titulo}, $F{evidencia6_titulo})]]></expression>
 			</element>
 			<element kind="textField" x="222" y="182" width="169" height="10" fontName="DejaVu Sans" fontSize="6" forecolor="#5A6B85" hTextAlign="Right" vTextAlign="Top" blankWhenNull="true">
 				<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "gris")]]></propertyExpression>
-				<expression><![CDATA[$F{evidencia2_fecha}]]></expression>
+				<expression><![CDATA[(String) com.co.eurekatic.reporting.render.Evidencias.en($V{EV2}, $F{evidencia1_fecha}, $F{evidencia2_fecha}, $F{evidencia3_fecha}, $F{evidencia4_fecha}, $F{evidencia5_fecha}, $F{evidencia6_fecha})]]></expression>
 			</element>
 			<element kind="rectangle" x="407" y="30" width="181" height="165" backcolor="#F2F6FC" mode="Opaque" radius="6">
 				<propertyExpression name="net.sf.jasperreports.style.backcolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "panel")]]></propertyExpression>
 				<pen lineWidth="0.0"/>
 			</element>
-			<element kind="image" x="411" y="34" width="173" height="129" scaleImage="RetainShape" hImageAlign="Center" vImageAlign="Middle" onErrorType="Blank">
-				<expression><![CDATA[$F{evidencia3_archivo}]]></expression>
+			<element kind="image" x="411" y="34" width="173" height="129" scaleImage="FillFrame" hImageAlign="Center" vImageAlign="Middle" onErrorType="Blank">
+				<expression><![CDATA[com.co.eurekatic.reporting.render.Evidencias.cubrir(com.co.eurekatic.reporting.render.Evidencias.en($V{EV3}, $F{evidencia1_archivo}, $F{evidencia2_archivo}, $F{evidencia3_archivo}, $F{evidencia4_archivo}, $F{evidencia5_archivo}, $F{evidencia6_archivo}), 173, 129)]]></expression>
 			</element>
 			<element kind="textField" x="413" y="163" width="169" height="18" fontName="DejaVu Sans" fontSize="7" forecolor="#16305C" hTextAlign="Left" vTextAlign="Middle" bold="true" blankWhenNull="true">
 				<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "titulo")]]></propertyExpression>
-				<expression><![CDATA[$F{evidencia3_titulo}]]></expression>
+				<expression><![CDATA[(String) com.co.eurekatic.reporting.render.Evidencias.en($V{EV3}, $F{evidencia1_titulo}, $F{evidencia2_titulo}, $F{evidencia3_titulo}, $F{evidencia4_titulo}, $F{evidencia5_titulo}, $F{evidencia6_titulo})]]></expression>
 			</element>
 			<element kind="textField" x="413" y="182" width="169" height="10" fontName="DejaVu Sans" fontSize="6" forecolor="#5A6B85" hTextAlign="Right" vTextAlign="Top" blankWhenNull="true">
 				<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "gris")]]></propertyExpression>
-				<expression><![CDATA[$F{evidencia3_fecha}]]></expression>
+				<expression><![CDATA[(String) com.co.eurekatic.reporting.render.Evidencias.en($V{EV3}, $F{evidencia1_fecha}, $F{evidencia2_fecha}, $F{evidencia3_fecha}, $F{evidencia4_fecha}, $F{evidencia5_fecha}, $F{evidencia6_fecha})]]></expression>
 			</element>
 			<element kind="rectangle" x="120" y="205" width="181" height="165" backcolor="#F2F6FC" mode="Opaque" radius="6">
 				<propertyExpression name="net.sf.jasperreports.style.backcolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "panel")]]></propertyExpression>
 				<pen lineWidth="0.0"/>
 			</element>
-			<element kind="image" x="124" y="209" width="173" height="129" scaleImage="RetainShape" hImageAlign="Center" vImageAlign="Middle" onErrorType="Blank">
-				<expression><![CDATA[$F{evidencia4_archivo}]]></expression>
+			<element kind="image" x="124" y="209" width="173" height="129" scaleImage="FillFrame" hImageAlign="Center" vImageAlign="Middle" onErrorType="Blank">
+				<expression><![CDATA[com.co.eurekatic.reporting.render.Evidencias.cubrir(com.co.eurekatic.reporting.render.Evidencias.en($V{EV4}, $F{evidencia1_archivo}, $F{evidencia2_archivo}, $F{evidencia3_archivo}, $F{evidencia4_archivo}, $F{evidencia5_archivo}, $F{evidencia6_archivo}), 173, 129)]]></expression>
 			</element>
 			<element kind="textField" x="126" y="338" width="169" height="18" fontName="DejaVu Sans" fontSize="7" forecolor="#16305C" hTextAlign="Left" vTextAlign="Middle" bold="true" blankWhenNull="true">
 				<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "titulo")]]></propertyExpression>
-				<expression><![CDATA[$F{evidencia4_titulo}]]></expression>
+				<expression><![CDATA[(String) com.co.eurekatic.reporting.render.Evidencias.en($V{EV4}, $F{evidencia1_titulo}, $F{evidencia2_titulo}, $F{evidencia3_titulo}, $F{evidencia4_titulo}, $F{evidencia5_titulo}, $F{evidencia6_titulo})]]></expression>
 			</element>
 			<element kind="textField" x="126" y="357" width="169" height="10" fontName="DejaVu Sans" fontSize="6" forecolor="#5A6B85" hTextAlign="Right" vTextAlign="Top" blankWhenNull="true">
 				<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "gris")]]></propertyExpression>
-				<expression><![CDATA[$F{evidencia4_fecha}]]></expression>
+				<expression><![CDATA[(String) com.co.eurekatic.reporting.render.Evidencias.en($V{EV4}, $F{evidencia1_fecha}, $F{evidencia2_fecha}, $F{evidencia3_fecha}, $F{evidencia4_fecha}, $F{evidencia5_fecha}, $F{evidencia6_fecha})]]></expression>
 			</element>
 			<element kind="rectangle" x="311" y="205" width="181" height="165" backcolor="#F2F6FC" mode="Opaque" radius="6">
 				<propertyExpression name="net.sf.jasperreports.style.backcolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "panel")]]></propertyExpression>
 				<pen lineWidth="0.0"/>
 			</element>
-			<element kind="image" x="315" y="209" width="173" height="129" scaleImage="RetainShape" hImageAlign="Center" vImageAlign="Middle" onErrorType="Blank">
-				<expression><![CDATA[$F{evidencia5_archivo}]]></expression>
+			<element kind="image" x="315" y="209" width="173" height="129" scaleImage="FillFrame" hImageAlign="Center" vImageAlign="Middle" onErrorType="Blank">
+				<expression><![CDATA[com.co.eurekatic.reporting.render.Evidencias.cubrir(com.co.eurekatic.reporting.render.Evidencias.en($V{EV5}, $F{evidencia1_archivo}, $F{evidencia2_archivo}, $F{evidencia3_archivo}, $F{evidencia4_archivo}, $F{evidencia5_archivo}, $F{evidencia6_archivo}), 173, 129)]]></expression>
 			</element>
 			<element kind="textField" x="317" y="338" width="169" height="18" fontName="DejaVu Sans" fontSize="7" forecolor="#16305C" hTextAlign="Left" vTextAlign="Middle" bold="true" blankWhenNull="true">
 				<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "titulo")]]></propertyExpression>
-				<expression><![CDATA[$F{evidencia5_titulo}]]></expression>
+				<expression><![CDATA[(String) com.co.eurekatic.reporting.render.Evidencias.en($V{EV5}, $F{evidencia1_titulo}, $F{evidencia2_titulo}, $F{evidencia3_titulo}, $F{evidencia4_titulo}, $F{evidencia5_titulo}, $F{evidencia6_titulo})]]></expression>
 			</element>
 			<element kind="textField" x="317" y="357" width="169" height="10" fontName="DejaVu Sans" fontSize="6" forecolor="#5A6B85" hTextAlign="Right" vTextAlign="Top" blankWhenNull="true">
 				<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "gris")]]></propertyExpression>
-				<expression><![CDATA[$F{evidencia5_fecha}]]></expression>
+				<expression><![CDATA[(String) com.co.eurekatic.reporting.render.Evidencias.en($V{EV5}, $F{evidencia1_fecha}, $F{evidencia2_fecha}, $F{evidencia3_fecha}, $F{evidencia4_fecha}, $F{evidencia5_fecha}, $F{evidencia6_fecha})]]></expression>
 			</element>
 		</band>
 		<band height="384" splitType="Prevent">
-			<printWhenExpression><![CDATA[(($F{evidencia1_archivo} != null || !"".equals($F{evidencia1_titulo} == null ? "" : $F{evidencia1_titulo}.trim()) ? 1 : 0) + ($F{evidencia2_archivo} != null || !"".equals($F{evidencia2_titulo} == null ? "" : $F{evidencia2_titulo}.trim()) ? 1 : 0) + ($F{evidencia3_archivo} != null || !"".equals($F{evidencia3_titulo} == null ? "" : $F{evidencia3_titulo}.trim()) ? 1 : 0) + ($F{evidencia4_archivo} != null || !"".equals($F{evidencia4_titulo} == null ? "" : $F{evidencia4_titulo}.trim()) ? 1 : 0) + ($F{evidencia5_archivo} != null || !"".equals($F{evidencia5_titulo} == null ? "" : $F{evidencia5_titulo}.trim()) ? 1 : 0) + ($F{evidencia6_archivo} != null || !"".equals($F{evidencia6_titulo} == null ? "" : $F{evidencia6_titulo}.trim()) ? 1 : 0)) == 6]]></printWhenExpression>
+			<printWhenExpression><![CDATA[(($F{evidencia1_archivo} != null ? 1 : 0) + ($F{evidencia2_archivo} != null ? 1 : 0) + ($F{evidencia3_archivo} != null ? 1 : 0) + ($F{evidencia4_archivo} != null ? 1 : 0) + ($F{evidencia5_archivo} != null ? 1 : 0) + ($F{evidencia6_archivo} != null ? 1 : 0)) == 6]]></printWhenExpression>
 			<element kind="rectangle" x="16" y="11" width="581" height="371" mode="Transparent" radius="12" stretchType="ContainerBottom" forecolor="#16305C">
 				<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "acento")]]></propertyExpression>
 				<pen lineWidth="1.25"/>
@@ -606,95 +624,95 @@
 				<propertyExpression name="net.sf.jasperreports.style.backcolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "panel")]]></propertyExpression>
 				<pen lineWidth="0.0"/>
 			</element>
-			<element kind="image" x="29" y="34" width="173" height="129" scaleImage="RetainShape" hImageAlign="Center" vImageAlign="Middle" onErrorType="Blank">
-				<expression><![CDATA[$F{evidencia1_archivo}]]></expression>
+			<element kind="image" x="29" y="34" width="173" height="129" scaleImage="FillFrame" hImageAlign="Center" vImageAlign="Middle" onErrorType="Blank">
+				<expression><![CDATA[com.co.eurekatic.reporting.render.Evidencias.cubrir(com.co.eurekatic.reporting.render.Evidencias.en($V{EV1}, $F{evidencia1_archivo}, $F{evidencia2_archivo}, $F{evidencia3_archivo}, $F{evidencia4_archivo}, $F{evidencia5_archivo}, $F{evidencia6_archivo}), 173, 129)]]></expression>
 			</element>
 			<element kind="textField" x="31" y="163" width="169" height="18" fontName="DejaVu Sans" fontSize="7" forecolor="#16305C" hTextAlign="Left" vTextAlign="Middle" bold="true" blankWhenNull="true">
 				<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "titulo")]]></propertyExpression>
-				<expression><![CDATA[$F{evidencia1_titulo}]]></expression>
+				<expression><![CDATA[(String) com.co.eurekatic.reporting.render.Evidencias.en($V{EV1}, $F{evidencia1_titulo}, $F{evidencia2_titulo}, $F{evidencia3_titulo}, $F{evidencia4_titulo}, $F{evidencia5_titulo}, $F{evidencia6_titulo})]]></expression>
 			</element>
 			<element kind="textField" x="31" y="182" width="169" height="10" fontName="DejaVu Sans" fontSize="6" forecolor="#5A6B85" hTextAlign="Right" vTextAlign="Top" blankWhenNull="true">
 				<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "gris")]]></propertyExpression>
-				<expression><![CDATA[$F{evidencia1_fecha}]]></expression>
+				<expression><![CDATA[(String) com.co.eurekatic.reporting.render.Evidencias.en($V{EV1}, $F{evidencia1_fecha}, $F{evidencia2_fecha}, $F{evidencia3_fecha}, $F{evidencia4_fecha}, $F{evidencia5_fecha}, $F{evidencia6_fecha})]]></expression>
 			</element>
 			<element kind="rectangle" x="216" y="30" width="181" height="165" backcolor="#F2F6FC" mode="Opaque" radius="6">
 				<propertyExpression name="net.sf.jasperreports.style.backcolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "panel")]]></propertyExpression>
 				<pen lineWidth="0.0"/>
 			</element>
-			<element kind="image" x="220" y="34" width="173" height="129" scaleImage="RetainShape" hImageAlign="Center" vImageAlign="Middle" onErrorType="Blank">
-				<expression><![CDATA[$F{evidencia2_archivo}]]></expression>
+			<element kind="image" x="220" y="34" width="173" height="129" scaleImage="FillFrame" hImageAlign="Center" vImageAlign="Middle" onErrorType="Blank">
+				<expression><![CDATA[com.co.eurekatic.reporting.render.Evidencias.cubrir(com.co.eurekatic.reporting.render.Evidencias.en($V{EV2}, $F{evidencia1_archivo}, $F{evidencia2_archivo}, $F{evidencia3_archivo}, $F{evidencia4_archivo}, $F{evidencia5_archivo}, $F{evidencia6_archivo}), 173, 129)]]></expression>
 			</element>
 			<element kind="textField" x="222" y="163" width="169" height="18" fontName="DejaVu Sans" fontSize="7" forecolor="#16305C" hTextAlign="Left" vTextAlign="Middle" bold="true" blankWhenNull="true">
 				<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "titulo")]]></propertyExpression>
-				<expression><![CDATA[$F{evidencia2_titulo}]]></expression>
+				<expression><![CDATA[(String) com.co.eurekatic.reporting.render.Evidencias.en($V{EV2}, $F{evidencia1_titulo}, $F{evidencia2_titulo}, $F{evidencia3_titulo}, $F{evidencia4_titulo}, $F{evidencia5_titulo}, $F{evidencia6_titulo})]]></expression>
 			</element>
 			<element kind="textField" x="222" y="182" width="169" height="10" fontName="DejaVu Sans" fontSize="6" forecolor="#5A6B85" hTextAlign="Right" vTextAlign="Top" blankWhenNull="true">
 				<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "gris")]]></propertyExpression>
-				<expression><![CDATA[$F{evidencia2_fecha}]]></expression>
+				<expression><![CDATA[(String) com.co.eurekatic.reporting.render.Evidencias.en($V{EV2}, $F{evidencia1_fecha}, $F{evidencia2_fecha}, $F{evidencia3_fecha}, $F{evidencia4_fecha}, $F{evidencia5_fecha}, $F{evidencia6_fecha})]]></expression>
 			</element>
 			<element kind="rectangle" x="407" y="30" width="181" height="165" backcolor="#F2F6FC" mode="Opaque" radius="6">
 				<propertyExpression name="net.sf.jasperreports.style.backcolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "panel")]]></propertyExpression>
 				<pen lineWidth="0.0"/>
 			</element>
-			<element kind="image" x="411" y="34" width="173" height="129" scaleImage="RetainShape" hImageAlign="Center" vImageAlign="Middle" onErrorType="Blank">
-				<expression><![CDATA[$F{evidencia3_archivo}]]></expression>
+			<element kind="image" x="411" y="34" width="173" height="129" scaleImage="FillFrame" hImageAlign="Center" vImageAlign="Middle" onErrorType="Blank">
+				<expression><![CDATA[com.co.eurekatic.reporting.render.Evidencias.cubrir(com.co.eurekatic.reporting.render.Evidencias.en($V{EV3}, $F{evidencia1_archivo}, $F{evidencia2_archivo}, $F{evidencia3_archivo}, $F{evidencia4_archivo}, $F{evidencia5_archivo}, $F{evidencia6_archivo}), 173, 129)]]></expression>
 			</element>
 			<element kind="textField" x="413" y="163" width="169" height="18" fontName="DejaVu Sans" fontSize="7" forecolor="#16305C" hTextAlign="Left" vTextAlign="Middle" bold="true" blankWhenNull="true">
 				<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "titulo")]]></propertyExpression>
-				<expression><![CDATA[$F{evidencia3_titulo}]]></expression>
+				<expression><![CDATA[(String) com.co.eurekatic.reporting.render.Evidencias.en($V{EV3}, $F{evidencia1_titulo}, $F{evidencia2_titulo}, $F{evidencia3_titulo}, $F{evidencia4_titulo}, $F{evidencia5_titulo}, $F{evidencia6_titulo})]]></expression>
 			</element>
 			<element kind="textField" x="413" y="182" width="169" height="10" fontName="DejaVu Sans" fontSize="6" forecolor="#5A6B85" hTextAlign="Right" vTextAlign="Top" blankWhenNull="true">
 				<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "gris")]]></propertyExpression>
-				<expression><![CDATA[$F{evidencia3_fecha}]]></expression>
+				<expression><![CDATA[(String) com.co.eurekatic.reporting.render.Evidencias.en($V{EV3}, $F{evidencia1_fecha}, $F{evidencia2_fecha}, $F{evidencia3_fecha}, $F{evidencia4_fecha}, $F{evidencia5_fecha}, $F{evidencia6_fecha})]]></expression>
 			</element>
 			<element kind="rectangle" x="25" y="205" width="181" height="165" backcolor="#F2F6FC" mode="Opaque" radius="6">
 				<propertyExpression name="net.sf.jasperreports.style.backcolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "panel")]]></propertyExpression>
 				<pen lineWidth="0.0"/>
 			</element>
-			<element kind="image" x="29" y="209" width="173" height="129" scaleImage="RetainShape" hImageAlign="Center" vImageAlign="Middle" onErrorType="Blank">
-				<expression><![CDATA[$F{evidencia4_archivo}]]></expression>
+			<element kind="image" x="29" y="209" width="173" height="129" scaleImage="FillFrame" hImageAlign="Center" vImageAlign="Middle" onErrorType="Blank">
+				<expression><![CDATA[com.co.eurekatic.reporting.render.Evidencias.cubrir(com.co.eurekatic.reporting.render.Evidencias.en($V{EV4}, $F{evidencia1_archivo}, $F{evidencia2_archivo}, $F{evidencia3_archivo}, $F{evidencia4_archivo}, $F{evidencia5_archivo}, $F{evidencia6_archivo}), 173, 129)]]></expression>
 			</element>
 			<element kind="textField" x="31" y="338" width="169" height="18" fontName="DejaVu Sans" fontSize="7" forecolor="#16305C" hTextAlign="Left" vTextAlign="Middle" bold="true" blankWhenNull="true">
 				<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "titulo")]]></propertyExpression>
-				<expression><![CDATA[$F{evidencia4_titulo}]]></expression>
+				<expression><![CDATA[(String) com.co.eurekatic.reporting.render.Evidencias.en($V{EV4}, $F{evidencia1_titulo}, $F{evidencia2_titulo}, $F{evidencia3_titulo}, $F{evidencia4_titulo}, $F{evidencia5_titulo}, $F{evidencia6_titulo})]]></expression>
 			</element>
 			<element kind="textField" x="31" y="357" width="169" height="10" fontName="DejaVu Sans" fontSize="6" forecolor="#5A6B85" hTextAlign="Right" vTextAlign="Top" blankWhenNull="true">
 				<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "gris")]]></propertyExpression>
-				<expression><![CDATA[$F{evidencia4_fecha}]]></expression>
+				<expression><![CDATA[(String) com.co.eurekatic.reporting.render.Evidencias.en($V{EV4}, $F{evidencia1_fecha}, $F{evidencia2_fecha}, $F{evidencia3_fecha}, $F{evidencia4_fecha}, $F{evidencia5_fecha}, $F{evidencia6_fecha})]]></expression>
 			</element>
 			<element kind="rectangle" x="216" y="205" width="181" height="165" backcolor="#F2F6FC" mode="Opaque" radius="6">
 				<propertyExpression name="net.sf.jasperreports.style.backcolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "panel")]]></propertyExpression>
 				<pen lineWidth="0.0"/>
 			</element>
-			<element kind="image" x="220" y="209" width="173" height="129" scaleImage="RetainShape" hImageAlign="Center" vImageAlign="Middle" onErrorType="Blank">
-				<expression><![CDATA[$F{evidencia5_archivo}]]></expression>
+			<element kind="image" x="220" y="209" width="173" height="129" scaleImage="FillFrame" hImageAlign="Center" vImageAlign="Middle" onErrorType="Blank">
+				<expression><![CDATA[com.co.eurekatic.reporting.render.Evidencias.cubrir(com.co.eurekatic.reporting.render.Evidencias.en($V{EV5}, $F{evidencia1_archivo}, $F{evidencia2_archivo}, $F{evidencia3_archivo}, $F{evidencia4_archivo}, $F{evidencia5_archivo}, $F{evidencia6_archivo}), 173, 129)]]></expression>
 			</element>
 			<element kind="textField" x="222" y="338" width="169" height="18" fontName="DejaVu Sans" fontSize="7" forecolor="#16305C" hTextAlign="Left" vTextAlign="Middle" bold="true" blankWhenNull="true">
 				<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "titulo")]]></propertyExpression>
-				<expression><![CDATA[$F{evidencia5_titulo}]]></expression>
+				<expression><![CDATA[(String) com.co.eurekatic.reporting.render.Evidencias.en($V{EV5}, $F{evidencia1_titulo}, $F{evidencia2_titulo}, $F{evidencia3_titulo}, $F{evidencia4_titulo}, $F{evidencia5_titulo}, $F{evidencia6_titulo})]]></expression>
 			</element>
 			<element kind="textField" x="222" y="357" width="169" height="10" fontName="DejaVu Sans" fontSize="6" forecolor="#5A6B85" hTextAlign="Right" vTextAlign="Top" blankWhenNull="true">
 				<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "gris")]]></propertyExpression>
-				<expression><![CDATA[$F{evidencia5_fecha}]]></expression>
+				<expression><![CDATA[(String) com.co.eurekatic.reporting.render.Evidencias.en($V{EV5}, $F{evidencia1_fecha}, $F{evidencia2_fecha}, $F{evidencia3_fecha}, $F{evidencia4_fecha}, $F{evidencia5_fecha}, $F{evidencia6_fecha})]]></expression>
 			</element>
 			<element kind="rectangle" x="407" y="205" width="181" height="165" backcolor="#F2F6FC" mode="Opaque" radius="6">
 				<propertyExpression name="net.sf.jasperreports.style.backcolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "panel")]]></propertyExpression>
 				<pen lineWidth="0.0"/>
 			</element>
-			<element kind="image" x="411" y="209" width="173" height="129" scaleImage="RetainShape" hImageAlign="Center" vImageAlign="Middle" onErrorType="Blank">
-				<expression><![CDATA[$F{evidencia6_archivo}]]></expression>
+			<element kind="image" x="411" y="209" width="173" height="129" scaleImage="FillFrame" hImageAlign="Center" vImageAlign="Middle" onErrorType="Blank">
+				<expression><![CDATA[com.co.eurekatic.reporting.render.Evidencias.cubrir(com.co.eurekatic.reporting.render.Evidencias.en($V{EV6}, $F{evidencia1_archivo}, $F{evidencia2_archivo}, $F{evidencia3_archivo}, $F{evidencia4_archivo}, $F{evidencia5_archivo}, $F{evidencia6_archivo}), 173, 129)]]></expression>
 			</element>
 			<element kind="textField" x="413" y="338" width="169" height="18" fontName="DejaVu Sans" fontSize="7" forecolor="#16305C" hTextAlign="Left" vTextAlign="Middle" bold="true" blankWhenNull="true">
 				<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "titulo")]]></propertyExpression>
-				<expression><![CDATA[$F{evidencia6_titulo}]]></expression>
+				<expression><![CDATA[(String) com.co.eurekatic.reporting.render.Evidencias.en($V{EV6}, $F{evidencia1_titulo}, $F{evidencia2_titulo}, $F{evidencia3_titulo}, $F{evidencia4_titulo}, $F{evidencia5_titulo}, $F{evidencia6_titulo})]]></expression>
 			</element>
 			<element kind="textField" x="413" y="357" width="169" height="10" fontName="DejaVu Sans" fontSize="6" forecolor="#5A6B85" hTextAlign="Right" vTextAlign="Top" blankWhenNull="true">
 				<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "gris")]]></propertyExpression>
-				<expression><![CDATA[$F{evidencia6_fecha}]]></expression>
+				<expression><![CDATA[(String) com.co.eurekatic.reporting.render.Evidencias.en($V{EV6}, $F{evidencia1_fecha}, $F{evidencia2_fecha}, $F{evidencia3_fecha}, $F{evidencia4_fecha}, $F{evidencia5_fecha}, $F{evidencia6_fecha})]]></expression>
 			</element>
 		</band>
 		<band height="56" splitType="Prevent">
-			<printWhenExpression><![CDATA[(($F{evidencia1_archivo} != null || !"".equals($F{evidencia1_titulo} == null ? "" : $F{evidencia1_titulo}.trim()) ? 1 : 0) + ($F{evidencia2_archivo} != null || !"".equals($F{evidencia2_titulo} == null ? "" : $F{evidencia2_titulo}.trim()) ? 1 : 0) + ($F{evidencia3_archivo} != null || !"".equals($F{evidencia3_titulo} == null ? "" : $F{evidencia3_titulo}.trim()) ? 1 : 0) + ($F{evidencia4_archivo} != null || !"".equals($F{evidencia4_titulo} == null ? "" : $F{evidencia4_titulo}.trim()) ? 1 : 0) + ($F{evidencia5_archivo} != null || !"".equals($F{evidencia5_titulo} == null ? "" : $F{evidencia5_titulo}.trim()) ? 1 : 0) + ($F{evidencia6_archivo} != null || !"".equals($F{evidencia6_titulo} == null ? "" : $F{evidencia6_titulo}.trim()) ? 1 : 0)) == 0]]></printWhenExpression>
+			<printWhenExpression><![CDATA[(($F{evidencia1_archivo} != null ? 1 : 0) + ($F{evidencia2_archivo} != null ? 1 : 0) + ($F{evidencia3_archivo} != null ? 1 : 0) + ($F{evidencia4_archivo} != null ? 1 : 0) + ($F{evidencia5_archivo} != null ? 1 : 0) + ($F{evidencia6_archivo} != null ? 1 : 0)) == 0]]></printWhenExpression>
 			<element kind="rectangle" x="16" y="11" width="581" height="43" mode="Transparent" radius="12" stretchType="ContainerBottom" forecolor="#16305C">
 				<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "acento")]]></propertyExpression>
 				<pen lineWidth="1.25"/>
