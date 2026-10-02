@@ -187,15 +187,19 @@ ICONOS = {'sede': '',      # account_balance
           'nivel': '',     # school
           'grado': '',     # menu_book
           'grupo': '',     # groups
+          'estrella': '',  # star
+          'camara': '',    # photo_camera
           'periodo': ''}   # calendar_month
 
 
-def icono(x, y, nombre, lado=20):
+def icono(x, y, nombre, lado=20, blanco=False):
     return ('\t\t\t<element kind="staticText" %s fontName="Material Icons" fontSize="%d"'
             ' forecolor="%s" hTextAlign="Center" vTextAlign="Middle">\n%s'
             '\t\t\t\t<text><![CDATA[%s]]></text>\n'
-            '\t\t\t</element>\n') % (_pos(x, y, lado, lado), lado - 2, AZUL,
-                                     _prop('forecolor', 'acento'), ICONOS[nombre])
+            '\t\t\t</element>\n') % (_pos(x, y, lado, lado), lado - 2,
+                                     BLANCO if blanco else AZUL,
+                                     '' if blanco else _prop('forecolor', 'acento'),
+                                     ICONOS[nombre])
 
 
 def vline(x, y, alto):
@@ -226,52 +230,55 @@ DATOS += [
         valign='Middle', rol='texto'),
 ]
 
-# ------------------------------------------------------------- titulo
-# EL TITULO NO ES FIJO: es la lista de asignaturas que el estudiante cursa
-# (V541). Crece en alto en vez de cortarse, y la barra crece con el.
-# Continuidad: el titulo es una pildora y su linea sigue a la derecha hasta el
-# borde, baja por los lados y enmarca la observacion (que no lleva borde
-# superior). Asi titulo y texto se leen como un solo bloque.
+# ------------------------------------------------------------- secciones
+# Cada seccion (seguimiento, evidencias) es UNA banda enmarcada: un recuadro
+# redondeado que la rodea entera, con la pildora del titulo montada sobre su
+# borde superior. El recuadro va anclado al fondo de la banda
+# (ContainerBottom), asi que crece con lo que haya dentro; con titulo y texto
+# en bandas separadas los lados no casaban cuando el titulo partia en dos
+# lineas.
 PILDORA = 330
 GROSOR = 1.25
+MX, MW = X0 - 8, ANCHO + 16      # el marco sobresale 8pt de la columna
 
 
-def linea(x, y, w, h, estirar=False):
-    s_ = ' stretchType="ContainerHeight"' if estirar else ''
-    return ('\t\t\t<element kind="line" %s forecolor="%s"%s>\n%s'
+def marco(alto):
+    return ('\t\t\t<element kind="rectangle" %s mode="Transparent" radius="12"'
+            ' stretchType="ContainerBottom" forecolor="%s">\n%s'
             '\t\t\t\t<pen lineWidth="%s"/>\n\t\t\t</element>\n'
-            % (_pos(x, y, w, h), AZUL, s_, _prop('forecolor', 'acento'), GROSOR))
+            % (_pos(MX, 11, MW, alto - 11), AZUL, _prop('forecolor', 'acento'), GROSOR))
 
 
-def pildora(alto=22, estirar=False):
-    return [linea(X0 + 10, 11, ANCHO - 10, 1),
-            rect(X0, 0, PILDORA, alto, AZUL, radius=11, estirar=estirar, rol='acento')]
+def pildora(titulo, ic, expresion=False):
+    """Titulo blanco con icono sobre una pildora del color de acento. Si el
+    texto es una expresion puede partir en varias lineas: la pildora va en un
+    frame que crece con el."""
+    texto = (txt(30, 0, PILDORA - 40, 22, titulo, size=10, bold=True, color=BLANCO,
+                 blank=False, stretch=True, valign='Middle',
+                 box='\t\t\t\t<box topPadding="5" bottomPadding="5"/>\n')
+             if expresion else
+             static(30, 0, PILDORA - 40, 22, titulo, size=10, bold=True, color=BLANCO))
+    hijos = (rect(0, 0, PILDORA, 22, AZUL, radius=11, estirar=True, rol='acento')
+             + icono(7, 2, ic, lado=18, blanco=True) + texto)
+    return ('\t\t\t<element kind="frame" %s>\n%s\t\t\t</element>\n'
+            % (_pos(X0, 0, PILDORA, 22), hijos.replace('\n\t\t\t', '\n\t\t\t\t')
+               .replace('\t\t\t<element', '\t\t\t\t<element', 1)))
 
 
-TITULO = pildora(estirar=True) + [
-    linea(X0, 11, 1, 13, estirar=True),
-    linea(X0 + ANCHO - 1, 11, 1, 13, estirar=True),
-    txt(54, 0, PILDORA - 26, 22,
-        '$F{asignatura_nombre} == null || $F{asignatura_nombre}.trim().isEmpty() '
-        '? "SEGUIMIENTO Y VALORACION" : $F{asignatura_nombre}.toUpperCase()',
-        size=10, bold=True, color=BLANCO, blank=False, stretch=True, valign='Middle',
-        box='\t\t\t\t<box topPadding="5" bottomPadding="5"/>\n'),
+# EL TITULO NO ES FIJO: es la lista de asignaturas que el estudiante cursa
+# (V541). Crece en alto en vez de cortarse, y el texto flota debajo.
+ALTO_SEGUIMIENTO = 60
+SEGUIMIENTO = [
+    marco(ALTO_SEGUIMIENTO - 2),
+    pildora('$F{asignatura_nombre} == null || $F{asignatura_nombre}.trim().isEmpty() '
+            '? "SEGUIMIENTO Y VALORACION" : $F{asignatura_nombre}.toUpperCase()',
+            'estrella', expresion=True),
+    txt(X0 + 4, 30, ANCHO - 8, 20,
+        '$F{observacion} == null || $F{observacion}.trim().isEmpty() '
+        '? "Sin observaciones registradas para este periodo." : $F{observacion}',
+        size=10, align='Justified', blank=False, stretch=True, rol='texto',
+        extra='positionType="Float"'),
 ]
-ALTO_TITULO = 24
-
-# ----------------------------------------------------------- observacion
-# Sin alto fijo: la banda se parte entre hojas (splitType Stretch) y el borde
-# del recuadro se dibuja en cada trozo.
-OBSERVACION = [txt(
-    X0, 0, ANCHO, 30,
-    '$F{observacion} == null || $F{observacion}.trim().isEmpty() '
-    '? "Sin observaciones registradas para este periodo." : $F{observacion}',
-    size=10, align='Justified', blank=False, stretch=True, rol='texto',
-    extra2=_prop('box.pen.lineColor', 'acento'),
-    box=('\t\t\t\t<box topPadding="4" leftPadding="14" bottomPadding="12" rightPadding="14">\n'
-         '\t\t\t\t\t<pen lineWidth="%s" lineColor="%s"/>\n'
-         '\t\t\t\t\t<topPen lineWidth="0.0"/>\n'
-         '\t\t\t\t</box>\n') % (GROSOR, AZUL))]
 
 # ----------------------------------------------------------- evidencias
 # Cuenta por titulo o por foto: V541 las numera 1..n sin huecos, asi que la
@@ -327,10 +334,7 @@ def evidencias(cantidad):
     tarjetas, alto = DISTRIBUCION[cantidad]
     grande = cantidad <= 3
     pie = 36 if grande else 32
-    elementos = pildora() + [
-        static(54, 0, PILDORA - 26, 22, 'EVIDENCIAS DE APRENDIZAJE', size=10, bold=True,
-               color=BLANCO),
-    ]
+    elementos = [marco(GY + alto + 12), pildora('EVIDENCIAS DE APRENDIZAJE', 'camara')]
     for n, (fx, fy, fw, fh) in enumerate(tarjetas, start=1):
         elementos.append(rect(fx, fy, fw, fh, TARJETA, radius=6, rol='panel'))
         elementos.append(img(fx + 4, fy + 4, fw - 8, fh - pie - 4,
@@ -343,12 +347,12 @@ def evidencias(cantidad):
         elementos.append(txt(fx + 6, fy + fh - 13, fw - 12, 10,
                              '$F{evidencia%d_fecha}' % n, size=6, align='Right',
                              color=GRIS, rol='gris'))
-    return banda(GY + alto + 8, elementos, when=N_EVIDENCIAS + ' == %d' % cantidad)
+    return banda(GY + alto + 14, elementos, when=N_EVIDENCIAS + ' == %d' % cantidad)
 
-SIN_EVIDENCIAS = pildora() + [
-    static(54, 0, PILDORA - 26, 22, 'EVIDENCIAS DE APRENDIZAJE', size=10, bold=True,
-           color=BLANCO),
-    static(X0, 26, ANCHO, 18, 'Sin evidencias fotograficas registradas en este periodo.',
+SIN_EVIDENCIAS = [
+    marco(54),
+    pildora('EVIDENCIAS DE APRENDIZAJE', 'camara'),
+    static(X0, 28, ANCHO, 18, 'Sin evidencias fotograficas registradas en este periodo.',
            size=8, color=GRIS, align='Center', rol='gris'),
 ]
 
@@ -449,10 +453,10 @@ def seccion(nombre, alto, elementos):
 
 
 detalle = (banda(104, DATOS)
-           + banda(ALTO_TITULO, TITULO, split='Stretch')
-           + banda(42, OBSERVACION, split='Stretch')
+           + banda(ALTO_SEGUIMIENTO, SEGUIMIENTO, split='Stretch')
+           + banda(10, [])
            + ''.join(evidencias(n) for n in DISTRIBUCION)
-           + banda(50, SIN_EVIDENCIAS, when=N_EVIDENCIAS + ' == 0')
+           + banda(56, SIN_EVIDENCIAS, when=N_EVIDENCIAS + ' == 0')
            + banda(74, FIRMA))
 
 xml = (cabecera + decl + '\n'
