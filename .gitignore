@@ -98,6 +98,7 @@ skills-lock*
 !.claude/skills/documentando-con-postman/
 !.claude/skills/server-status/
 !.claude/skills/new-query-endpoint/
+!.claude/skills/nueva-funcionalidad/
 
 **/__pycache__/
 **/migraciones-analisis.*
