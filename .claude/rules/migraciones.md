@@ -23,6 +23,36 @@ Si el objeto ya tiene dueña, **se edita esa migración**; solo se crea un `V<n>
 nuevo cuando el objeto no existe o la funcionalidad convive con la vieja.
 `docs/MAPA.md` da el índice dominio → función → migración.
 
+### Escaneo de reutilización (obligatorio antes de escribir funciones)
+
+```bash
+python .claude/skills/next-migration-number/deps.py --reutilizable <dominio>
+```
+
+Lista por capa lo vivo del dominio (validaciones, gates/alcance, núcleos
+`_interno`, wrappers) con su migración dueña y sus parámetros. Repetirlo con
+cada término cercano (tabla, menú, dominio vecino). En el plan, **cada función
+nueva justifica por qué ninguna de la lista sirve**; si una sirve a medias, se
+extiende su dueña in-place en lugar de escribir otra.
+
+### Funcionalidad nueva: cuatro migraciones por capas
+
+Cuando no hay dueña, la funcionalidad se reparte en migraciones consecutivas,
+cada capa llamando solo a las de número menor (así una base limpia aplica):
+
+1. **Validaciones** — una `fn_<dominio>_validar_<regla>` por regla (`RETURNS
+   VOID`, lanza o nada) y una grande que las compone por caso.
+2. **Núcleos `_interno`** — crear/actualizar/eliminar sin permisos, que validan
+   y filtran antes de escribir.
+3. **Wrappers CRUD** — existencia (P0002) → gate + alcance → `fn_audit_declarar`
+   (si escribe) → delegar en el núcleo. Las lecturas, sin etiqueta.
+4. **Endpoints** — filas de `public.query` + `role_query` con roles derivados de
+   los menús reales.
+
+Numeración: si el dominio ya tiene un bloque, usar **huecos decimales junto a
+él** (`V496.1`–`V496.4`) en vez del techo global: reduce colisiones entre PRs
+(V523) y deja las capas contiguas. Re-escanear con `scan.sh` antes de fusionar.
+
 ## Skills y agentes
 
 | Trabajo | Usar |
