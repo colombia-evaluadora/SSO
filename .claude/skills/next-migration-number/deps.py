@@ -9,36 +9,36 @@ scripts/migration-analysis/analyze_migrations.py (no re-parsea SQL).
     python .claude/skills/next-migration-number/deps.py /planeador/actividades
     python .claude/skills/next-migration-number/deps.py --version 224
     python .claude/skills/next-migration-number/deps.py --refresh fn_x
+    python .claude/skills/next-migration-number/deps.py --reutilizable matricula
+    python .claude/skills/next-migration-number/deps.py --reutilizable planeador  # id de categoria
+
+El modelo se cachea con la huella de las migraciones (scripts/migration-analysis/
+modelo.py): si cambia un .sql se recalcula solo, --refresh lo fuerza.
 """
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import re
-import subprocess
 import sys
-import tempfile
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[3]
-ANALYZER = REPO / "scripts" / "migration-analysis" / "analyze_migrations.py"
-CACHE = Path(tempfile.gettempdir()) / "sso-migrations-model.json"
+sys.path.insert(0, str(REPO / "scripts" / "migration-analysis"))
+import modelo  # noqa: E402
+
+vsort = modelo.vkey
 
 
 def load_model(refresh: bool) -> dict:
-    if refresh or not CACHE.exists():
-        if not ANALYZER.exists():
-            sys.exit(f"no encuentro el analizador en {ANALYZER}")
-        subprocess.run(
-            [sys.executable, str(ANALYZER), "--no-git", "--json", str(CACHE)],
-            cwd=REPO, check=True, stdout=subprocess.DEVNULL,
-        )
-    return json.loads(CACHE.read_text(encoding="utf-8"))
+    return modelo.cargar(refresh=refresh)
 
 
-def vsort(v: str) -> tuple:
-    return tuple(int(p) for p in v.split(".") if p.isdigit())
+def categoria(model: dict, key: str) -> str:
+    cat = model.get("categories") or {}
+    cid = (cat.get("object") or {}).get(key)
+    label = {d["id"]: d["label"] for d in cat.get("defs", [])}.get(cid, cid)
+    return label or "sin-clasificar"
 
 
 def match_chains(model: dict, needle: str) -> list[str]:
@@ -48,7 +48,7 @@ def match_chains(model: dict, needle: str) -> list[str]:
 
 def report_object(model: dict, key: str) -> None:
     writes = model["chains"][key]
-    print(f"\n=== {key}")
+    print(f"\n=== {key}   [{categoria(model, key)}]")
 
     live = [w for w in writes if w.get("status") == "live"]
     owner = max((w["version"] for w in live), key=vsort, default=None)
@@ -194,10 +194,58 @@ def report_version(model: dict, version: str) -> None:
     report_precision_version(model, version)
 
 
+CAPAS = (
+    ("validaciones", lambda n: "_validar" in n),
+    ("gates / alcance", lambda n: "gate" in n or "assert" in n or "puede_ver" in n or "alcanza" in n),
+    ("nucleos _interno", lambda n: n.endswith("_interno")),
+    ("resto (wrappers, helpers)", lambda n: True),
+)
+
+
+def report_reutilizable(model: dict, needle: str) -> None:
+    """Inventario por capa de las funciones vivas de un dominio: lo que hay que
+    reutilizar antes de escribir una validacion, un nucleo o un gate nuevo."""
+    n = needle.lower()
+    cats = model.get("categories") or {}
+    por_cat = n in {d["id"] for d in cats.get("defs", [])}
+    obj_cat = cats.get("object") or {}
+    vivas = {}
+    for key, writes in model["chains"].items():
+        if not key.startswith("function:"):
+            continue
+        if (obj_cat.get(key) != n) if por_cat else (n not in key.lower()):
+            continue
+        live = [w for w in writes if w.get("status") == "live"]
+        if not live:
+            continue
+        w = max(live, key=lambda w: vsort(w["version"]))
+        names = (w.get("extra") or {}).get("names") or []
+        vivas[key.split(".", 1)[-1]] = (w["version"], names)
+    if not vivas:
+        print(f"nada vivo con '{needle}'. Prueba otro termino del dominio (tabla, menu, ruta).")
+        return
+    como = f"de la categoria '{needle}'" if por_cat else f"con '{needle}'"
+    print(f"{len(vivas)} funciones vivas {como} (nombre -> migracion duena, parametros):")
+    usados = set()
+    for capa, pred in CAPAS:
+        fila = sorted(f for f in vivas if f not in usados and pred(f))
+        if not fila:
+            continue
+        print(f"\n  [{capa}]")
+        for f in fila:
+            usados.add(f)
+            v, names = vivas[f]
+            print(f"    {f:<55} V{v:<8} ({', '.join(names)})")
+    print("\nAntes de escribir una funcion nueva, descarta cada una de estas con un motivo.")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("needle", nargs="?", help="nombre de funcion, ruta de endpoint o tabla")
     ap.add_argument("--version", help="en vez de un objeto, analiza una migracion V<n>")
+    ap.add_argument("--reutilizable", metavar="DOMINIO",
+                    help="inventario por capa de lo vivo en un dominio (subcadena del "
+                         "nombre o id de categoria de categories.py), para reutilizar")
     ap.add_argument("--refresh", action="store_true", help="re-corre el analizador")
     ap.add_argument("--limit", type=int, default=8, help="max objetos a imprimir")
     args = ap.parse_args()
@@ -216,8 +264,11 @@ def main() -> None:
     if args.version:
         report_version(model, args.version.lstrip("Vv"))
         return
+    if args.reutilizable:
+        report_reutilizable(model, args.reutilizable)
+        return
     if not args.needle:
-        ap.error("pasa un nombre de objeto o --version N")
+        ap.error("pasa un nombre de objeto, --version N o --reutilizable DOMINIO")
 
     keys = match_chains(model, args.needle)
     if not keys:

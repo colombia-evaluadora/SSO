@@ -60,8 +60,9 @@ python .claude/skills/next-migration-number/deps.py --version 224
 ```
 
 Imprime quién define el objeto hoy, su historial con las versiones muertas, si
-la firma cambió y qué migraciones lo usan. Cachea el modelo en temp; `--refresh`
-lo recalcula tras editar migraciones.
+la firma cambió y qué migraciones lo usan. El modelo se cachea con la huella de
+las migraciones (`scripts/migration-analysis/modelo.py`) y se recalcula solo al
+cambiar un `.sql`; `--refresh` solo hace falta para forzarlo.
 
 Regla práctica: **`deps.py` para una pregunta, el informe para una revisión.**
 

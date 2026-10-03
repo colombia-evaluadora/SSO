@@ -26,9 +26,17 @@ python .claude/skills/next-migration-number/deps.py /planeador/actividades
 python .claude/skills/next-migration-number/deps.py --version 224
 ```
 
-Lee el modelo de `scripts/migration-analysis/analyze_migrations.py` (cacheado
-en temp; `--refresh` lo recalcula tras editar migraciones). Por cada objeto
-imprime:
+Y antes de escribir cualquier función, el inventario de lo reutilizable del
+dominio (validaciones, gates, núcleos `_interno`, wrappers, con dueña y
+parámetros):
+
+```bash
+python .claude/skills/next-migration-number/deps.py --reutilizable planeador
+```
+
+Lee el modelo de `scripts/migration-analysis/analyze_migrations.py` vía
+`modelo.cargar()`: se cachea con la huella de las migraciones y se recalcula
+solo cuando cambia un `.sql`. Por cada objeto imprime su categoría funcional y:
 
 - **DEFINIDO HOY POR V\<n\>** — la última escritura viva. Ese es el archivo a
   editar si el cambio pertenece a ese objeto.
