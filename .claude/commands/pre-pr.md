@@ -38,6 +38,10 @@ bash .claude/skills/next-migration-number/scan.sh
 - Si editaste una migración ya aplicada en el servidor, el checksum cambia:
   confirma que `deploy-test.yml` la reaplica y dilo en la descripción del PR.
 
+Después, lanza el agente `migration-reviewer` (contexto limpio, solo lectura)
+con `${ARGUMENTS:-dev}` como base. Corrige lo que afecte corrección, seguridad
+o despliegue; el resto se lista como opcional en el resumen.
+
 ## 3. Mapa del dominio
 
 ```bash
