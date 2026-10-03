@@ -14,6 +14,16 @@ CAT_CSS = """
  border:1px solid var(--rule)}
 .catstack span{display:block;height:100%;cursor:pointer;min-width:2px}
 .catstack span:hover{filter:brightness(1.15)}
+.catmap{display:flex;height:10px;border-radius:3px;overflow:hidden;background:var(--sunk);min-width:60px}
+.catmap span{display:block;height:100%}
+.catmap.big{height:16px;margin:8px 0 4px}
+.lg-b{background:var(--sunk)}
+.catline-grid .slot{background:var(--c);color:#fff;cursor:pointer;border:1px solid transparent;
+ width:auto;min-width:38px;padding:2px 4px}
+.catline-grid .slot:hover{filter:brightness(1.15)}
+.catline-grid .slot.fade{opacity:.15}
+.catline-grid .slot.touch{background:none;color:var(--ink);border:1px dashed var(--c)}
+.catline-grid .slot.obs{text-decoration:line-through}
 .catbar{height:8px;border-radius:4px;background:var(--sunk);min-width:60px;position:relative}
 .catbar i{position:absolute;left:0;top:0;bottom:0;border-radius:4px}
 .catbar b{position:absolute;left:0;top:0;bottom:0;border-radius:4px;background:var(--dead);opacity:.6}
@@ -49,13 +59,18 @@ CAT_PANEL = """
   ≥15% de sus sentencias. Las reglas están en <code>scripts/migration-analysis/categories.py</code>.</p>
   <div class="catstack" id="catstack" aria-label="Líneas por categoría"></div>
   <div class="catlegend" id="catlegend"></div>
+  <h3>Línea de migraciones por categoría</h3>
+  <p class="note">Cada casilla es una migración, en orden, con el color de su categoría principal
+  (tachada = obsoleta). Al elegir una categoría se apagan las demás y las de otra categoría que la
+  tocan en ≥15% de sus sentencias quedan con borde punteado. Clic en una casilla abre la migración.</p>
+  <div class="slotgrid slotgrid-full catline-grid" id="catline"></div>
   <div class="tablewrap"><table id="cattable"><thead><tr>
     <th class="sortable" data-k="label">Categoría</th>
     <th class="sortable" data-k="migs" style="text-align:right">Migr.</th>
     <th class="sortable" data-k="touch" style="text-align:right"
       title="Migraciones de otra categoría que la tocan en ≥15% de sus líneas">Toca</th>
     <th class="sortable" data-k="lines" style="text-align:right" aria-sort="descending">Líneas</th>
-    <th title="Color = líneas; rojo = recortables"></th>
+    <th title="Mapa de líneas de la categoría: los mismos estados que el mapa de cada archivo">Mapa</th>
     <th style="text-align:right">% corpus</th>
     <th class="sortable" data-k="cut" style="text-align:right">Recortables</th>
     <th class="sortable" data-k="cp" style="text-align:right">Coment.</th>
@@ -101,10 +116,46 @@ const CAT_KEY = {
   lines: d => d.lines, cut: d => d.cut_lines, cp: d => d.lines ? d.comment_lines / d.lines : 0,
   objs: d => objLive(d), people: d => d.people.length, last: d => d.last || '',
 };
+// Mapa de líneas de la categoría: la suma de los mapas de sus archivos, con los
+// mismos estados y colores. Sale de d.mapa, que calcula categories.py.
+const MAP_ORDER = ['l', 'n', 'd', 'c', 'o', 'b'];
+function catMap(d, big) {
+  const tot = d.lines || 1;
+  return `<div class="catmap${big ? ' big' : ''}" role="img"
+    aria-label="Líneas de ${esc(d.label)} por estado">${MAP_ORDER.filter(c => d.mapa[c]).map(c =>
+    `<span class="lg-${c}" style="width:${100 * d.mapa[c] / tot}%"
+      title="${MAP_ES[c] || c}: ${fmt(d.mapa[c])} (${pct(d.mapa[c], tot)}%)"></span>`).join('')}</div>`;
+}
+const catMapLegend = d => `<div class="maplegend">${MAP_ORDER.filter(c => d.mapa[c]).map(c =>
+  `<span><i class="lg-${c}"></i>${MAP_ES[c] || c} ${fmt(d.mapa[c])}</span>`).join('')}</div>`;
 const nameIni = n => esc(n.split(/\s+/).map(w => w[0] || '').join('').slice(0, 2).toUpperCase());
 const isAlive = key => D.chains[key].s.some(s => s[2] === 'live' || s[2] === 'patch-live');
 
+// Línea numérica coloreada por categoría: misma forma que la de Slots, pero cada
+// casilla es una migración real (decimales incluidos) y el color sale de C.mc.
+// 496.10 va después de 496.9: se compara por partes enteras, no como float.
+const vcmp = (a, b) => {
+  const x = a.split('.').map(Number), y = b.split('.').map(Number);
+  for (let k = 0; k < Math.max(x.length, y.length); k++)
+    if ((x[k] ?? -1) !== (y[k] ?? -1)) return (x[k] ?? -1) - (y[k] ?? -1);
+  return 0;
+};
+function renderCatLine() {
+  const touch = selCat == null ? null : new Set(catDef(selCat).touch);
+  $('#catline').innerHTML = [...D.migs].sort((a, b) => vcmp(a.v, b.v)).map(m => {
+    const i = catOfMig(m.v), d = catDef(i);
+    const cls = selCat == null || i === selCat ? '' : touch.has(m.v) ? 'touch' : 'fade';
+    const sh = Object.entries(C.sh[m.v] || {}).sort((a, b) => b[1] - a[1]);
+    const tot = sh.reduce((a, [, n]) => a + n, 0) || 1;
+    const rep = sh.map(([c, n]) => `${catDef(+c).label} ${Math.round(100 * n / tot)}%`).join(' · ');
+    return `<span class="slot ${cls}${m.vd === 'obsoleta' ? ' obs' : ''}" style="--c:${d.color}"
+      data-goto="${m.v}" title="V${m.v} — ${esc(m.n)}&#10;${esc(d.label)} · ${m.vd}${rep ? '&#10;' + esc(rep) : ''}">${m.v}</span>`;
+  }).join('');
+  wireGoto($('#catline'));
+}
+
 function renderCatOverview() {
+  renderCatLine();
   $('#catstack').innerHTML = C.defs.map((d, i) => `<span data-cat="${i}"
     style="width:${100 * d.lines / CAT_TOTAL}%;background:${d.color}"
     title="${esc(d.label)} — ${fmt(d.lines)} líneas (${pct(d.lines, CAT_TOTAL)}%)"></span>`).join('');
@@ -122,9 +173,7 @@ function renderCatOverview() {
       <td class="num">${d.migs.length}</td>
       <td class="num dim">${d.touch.length || ''}</td>
       <td class="num">${fmt(d.lines)}</td>
-      <td style="width:150px"><div class="catbar" title="${fmt(d.cut_lines)} recortables">
-        <i style="width:${100 * d.lines / maxL}%;background:${d.color}"></i>
-        <b style="width:${100 * d.cut_lines / maxL}%"></b></div></td>
+      <td style="width:150px"><div style="width:${Math.max(8, 100 * d.lines / maxL)}%">${catMap(d)}</div></td>
       <td class="num dim">${pct(d.lines, CAT_TOTAL)}%</td>
       <td class="num st-dead">${d.cut_lines ? fmt(d.cut_lines) : ''}</td>
       <td class="num">${pct(d.comment_lines, d.lines)}%</td>
@@ -212,6 +261,7 @@ function selectCat(i, keepHash) {
       <div><div class="k">Personas</div><div class="n">${d.people.length}</div>
         <div class="s">${esc(d.people[0]?.name || '—')} creó más</div></div>
     </div>
+    ${catMap(d, true)}${catMapLegend(d)}
     <div class="vstack" title="Veredictos de sus migraciones">${vd.map(v => `<span
       style="width:${100 * d.verdicts[v] / vtot}%;background:${VD_COLOR(v)}" title="${v}: ${d.verdicts[v]}"></span>`).join('')}</div>
     <div class="catlegend">${vd.map(v => `<span><span class="pill p-${v}">${v}</span> ${d.verdicts[v]}</span>`).join('')}</div>

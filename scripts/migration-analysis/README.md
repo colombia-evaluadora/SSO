@@ -51,13 +51,39 @@ Una migración obsoleta se puede borrar del repo: el deploy hace `flyway repair`
 y la marca como borrada. Antes hay que confirmar por firma exacta que nada la
 necesita al migrar (ver "Qué se puede recortar").
 
-## Los tres ficheros
+## Arquitectura
 
 | Fichero | Qué hace |
 |---|---|
 | `sqlscan.py` | Parte el SQL en sentencias respetando literales, `$$ … $$` y comentarios. Todo lo demás depende de esto: un grep a secas matchea dentro de cuerpos de función y de comentarios. |
-| `analyze_migrations.py` | Extractores, grafo de reescritura, firmas, llamadores, slots, dependencias. |
-| `render.py` | Emite el HTML (CSS y JS propios, datos embebidos, sin CDN salvo Cytoscape para el grafo de la pestaña Dependencias). |
+| `analyze_migrations.py` | Extractores, grafo de reescritura, firmas, llamadores, slots, dependencias. `construir()` devuelve el modelo sin escribir nada; el CLI lo envuelve. |
+| `categories.py` | Taxonomía funcional y **la única** agregación por categoría. |
+| `modelo.py` | Punto único de acceso al modelo, con caché por huella. |
+| `render.py` + `render_categories.py` | Solo pintan el modelo: no recalculan ninguna cifra. |
+
+El flujo es uno: `construir()` → `apply_precision()` (corrige el mapa de
+líneas de cada migración) → `categorize()` (agrega esos mismos mapas por
+categoría) → JSON / HTML / consumidores. Una cifra se calcula en un solo sitio.
+
+**Todos los consumidores leen por `modelo.cargar()`**: `deps.py`, `precision`,
+`migration-lint.py` (y su hook), `migration-orden.py`, `migration-reapply-set.py`,
+`generar-mapa.py` (y el hook Stop) y `limpiando-migraciones/propuesta.py`.
+El modelo se cachea en `%TEMP%/sso-migrations-model.json` con la huella de
+todas las migraciones y del código del analizador (incluido `precision.py`):
+si cambia un `.sql` o una regla se reconstruye solo, y nadie necesita
+`--refresh` ni correr el analizador dos veces. Generar el informe completo
+también deja ese caché al día.
+
+El HTML solo se escribe cuando se pide: sin argumentos, o con `--out`. Con
+`--json` a secas no se toca `docs/auditoria/`. (Antes, cada consumidor llamaba
+al CLI con `--no-git --json` y de paso pisaba el informe con una versión sin
+el techo de las ramas de `origin`.)
+
+### Añadir una cifra por categoría
+
+Se añade en `categories.categorize()` (o en `lineas()` si sale del mapa de
+líneas) y se pinta en `render_categories.py`. Nada más: `render.compact` pasa
+las definiciones tal cual, y `docs/MAPA.md` usa la misma asignación.
 
 ## Por elemento
 
@@ -148,13 +174,17 @@ estructura académica y plataforma SSO). Las reglas están en `categories.py`
   primero) o, si no casa, la de la mayoría de sus líneas; figura en «también la
   tocan» de las categorías que ocupan ≥15% de sus sentencias.
 
-Por categoría se ve: líneas y % del corpus, recortables, % de comentario,
+Por categoría se ve su **mapa de líneas** —la suma de los mapas de sus
+archivos, con los mismos estados (vigente / recortable / se conserva /
+comentario / sin encadenar) y colores—, líneas y % del corpus, recortables, % de comentario,
 objetos vivos/muertos por tipo, veredictos, quién creó y quién aportó
 (commits, +/−), actividad por mes, firmas cambiadas, objetos más usados y qué
 usa de otras categorías o quién la usa. El grafo tiene dos niveles: burbujas por
 categoría con aristas de uso, y la categoría abierta con sus migraciones →
 objetos → categorías externas. `#categorias/<id>` abre una directamente, y la
-pestaña Migraciones filtra por categoría. El JSON lo expone como `categories`.
+pestaña Migraciones filtra por categoría. El JSON lo expone como `categories`;
+`docs/MAPA.md` agrupa por estas mismas categorías y
+`deps.py --reutilizable <id-categoría>` lista lo vivo de una.
 
 ## Cómo se navega
 
