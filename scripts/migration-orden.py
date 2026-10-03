@@ -35,11 +35,9 @@ import json
 import re
 import subprocess
 import sys
-import tempfile
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
-ANALYZER = REPO / "scripts" / "migration-analysis" / "analyze_migrations.py"
 MIGRATIONS = REPO / "postgres" / "migrations"
 
 for _s in (sys.stdout, sys.stderr):
@@ -91,11 +89,9 @@ def fichero_de(version: str) -> str:
 
 
 def modelo(refresh: bool) -> dict:
-    destino = Path(tempfile.gettempdir()) / "sso-migrations-orden.json"
-    if refresh or not destino.exists():
-        subprocess.run([sys.executable, str(ANALYZER), "--no-git", "--json", str(destino)],
-                       cwd=REPO, check=True, stdout=subprocess.DEVNULL)
-    return json.loads(destino.read_text(encoding="utf-8"))
+    sys.path.insert(0, str(REPO / "scripts" / "migration-analysis"))
+    import modelo as M
+    return M.cargar(refresh=refresh)
 
 
 GUARDA = re.compile(r"IF\s+to_regprocedure\(\s*'([\w.]+)\(.*?\)'\s*\)\s+IS\s+NULL\s+THEN\s+EXECUTE",
@@ -166,8 +162,8 @@ def main() -> int:
         return 0
 
     try:
-        model = modelo(args.refresh or bool(args.base))
-    except (subprocess.SubprocessError, OSError, ValueError) as exc:
+        model = modelo(args.refresh)
+    except (subprocess.SubprocessError, OSError, ValueError, SystemExit) as exc:
         sys.stderr.write(f"no se pudo construir el modelo de migraciones: {exc}\n")
         return 0
 

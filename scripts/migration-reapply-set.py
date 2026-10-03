@@ -24,14 +24,11 @@ from __future__ import annotations
 import argparse
 import json
 import re
-import subprocess
 import sys
-import tempfile
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 MIGRATIONS = REPO / "postgres" / "migrations"
-ANALYZER = REPO / "scripts" / "migration-analysis" / "analyze_migrations.py"
 
 # Tipos cuyo re-CREATE pisa lo que haya: hay que replicar todo lo posterior.
 RESETTABLE = {"function", "view", "trigger", "query", "menu", "role"}
@@ -51,12 +48,9 @@ def _sort_key(version: str) -> tuple:
 
 def load_model(path: Path | None) -> dict:
     if path is None:
-        tmp = Path(tempfile.gettempdir()) / "migration-reapply-model.json"
-        subprocess.run(
-            [sys.executable, str(ANALYZER), "--no-git", "--json", str(tmp)],
-            check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-        )
-        path = tmp
+        sys.path.insert(0, str(REPO / "scripts" / "migration-analysis"))
+        import modelo
+        return modelo.cargar()
     return json.loads(path.read_text(encoding="utf-8"))
 
 

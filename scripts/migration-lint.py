@@ -18,9 +18,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
-import subprocess
 import sys
-import tempfile
 import unicodedata
 from pathlib import Path
 
@@ -38,8 +36,6 @@ for _s in (sys.stdout, sys.stderr):
     except (AttributeError, ValueError):
         pass
 
-ANALYZER = REPO / "scripts" / "migration-analysis" / "analyze_migrations.py"
-MODEL_CACHE = Path(tempfile.gettempdir()) / "sso-migrations-model.json"
 BASELINE = REPO / "scripts" / "migration-lint-baseline.json"
 
 # Reglas: severidad por defecto. `error` bloquea, `aviso` informa.
@@ -113,20 +109,10 @@ def line_of(text: str, idx: int) -> int:
 
 def load_model(refresh: bool = False) -> dict | None:
     """Modelo del analizador, para conocer la firma VIVA de cada funcion."""
-    if refresh or not MODEL_CACHE.exists():
-        if not ANALYZER.exists():
-            return None
-        try:
-            subprocess.run(
-                [sys.executable, str(ANALYZER), "--no-git", "--json", str(MODEL_CACHE)],
-                cwd=REPO, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                timeout=300,
-            )
-        except (subprocess.SubprocessError, OSError):
-            return None
     try:
-        return json.loads(MODEL_CACHE.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+        import modelo
+        return modelo.cargar(refresh=refresh)
+    except Exception:  # el lint nunca se cae por el modelo: sin el, menos reglas
         return None
 
 

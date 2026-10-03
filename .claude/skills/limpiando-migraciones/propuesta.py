@@ -11,9 +11,7 @@ from __future__ import annotations
 
 import json
 import re
-import subprocess
 import sys
-import tempfile
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -25,10 +23,8 @@ from sqlscan import split_statements  # noqa: E402
 
 
 def modelo() -> dict:
-    out = Path(tempfile.gettempdir()) / "sso-limpieza-modelo.json"
-    subprocess.run([sys.executable, str(REPO / "scripts/migration-analysis/analyze_migrations.py"),
-                    "--no-git", "--json", str(out)], cwd=REPO, check=True, stdout=subprocess.DEVNULL)
-    return json.loads(out.read_text(encoding="utf-8"))
+    import modelo as M
+    return M.cargar()
 
 
 def fn_y_firma(text: str):
