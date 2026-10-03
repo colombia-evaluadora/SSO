@@ -29,7 +29,7 @@ CREATE INDEX IF NOT EXISTS IDX_TACTIVIDAD_27
   ON TACTIVIDAD (FK_TASIGNATURA, FK_TGRUPO) WHERE ACTIVE = true;
 
 COMMENT ON COLUMN TACTIVIDAD.PONDERACION IS
-  'Peso (%) de la actividad dentro de su unidad (FK_TUNIDAD), por grupo (FK_TGRUPO). 0..100. El tope de 100 (trigger tr_tactividad_ponderacion_unidad) NO se evalua por (FK_TUNIDAD, FK_TGRUPO): se evalua por (grado, FK_TASIGNATURA, FK_TGRUPO) -- grado resuelto con fn_actividad_grado_resolver (V227) -- porque la regla de negocio es por grado+asignatura+grupo sin importar a que unidad este vinculada cada actividad (una misma actividad puede recorrer varias unidades de esa asignatura/grado). Ver fn_unidad_ponderacion_asignada. Distinta de INFLUENCIA (V22, promedio ponderado de TUNIDAD_NOTA). V223, bucket corregido en V223 mismo (editada, no una migracion nueva).';
+  'Peso (%) de la actividad dentro de su unidad (FK_TUNIDAD), por grupo (FK_TGRUPO). 0..100. El tope de 100 (trigger tr_tactividad_ponderacion_unidad) NO se evalua por (FK_TUNIDAD, FK_TGRUPO): se evalua por (grado, FK_TASIGNATURA, FK_TGRUPO) -- grado resuelto igual que fn_actividad_grado_resolver (V227, no se puede llamar desde aca: ver comentario de fn_unidad_ponderacion_asignada) -- porque la regla de negocio es por grado+asignatura+grupo sin importar a que unidad este vinculada cada actividad (una misma actividad puede recorrer varias unidades de esa asignatura/grado). Ver fn_unidad_ponderacion_asignada. Distinta de INFLUENCIA (V22, promedio ponderado de TUNIDAD_NOTA). V223, bucket corregido en V223 mismo (editada, no una migracion nueva).';
 
 CREATE OR REPLACE FUNCTION academico_test.fn_unidad_ponderacion_asignada(
     p_pk_tunidad           BIGINT,
@@ -40,11 +40,26 @@ RETURNS NUMERIC
 LANGUAGE sql
 STABLE
 AS $$
+    -- El grado de cada actividad candidata (au/ag) se resuelve inline con la
+    -- MISMA prioridad que fn_actividad_grado_resolver (V227): primero la
+    -- unidad a la que esta vinculada (au.FK_TGRADO via a.FK_TUNIDAD), y solo
+    -- si no tiene unidad, el grado de su grupo (ag.FK_TGRADO via
+    -- a.FK_TGRUPO). No se llama a esa funcion porque V227 es POSTERIOR a
+    -- V223 y esta es LANGUAGE SQL: a diferencia de plpgsql (que trata el
+    -- cuerpo como texto opaco hasta ejecutarlo), Postgres resuelve y valida
+    -- las llamadas a funcion de un LANGUAGE SQL al CREATE FUNCTION, asi que
+    -- referenciar una funcion que todavia no existe en el historial de
+    -- migraciones rompe el CREATE (confirmado en CI: 42883 "function ...
+    -- does not exist"). Si alguna vez se decide llamar a la funcion real en
+    -- vez de duplicar la logica, hay que pasar esta funcion a LANGUAGE
+    -- plpgsql.
     SELECT COALESCE(SUM(a.PONDERACION), 0)::NUMERIC
       FROM academico_test.TACTIVIDAD a
-      JOIN academico_test.TUNIDAD u ON u.PK_TUNIDAD = p_pk_tunidad
+      JOIN academico_test.TUNIDAD u       ON u.PK_TUNIDAD = p_pk_tunidad
+      LEFT JOIN academico_test.TUNIDAD au ON au.PK_TUNIDAD = a.FK_TUNIDAD
+      LEFT JOIN academico_test.TGRUPO ag  ON ag.PK_TGRUPO = a.FK_TGRUPO
      WHERE a.FK_TASIGNATURA = u.FK_TASIGNATURA
-       AND academico_test.fn_actividad_grado_resolver(a.PK_TACTIVIDAD) = u.FK_TGRADO
+       AND COALESCE(au.FK_TGRADO, ag.FK_TGRADO) = u.FK_TGRADO
        AND a.FK_TGRUPO IS NOT DISTINCT FROM p_fk_tgrupo
        AND a.ACTIVE = TRUE
        AND a.PONDERACION IS NOT NULL
