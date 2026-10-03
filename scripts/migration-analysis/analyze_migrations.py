@@ -1787,32 +1787,18 @@ def apply_precision(model: dict) -> bool:
     return bool(P)
 
 
-def main() -> int:
-    ap = argparse.ArgumentParser(description=__doc__,
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--out", type=Path, default=DEFAULT_OUT,
-                    help=f"HTML de salida (default: {DEFAULT_OUT.relative_to(REPO)})")
-    ap.add_argument("--json", type=Path, help="tambien volcar el modelo como JSON")
-    ap.add_argument("--from", dest="vfrom", type=float, default=None,
-                    help="resaltar desde esta version")
-    ap.add_argument("--to", dest="vto", type=float, default=None,
-                    help="resaltar hasta esta version")
-    ap.add_argument("--no-git", action="store_true",
-                    help="no consultar ramas de origin para los slots")
-    ap.add_argument("--open", action="store_true", help="abrir el HTML al terminar")
-    args = ap.parse_args()
-
+def construir(use_git: bool = False, highlight: tuple = (None, None),
+              firma: str | None = None) -> dict:
+    """El modelo completo, sin escribir nada. Lo usa modelo.cargar() y el CLI."""
     files = []
     for p in sorted(MIGRATIONS.glob("*.sql")):
         m = FILE_RE.match(p.name)
         if m:
             files.append((m.group(1), p))
     if not files:
-        print(f"No hay migraciones en {MIGRATIONS}", file=sys.stderr)
-        return 1
+        raise SystemExit(f"No hay migraciones en {MIGRATIONS}")
     files.sort(key=lambda t: vnum(t[0]))
 
-    print(f"Analizando {len(files)} migraciones...")
     migs = [analyze_file(p, v) for v, p in files]
 
     chains = build_graph(migs)
@@ -1825,7 +1811,7 @@ def main() -> int:
     resolve_callsites(callsites, chains)
     changes, issues = signature_report(chains, callsites)
     orphans = orphan_functions(chains, callsites)
-    slots = slot_report({v for v, _ in files}, use_git=not args.no_git)
+    slots = slot_report({v for v, _ in files}, use_git=use_git)
     authors = authorship({v for v, _ in files})
     edges = usage_edges(migs, chains, callsites)
     refs = collect_table_refs(migs, chains)
@@ -1869,9 +1855,10 @@ def main() -> int:
         "meta": {
             "repo": REPO.name,
             "head": head, "branch": branch,
+            "huella": firma, "git": use_git,
             "count": len(migs),
             "range": [migs[0].version, migs[-1].version],
-            "highlight": [args.vfrom, args.vto],
+            "highlight": list(highlight),
             "total_lines": sum(m.lines for m in migs),
             "dead_lines": sum(m.dead_lines for m in migs),
             "live_lines": sum(m.live_lines for m in migs),
@@ -1885,8 +1872,40 @@ def main() -> int:
         },
     }
 
+    # El orden importa: las categorias agregan los mapas de linea que la
+    # precision acaba de corregir. Es la unica pasada que los toca.
     apply_precision(model)
     model["categories"] = categories.categorize(model)
+    return model
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--out", type=Path, default=None,
+                    help=f"HTML de salida (default: {DEFAULT_OUT.relative_to(REPO)}; "
+                         "con --json solo se escribe si se pasa --out)")
+    ap.add_argument("--json", type=Path, help="volcar el modelo como JSON")
+    ap.add_argument("--from", dest="vfrom", type=float, default=None,
+                    help="resaltar desde esta version")
+    ap.add_argument("--to", dest="vto", type=float, default=None,
+                    help="resaltar hasta esta version")
+    ap.add_argument("--no-git", action="store_true",
+                    help="no consultar ramas de origin para los slots")
+    ap.add_argument("--open", action="store_true", help="abrir el HTML al terminar")
+    args = ap.parse_args()
+
+    import modelo
+    print("Analizando migraciones...")
+    model = construir(use_git=not args.no_git, highlight=(args.vfrom, args.vto),
+                      firma=modelo.huella())
+    # Deja el cache compartido al dia: deps.py, el lint y el mapa leen esto mismo.
+    modelo.guardar(model)
+    migs = model["migrations"]
+    slots, authors = model["slots"], model["authors"]
+    changes, issues, orphans = (model["signature_changes"], model["callsite_issues"],
+                                model["orphans"])
+    out = args.out or (None if args.json else DEFAULT_OUT)
 
     if args.json:
         args.json.parent.mkdir(parents=True, exist_ok=True)
@@ -1894,20 +1913,21 @@ def main() -> int:
                              encoding="utf-8")
         print(f"JSON  -> {args.json}")
 
-    args.out.parent.mkdir(parents=True, exist_ok=True)
-    args.out.write_text(render.build(model), encoding="utf-8")
+    if out:
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(render.build(model), encoding="utf-8")
 
     v = {k: 0 for k in ("obsoleta", "residual", "parcial", "viva", "solo-binds", "sin-cambios")}
     for m in migs:
-        v[m.verdict] += 1
+        v[m["verdict"]] += 1
     print(f"  obsoletas={v['obsoleta']}  residuales={v['residual']}  "
           f"parciales={v['parcial']}  vivas={v['viva']}  "
           f"solo-binds={v['solo-binds']}  sin-cambios={v['sin-cambios']}")
     print(f"  proximo slot libre: V{slots['next_free']}  "
           f"(techo V{slots['ceiling']} en {slots['branch_count']} ramas)")
-    dl = sum(m.dead_lines for m in migs)
-    print(f"  lineas sin efecto: {dl:,} de {sum(m.lines for m in migs):,} "
-          f"({round(100 * dl / max(1, sum(m.lines for m in migs)))}%)")
+    dl = sum(m["dead_lines"] for m in migs)
+    print(f"  lineas sin efecto: {dl:,} de {sum(m["lines"] for m in migs):,} "
+          f"({round(100 * dl / max(1, sum(m["lines"] for m in migs)))}%)")
     if model["meta"].get("precision"):
         rc = model["meta"]["recorte"]
         print(f"  recortables: {model['meta']['cut_lines']:,} lineas; se conservan "
@@ -1923,10 +1943,10 @@ def main() -> int:
               f"{multi} migraciones tocadas por mas de una")
     print(f"  firmas cambiadas={len(changes)}  llamadas desalineadas={len(issues)}  "
           f"huerfanas={len(orphans)}")
-    print(f"HTML  -> {args.out}")
-
-    if args.open:
-        webbrowser.open(args.out.resolve().as_uri())
+    if out:
+        print(f"HTML  -> {out}")
+    if args.open and out:
+        webbrowser.open(out.resolve().as_uri())
     return 0
 
 
