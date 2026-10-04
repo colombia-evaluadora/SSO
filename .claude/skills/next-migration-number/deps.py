@@ -27,7 +27,7 @@ REPO = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO / "scripts" / "migration-analysis"))
 import modelo  # noqa: E402
 
-vsort = modelo.vkey
+vsort = modelo.vkey  # orden de versiones de Flyway
 
 
 def load_model(refresh: bool) -> dict:
@@ -50,19 +50,33 @@ def report_object(model: dict, key: str) -> None:
     writes = model["chains"][key]
     print(f"\n=== {key}   [{categoria(model, key)}]")
 
-    live = [w for w in writes if w.get("status") == "live"]
-    owner = max((w["version"] for w in live), key=vsort, default=None)
-    if owner:
-        print(f"  DEFINIDO HOY POR : V{owner}   <- este es el archivo a EDITAR")
+    # El estado lo calcula el analizador (model["estado"]): existe o no, y quien
+    # lo define hoy. Un objeto borrado no tiene dueña aunque le queden
+    # escrituras "vivas" (el DROP que lo borro es codigo vigente).
+    est = model.get("estado", {}).get(key)
+    if est and est["existe"]:
+        print(f"  DEFINIDO HOY POR : V{est['duena']}   <- este es el archivo a EDITAR")
+    elif est and est.get("borrada_en"):
+        print(f"  YA NO EXISTE     : borrado en V{est['borrada_en']}")
+    elif est is not None:
+        print("  no existe (nunca se creo de forma reconocible o solo se parchea)")
     else:
-        print("  sin escritura viva (objeto borrado o solo parcheado)")
+        live = [w for w in writes if w.get("status") == "live"]
+        owner = max((w["version"] for w in live), key=vsort, default=None)
+        print(f"  ultima escritura viva: V{owner}" if owner else "  sin escritura viva")
+    for sig, f in sorted(((est or {}).get("firmas") or {}).items()):
+        if len(est["firmas"]) > 1 or not f["existe"]:
+            estado = (f"viva, V{f['duena']}" if f["existe"]
+                      else f"borrada en V{f['borrada_en']}" if f["borrada_en"] else "no existe")
+            print(f"    firma ({sig or 'sin args'}): {estado}")
 
     print("  historial:")
-    for w in sorted(writes, key=lambda w: vsort(w["version"])):
+    for w in writes:
         flag = {"live": "vivo", "drop": "drop"}.get(w.get("status"), w.get("status") or "")
         det = w.get("detail") or w.get("kind")
         killed = f"  (muerta por V{w['killed_by']})" if w.get("killed_by") else ""
-        print(f"    V{w['version']:<7} {w['effect']:<8} {flag:<6} {det}{killed}")
+        note = f"  [{w['note']}]" if w.get("note") else ""
+        print(f"    V{w['version']:<7} {w['effect']:<8} {flag:<6} {det}{killed}{note}")
 
     fn = key.split(":", 1)[1] if key.startswith("function:") else None
     if fn:

@@ -442,13 +442,10 @@ def main() -> int:
               f"{BASELINE.relative_to(REPO)}. Solo se reportara lo nuevo.")
         return 0
 
-    frozen = 0
     if not args.no_baseline and BASELINE.exists():
         try:
             known = set(json.loads(BASELINE.read_text(encoding="utf-8")))
-            before = len(findings)
             findings = [f for f in findings if f.fingerprint() not in known]
-            frozen = before - len(findings)
         except ValueError:
             pass
 

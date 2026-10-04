@@ -38,6 +38,8 @@ import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(REPO / "scripts" / "migration-analysis"))
+from nucleo import vkey  # noqa: E402
 MIGRATIONS = REPO / "postgres" / "migrations"
 
 for _s in (sys.stdout, sys.stderr):
@@ -45,11 +47,6 @@ for _s in (sys.stdout, sys.stderr):
         _s.reconfigure(encoding="utf-8", errors="replace")
     except (AttributeError, ValueError):
         pass
-
-
-def vkey(v: str) -> tuple:
-    """Orden real de versiones: V214.3 va entre V214 y V215, no tras V2143."""
-    return tuple(int(x) for x in re.findall(r"\d+", v or "0"))
 
 
 def version_de(nombre: str) -> str | None:
@@ -89,7 +86,6 @@ def fichero_de(version: str) -> str:
 
 
 def modelo(refresh: bool) -> dict:
-    sys.path.insert(0, str(REPO / "scripts" / "migration-analysis"))
     import modelo as M
     return M.cargar(refresh=refresh)
 

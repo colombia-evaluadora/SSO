@@ -7,14 +7,8 @@ from __future__ import annotations
 import json
 from datetime import datetime
 
+from nucleo import vnum
 from render_categories import CAT_CSS, CAT_JS, CAT_PANEL
-
-
-def vnum(v: str) -> float:
-    """Clave numerica de version con el orden de Flyway: V496.15 va despues de V496.6
-    (float("496.15") lo pondria antes). Cada parte decimal ocupa 3 cifras."""
-    parts = str(v).split(".")
-    return float(parts[0]) + sum(int(p) / 1000 ** i for i, p in enumerate(parts[1:], 1))
 
 
 VERDICTS = ["obsoleta", "residual", "parcial", "viva", "solo-binds", "sin-cambios"]
@@ -45,14 +39,14 @@ def compact(model: dict) -> dict:
             "cr": m["comment_refs"],
             "w": [[w["obj_type"], w["obj_key"], w["kind"], w["status"],
                    w["killed_by"], w["line"], w["note"] or w["detail"][:80]]
-                  for w in m["writes"] if w["effect"] != "drop"],
+                  for w in m["writes"] if w["status"] != "drop"],
         })
 
     chains = {}
     for key, ws in model["chains"].items():
         steps = [[w["version"], w["effect"], w["status"], w["kind"], w["line"],
                   w["killed_by"], w["note"] or w["detail"][:100]]
-                 for w in ws if w["effect"] != "drop"]
+                 for w in ws if w["status"] != "drop"]
         if not steps:
             continue
         group, label = chain_label(key, ws)
@@ -116,10 +110,6 @@ def compact_authors(a: dict) -> dict:
                 for v, i in a["by_version"].items()},
         "commits": a.get("commits", 0),
     }
-
-
-GROUP_RANK = {"public.query": 0, "Funciones": 1, "DDL": 2, "Catálogo": 3,
-              "DDL dinámico": 4}
 
 
 def chain_label(key: str, ws: list[dict]) -> tuple[str, str]:
@@ -1676,7 +1666,6 @@ def build(model: dict) -> str:
         for u in data["unparsed"]) or \
         '<tr><td colspan="3" class="empty">Todas las sentencias quedaron clasificadas</td></tr>'
 
-    parcial_files = sum(1 for m in migs if m["dl"] and m["vd"] in ("parcial", "residual"))
     rcc = meta.get("recorte", {})
     rc_line = (f'{rcc.get("recortable", 0)} recortables tal cual · {rcc.get("con-ajuste", 0)} con ajuste · '
                f'{rcc.get("revisar-backfill", 0)} con backfill' if meta.get("precision")

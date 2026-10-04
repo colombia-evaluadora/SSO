@@ -25,15 +25,12 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[3]
 MIG = REPO / "postgres" / "migrations"
 sys.path.insert(0, str(REPO / "scripts" / "migration-analysis"))
+from nucleo import vkey  # noqa: E402
 from sqlscan import (dollar_bodies, match_paren, normalize_type, parse_params,  # noqa: E402
                      split_statements, split_top_level)
 
 FN_NAME = r'((?:"?\w+"?\.)?"?\w+"?)'
 CTX_EJECUTA = ("migracion", "sql-body")  # contextos en los que la funcion tiene que existir
-
-
-def vkey(v: str) -> tuple:
-    return tuple(int(x) for x in re.findall(r"\d+", v or "0"))
 
 
 def split_name(q: str) -> tuple[str, str]:
@@ -77,7 +74,6 @@ class Use:
     ctx: str                # migracion | sql-body | plpgsql | texto | objeto
     name: str
     where: str              # funcion o sentencia que llama
-    nargs: int | None = None
     sig: tuple | None = None  # ctx objeto: firma exacta del COMMENT/ALTER
 
 
@@ -244,9 +240,6 @@ class SigLife:
 
     def definer(self):
         return self._state_at((10 ** 9,))
-
-    def present_at(self, v: str, line: int = 0):
-        return self._state_at(vkey(v), line)
 
 
 def _same(a: str, b: str) -> bool:
