@@ -4,6 +4,7 @@
     python scripts/migration-analysis [informe] [--open] [--json m.json] ...
     python scripts/migration-analysis lint (--all | <ficheros> | --from N)
     python scripts/migration-analysis orden (--base origin/dev | <ficheros>)
+    python scripts/migration-analysis hueco (--categoria planeador | --objeto fn_x ...)
     python scripts/migration-analysis mapa [--check]
     python scripts/migration-analysis oraculo [--mantener | --reusar]
 
@@ -24,6 +25,7 @@ SUBCOMANDOS = {
     "informe": ("comandos.informe", "informe HTML del analisis (por defecto)"),
     "lint": ("comandos.lint", "invariantes de las migraciones (reglas de regresiones reales)"),
     "orden": ("comandos.orden", "migraciones que nacen muertas por el orden de versiones"),
+    "hueco": ("comandos.hueco", "numero libre junto a la categoria, por encima de sus dependencias"),
     "mapa": ("comandos.mapa", "docs/MAPA.md: dominio -> funcion viva -> migracion duena"),
     "oraculo": ("comandos.oraculo", "verifica el modelo contra un Postgres real"),
 }
