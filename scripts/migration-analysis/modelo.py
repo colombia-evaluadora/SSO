@@ -26,17 +26,14 @@ MIGRATIONS = REPO / "postgres" / "migrations"
 PRECISION = REPO / ".claude" / "skills" / "next-migration-number" / "precision.py"
 CACHE = Path(tempfile.gettempdir()) / "sso-migrations-model.json"
 
-# Si cambia cualquiera de estos, el modelo cacheado ya no describe lo que el
-# codigo calcularia hoy.
-_FUENTES = ("analyze_migrations.py", "categories.py", "sqlscan.py", "modelo.py")
+# El HTML no forma parte del modelo: cambiar como se pinta no lo invalida.
+# Cualquier otro .py de esta carpeta (extractores, grafo, categorias...) si.
+_SIN_EFECTO_EN_MODELO = ("render.py", "render_categories.py", "oraculo.py")
 
 if str(HERE) not in sys.path:
     sys.path.insert(0, str(HERE))
 
-
-def vkey(v: str) -> tuple:
-    """Orden de versiones Flyway: 496.10 va despues de 496.9."""
-    return tuple(int(p) for p in str(v).lstrip("Vv").split(".") if p.isdigit())
+from nucleo import vkey  # noqa: E402,F401  (los consumidores lo usan como modelo.vkey)
 
 
 def huella() -> str:
@@ -44,7 +41,8 @@ def huella() -> str:
     for p in sorted(MIGRATIONS.glob("*.sql")):
         h.update(p.name.encode())
         h.update(p.read_bytes())
-    for p in [HERE / f for f in _FUENTES] + [PRECISION]:
+    fuentes = [p for p in sorted(HERE.glob("*.py")) if p.name not in _SIN_EFECTO_EN_MODELO]
+    for p in fuentes + [PRECISION]:
         if p.exists():
             h.update(p.name.encode())
             h.update(p.read_bytes())
