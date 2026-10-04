@@ -1,4 +1,4 @@
-"""Capa de precision sobre el modelo de analyze_migrations.py.
+"""Capa de precision sobre el modelo del analizador (scripts/migration-analysis).
 
 El modelo identifica funciones por nombre y numero de parametros y no distingue
 en que contexto se usa un objeto. Eso da falsos "muertos" y oculta dependencias:
@@ -25,8 +25,8 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[3]
 MIG = REPO / "postgres" / "migrations"
 sys.path.insert(0, str(REPO / "scripts" / "migration-analysis"))
-from nucleo import vkey  # noqa: E402
-from sqlscan import (dollar_bodies, match_paren, normalize_type, parse_params,  # noqa: E402
+from base.nucleo import vkey  # noqa: E402
+from base.sqlscan import (dollar_bodies, match_paren, normalize_type, parse_params,  # noqa: E402
                      split_statements, split_top_level)
 
 FN_NAME = r'((?:"?\w+"?\.)?"?\w+"?)'

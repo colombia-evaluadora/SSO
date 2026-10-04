@@ -1,6 +1,6 @@
 r"""Pasa el linter de invariantes a la migracion recien editada.
 
-PostToolUse sobre Write/Edit. Cada regla de `scripts/migration-analysis/lint.py`
+PostToolUse sobre Write/Edit. Cada regla de `scripts/migration-analysis/comandos/lint.py`
 corresponde a una regresion que ya ocurrio en este repo; no valida SQL --para
 eso esta el Postgres local-- sino las convenciones que se violan en silencio y
 solo se notan en produccion.

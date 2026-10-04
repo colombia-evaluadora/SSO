@@ -3,7 +3,7 @@
 
     python .claude/skills/limpiando-migraciones/propuesta.py 51 59 227 > plan.json
 
-Parte del modelo de analyze_migrations.py y lo corrige con precision.py (firma
+Parte del modelo del analizador (base.modelo) y lo corrige con precision.py (firma
 exacta y contexto de uso). El plan NO se aplica sin revisarlo: todo lo que sale
 en stderr como REVISAR es una decision, no un automatismo.
 """
@@ -19,11 +19,11 @@ REPO = HERE.parents[2]
 sys.path.insert(0, str(REPO / "scripts" / "migration-analysis"))
 sys.path.insert(0, str(REPO / ".claude" / "skills" / "next-migration-number"))
 import precision as P  # noqa: E402
-from sqlscan import split_statements  # noqa: E402
+from base.sqlscan import split_statements  # noqa: E402
 
 
 def modelo() -> dict:
-    import modelo as M
+    from base import modelo as M
     return M.cargar()
 
 

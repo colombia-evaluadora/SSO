@@ -17,7 +17,7 @@ alguno de los mismos objetos "reseteables" (funciones, vistas, triggers,
 filas de public.query). Tablas/columnas no entran: su DDL es IF NOT EXISTS
 y re-correrlo no resetea nada.
 
-Solo stdlib. Se apoya en scripts/migration-analysis/analyze_migrations.py.
+Solo stdlib. Se apoya en scripts/migration-analysis/analisis/construir.py.
 """
 from __future__ import annotations
 
@@ -49,7 +49,7 @@ def _sort_key(version: str) -> tuple:
 def load_model(path: Path | None) -> dict:
     if path is None:
         sys.path.insert(0, str(REPO / "scripts" / "migration-analysis"))
-        import modelo
+        from base import modelo
         return modelo.cargar()
     return json.loads(path.read_text(encoding="utf-8"))
 
@@ -78,7 +78,7 @@ def expand(model: dict, requested: set[str]) -> list[str]:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("migrations", nargs="+", help="V213, 213 o V213__x.sql")
-    ap.add_argument("--json", type=Path, help="modelo ya generado por analyze_migrations.py")
+    ap.add_argument("--json", type=Path, help="modelo ya generado (python scripts/migration-analysis informe --json)")
     ap.add_argument("--why", action="store_true", help="explica por que entra cada extra")
     args = ap.parse_args()
 

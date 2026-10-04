@@ -31,7 +31,7 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
 YA_BLOQUEO = Path(tempfile.gettempdir()) / "sso-cierre-limpio"
-GENERADOR_MAPA = REPO / "scripts" / "generar-mapa.py"
+CLI_ANALISIS = REPO / "scripts" / "migration-analysis"
 VEREDICTO_MAPA = Path(tempfile.gettempdir()) / "sso-mapa-veredicto.json"
 
 
@@ -97,7 +97,7 @@ def desfase_por_cabecera() -> str | None:
         return None
     return (f"docs/MAPA.md esta desactualizado: dice {m.group(1)} migraciones "
             f"hasta V{m.group(2)} y hay {len(ficheros)} hasta V{tope}. "
-            f"Corre python scripts/generar-mapa.py")
+            f"Corre python scripts/migration-analysis mapa")
 
 
 def mapa_desactualizado() -> str | None:
@@ -107,11 +107,11 @@ def mapa_desactualizado() -> str | None:
     entraron en dev sin regenerarlo y nadie se entero.
 
     La comprobacion de verdad cuesta ~14s porque `--check` fuerza recalcular el
-    modelo del analizador (generar-mapa.py: `load_model(refresh or check)`), y
+    modelo del analizador (migration-analysis mapa: `load_model(refresh or check)`), y
     eso esta bien para CI. Aqui se paga UNA vez por cambio, no una por turno: si
     ni las migraciones ni el mapa se han tocado desde la ultima comprobacion, se
     reutiliza su veredicto. Un turno que no toca migraciones ni llega aqui."""
-    if not GENERADOR_MAPA.exists():
+    if not (CLI_ANALISIS / "comandos" / "mapa.py").exists():
         return None
 
     barato = desfase_por_cabecera()
@@ -127,7 +127,7 @@ def mapa_desactualizado() -> str | None:
         pass
 
     try:
-        r = subprocess.run([sys.executable, str(GENERADOR_MAPA), "--check"],
+        r = subprocess.run([sys.executable, str(CLI_ANALISIS), "mapa", "--check"],
                            cwd=REPO, capture_output=True, text=True, timeout=120)
     except (subprocess.SubprocessError, OSError):
         return None
@@ -191,7 +191,7 @@ def main() -> int:
     sys.stderr.write(
         "El turno no puede cerrar: hay migraciones del working tree con "
         "invariantes rotas.\n\n" + salida + "\n"
-        "Son las reglas de scripts/migration-analysis/lint.py, cada una de una regresion "
+        "Son las reglas de scripts/migration-analysis/comandos/lint.py, cada una de una regresion "
         "real.\nCorrigelas. Si alguna no aplica en este caso concreto, dilo "
         "explicitamente\nen la respuesta; no la silencies en el script.\n")
     return 2

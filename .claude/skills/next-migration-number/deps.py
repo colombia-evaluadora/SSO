@@ -3,7 +3,7 @@
 
 Responde la pregunta previa a escribir una migracion: "esto ya existe, ¿lo
 edito o creo una nueva?". Se apoya en el modelo JSON de
-scripts/migration-analysis/analyze_migrations.py (no re-parsea SQL).
+scripts/migration-analysis/analisis/construir.py (no re-parsea SQL).
 
     python .claude/skills/next-migration-number/deps.py fn_actividad_listar
     python .claude/skills/next-migration-number/deps.py /planeador/actividades
@@ -25,7 +25,7 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO / "scripts" / "migration-analysis"))
-import modelo  # noqa: E402
+from base import modelo  # noqa: E402
 
 vsort = modelo.vkey  # orden de versiones de Flyway
 
