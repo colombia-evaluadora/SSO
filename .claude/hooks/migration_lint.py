@@ -1,6 +1,6 @@
 r"""Pasa el linter de invariantes a la migracion recien editada.
 
-PostToolUse sobre Write/Edit. Cada regla de `scripts/migration-lint.py`
+PostToolUse sobre Write/Edit. Cada regla de `scripts/migration-analysis/lint.py`
 corresponde a una regresion que ya ocurrio en este repo; no valida SQL --para
 eso esta el Postgres local-- sino las convenciones que se violan en silencio y
 solo se notan en produccion.
@@ -20,7 +20,7 @@ import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
-LINTER = REPO / "scripts" / "migration-lint.py"
+CLI = REPO / "scripts" / "migration-analysis"
 
 
 def main() -> int:
@@ -39,11 +39,11 @@ def main() -> int:
         return 0
     if "postgres/migrations" not in p.as_posix():
         return 0
-    if not LINTER.exists():
+    if not (CLI / "__main__.py").exists():
         return 0
 
     try:
-        r = subprocess.run([sys.executable, str(LINTER), str(p), "--quiet-ok"],
+        r = subprocess.run([sys.executable, str(CLI), "lint", str(p), "--quiet-ok"],
                            cwd=REPO, capture_output=True, text=True, timeout=180)
     except (subprocess.SubprocessError, OSError):
         return 0

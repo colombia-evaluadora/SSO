@@ -154,11 +154,11 @@ def main() -> int:
     if not rutas:
         return 0
 
-    linter = REPO / "scripts" / "migration-lint.py"
-    if not linter.exists():
+    cli = REPO / "scripts" / "migration-analysis"
+    if not (cli / "__main__.py").exists():
         return 0
     try:
-        r = subprocess.run([sys.executable, str(linter), *rutas, "--quiet-ok"],
+        r = subprocess.run([sys.executable, str(cli), "lint", *rutas, "--quiet-ok"],
                            cwd=REPO, capture_output=True, text=True, timeout=180)
     except (subprocess.SubprocessError, OSError):
         return 0
@@ -191,7 +191,7 @@ def main() -> int:
     sys.stderr.write(
         "El turno no puede cerrar: hay migraciones del working tree con "
         "invariantes rotas.\n\n" + salida + "\n"
-        "Son las reglas de scripts/migration-lint.py, cada una de una regresion "
+        "Son las reglas de scripts/migration-analysis/lint.py, cada una de una regresion "
         "real.\nCorrigelas. Si alguna no aplica en este caso concreto, dilo "
         "explicitamente\nen la respuesta; no la silencies en el script.\n")
     return 2
