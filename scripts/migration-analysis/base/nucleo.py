@@ -36,7 +36,7 @@ def vnum(v: str) -> float:
     return float(parts[0]) + sum(int(p) / 1000 ** i for i, p in enumerate(parts[1:], 1))
 
 
-REPO = Path(__file__).resolve().parents[2]
+REPO = Path(__file__).resolve().parents[3]
 
 
 MIGRATIONS = REPO / "postgres" / "migrations"

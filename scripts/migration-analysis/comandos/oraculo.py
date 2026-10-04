@@ -11,9 +11,9 @@ Es la prueba de regresion del analizador: tras tocar un extractor o el grafo,
 cero discrepancias quiere decir que el modelo describe la base que el
 historial produce de verdad.
 
-    python scripts/migration-analysis/oraculo.py              # levanta, aplica, compara, borra
-    python scripts/migration-analysis/oraculo.py --mantener   # deja el contenedor para repetir
-    python scripts/migration-analysis/oraculo.py --reusar     # compara contra el ya levantado
+    python scripts/migration-analysis oraculo              # levanta, aplica, compara, borra
+    python scripts/migration-analysis oraculo --mantener   # deja el contenedor para repetir
+    python scripts/migration-analysis oraculo --reusar     # compara contra el ya levantado
 
 Solo local: el contenedor publica en 127.0.0.1 y Flyway llega por
 host.docker.internal (lo que permite el hook no_prod). Nunca un servidor.
@@ -30,10 +30,9 @@ import time
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-sys.path.insert(0, str(HERE))
-import modelo  # noqa: E402
-from sqlscan import identity_sig, parse_params  # noqa: E402
-from nucleo import consola_utf8  # noqa: E402
+from base import modelo  # noqa: E402
+from base.sqlscan import identity_sig, parse_params  # noqa: E402
+from base.nucleo import consola_utf8  # noqa: E402
 
 consola_utf8()
 
@@ -260,6 +259,3 @@ def main(argv: list[str] | None = None) -> int:
                                         ensure_ascii=False), encoding="utf-8")
     return 1 if total else 0
 
-
-if __name__ == "__main__":
-    sys.exit(main())

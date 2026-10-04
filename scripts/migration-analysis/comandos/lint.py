@@ -28,10 +28,10 @@ from functools import cached_property
 from pathlib import Path
 from typing import Iterator
 
-import sqlscan
-from nucleo import MIGRATIONS, REPO, consola_utf8, vnum
+from base import sqlscan
+from base.nucleo import MIGRATIONS, REPO, consola_utf8, vnum
 
-BASELINE = REPO / "scripts" / "migration-analysis" / "lint-baseline.json"
+BASELINE = Path(__file__).resolve().parent / "lint-baseline.json"
 
 
 # ---------------------------------------------------------------------------
@@ -116,7 +116,7 @@ def live_arities(model: dict | None) -> dict[str, dict[int, str]]:
 def load_model(refresh: bool = False) -> dict | None:
     """Modelo del analizador. El lint nunca se cae por el: sin el, menos reglas."""
     try:
-        import modelo
+        from base import modelo
         return modelo.cargar(refresh=refresh)
     except Exception:
         return None

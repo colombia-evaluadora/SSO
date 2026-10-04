@@ -4,9 +4,12 @@
     python scripts/migration-analysis [informe] [--open] [--json m.json] ...
     python scripts/migration-analysis lint (--all | <ficheros> | --from N)
     python scripts/migration-analysis orden (--base origin/dev | <ficheros>)
+    python scripts/migration-analysis mapa [--check]
     python scripts/migration-analysis oraculo [--mantener | --reusar]
 
-Sin subcomando genera el informe HTML (lo mismo que analyze_migrations.py).
+Sin subcomando genera el informe HTML. El codigo vive en paquetes: base
+(SQL, tipos, cache del modelo), lectura (extractores), analisis (grafo,
+usos, categorias...), vista (HTML) y comandos (un modulo por subcomando).
 Todos leen el mismo modelo (modelo.cargar), asi que no se contradicen.
 """
 from __future__ import annotations
@@ -18,10 +21,11 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 SUBCOMANDOS = {
-    "informe": ("analyze_migrations", "informe HTML del analisis (por defecto)"),
-    "lint": ("lint", "invariantes de las migraciones (reglas de regresiones reales)"),
-    "orden": ("orden", "migraciones que nacen muertas por el orden de versiones"),
-    "oraculo": ("oraculo", "verifica el modelo contra un Postgres real"),
+    "informe": ("comandos.informe", "informe HTML del analisis (por defecto)"),
+    "lint": ("comandos.lint", "invariantes de las migraciones (reglas de regresiones reales)"),
+    "orden": ("comandos.orden", "migraciones que nacen muertas por el orden de versiones"),
+    "mapa": ("comandos.mapa", "docs/MAPA.md: dominio -> funcion viva -> migracion duena"),
+    "oraculo": ("comandos.oraculo", "verifica el modelo contra un Postgres real"),
 }
 
 

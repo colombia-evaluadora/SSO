@@ -10,7 +10,7 @@ from __future__ import annotations
 from collections import defaultdict
 from dataclasses import asdict
 
-from nucleo import Migration, UnionFind, Write, vnum
+from base.nucleo import Migration, UnionFind, Write, vnum
 
 
 def resolve_methods(migs: list[Migration]) -> None:

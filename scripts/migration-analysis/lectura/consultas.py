@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import re
 
-from sqlscan import find_top_level, mask_inert, match_paren, split_top_level
+from base.sqlscan import find_top_level, mask_inert, match_paren, split_top_level
 
 
 HTTP_METHODS = ("GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS")

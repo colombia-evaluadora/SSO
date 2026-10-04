@@ -56,7 +56,7 @@ CAT_PANEL = """
   <code>public.query</code>); si el nombre no dice nada, hereda de lo que usa o de su migración.
   Cada migración tiene una categoría principal —la de su nombre de archivo o, si no casa con
   ninguna, la de la mayoría de sus líneas— y figura en «también la tocan» de las demás que ocupan
-  ≥15% de sus sentencias. Las reglas están en <code>scripts/migration-analysis/categories.py</code>.</p>
+  ≥15% de sus sentencias. Las reglas están en <code>scripts/migration-analysis/analisis/categories.py</code>.</p>
   <div class="catstack" id="catstack" aria-label="Líneas por categoría"></div>
   <div class="catlegend" id="catlegend"></div>
   <h3>Línea de migraciones por categoría</h3>

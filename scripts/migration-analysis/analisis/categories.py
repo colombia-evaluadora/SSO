@@ -75,7 +75,7 @@ _GENERIC = {"plataforma"}
 _INHERIT = {"bind", "data", "comment", "scratch", "dynamic", "query_bulk"}
 
 
-# Estados del mapa de lineas (analyze_migrations.line_budget + apply_precision):
+# Estados del mapa de lineas (grafo.line_budget + poda.apply_precision):
 # l vigente, d recortable, n sin efecto pero se conserva, c comentario,
 # b en blanco, o sin encadenar. Todo numero de lineas por categoria sale de
 # aqui, igual que el mapa de cada archivo: no hay una segunda cuenta que

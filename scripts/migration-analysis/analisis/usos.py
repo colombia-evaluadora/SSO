@@ -10,8 +10,8 @@ from __future__ import annotations
 import re
 from collections import defaultdict
 
-from sqlscan import count_call_args, match_paren, split_statements, split_top_level, strip_comments
-from nucleo import Migration, REPO, Write, vnum
+from base.sqlscan import count_call_args, match_paren, split_statements, split_top_level, strip_comments
+from base.nucleo import Migration, REPO, Write, vnum
 
 
 # El esquema es opcional: dentro de los cuerpos PL/pgSQL, con `SET search_path`,

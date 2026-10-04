@@ -12,9 +12,9 @@ from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 
-from sqlscan import Statement, dollar_bodies, identity_sig, mask_inert, match_paren, parse_params, split_statements, split_top_level, strip_comments
-from nucleo import FILE_RE, Migration, REPO, Write, qname, strip_schema, vnum
-from consultas import HTTP_METHODS, bind_targets, cte_insert_rows, dml_effect, find_all_values, literals, query_columns, query_row_keys, query_row_keys_from, values_rows
+from base.sqlscan import Statement, dollar_bodies, identity_sig, mask_inert, match_paren, parse_params, split_statements, split_top_level, strip_comments
+from base.nucleo import FILE_RE, Migration, REPO, Write, qname, strip_schema, vnum
+from lectura.consultas import HTTP_METHODS, bind_targets, cte_insert_rows, dml_effect, find_all_values, literals, query_columns, query_row_keys, query_row_keys_from, values_rows
 
 
 RE_FUNC = re.compile(

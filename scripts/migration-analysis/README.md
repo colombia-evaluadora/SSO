@@ -16,10 +16,10 @@ python scripts/migration-analysis oraculo             # verifica el modelo contr
 Sin subcomando genera el informe:
 
 ```bash
-python scripts/migration-analysis/analyze_migrations.py            # -> docs/auditoria/migraciones-analisis.html
-python scripts/migration-analysis/analyze_migrations.py --open     # y lo abre
-python scripts/migration-analysis/analyze_migrations.py --from 355 --to 394
-python scripts/migration-analysis/analyze_migrations.py --no-git --json modelo.json
+python scripts/migration-analysis informe            # -> docs/auditoria/migraciones-analisis.html
+python scripts/migration-analysis informe --open     # y lo abre
+python scripts/migration-analysis informe --from 355 --to 394
+python scripts/migration-analysis informe --no-git --json modelo.json
 ```
 
 Solo stdlib (Python 3.10+). `git` es opcional: sin él no se puede calcular el
@@ -63,21 +63,18 @@ necesita al migrar (ver "Qué se puede recortar").
 
 ## Arquitectura
 
-| Fichero | Qué hace |
-|---|---|
-| `sqlscan.py` | Parte el SQL en sentencias respetando literales, `$$ … $$` y comentarios; enmascara lo que no se ejecuta al migrar (`mask_inert`) y da la firma de identidad de una función. |
-| `nucleo.py` | Tipos compartidos (`Write`, `Migration`), orden de versiones (`vkey`, `vnum`) y rutas del repo. |
-| `extraccion.py` | `LectorMigracion` lee un archivo; el DDL lo emiten los `EXTRACTORES_DDL` (una clase por familia: funciones, relaciones, ALTER TABLE, índices…) y el DML del catálogo se despacha por tabla destino (`_DML`). `Registro` resuelve esquemas como Postgres. |
-| `consultas.py` | Filas de `public.query`: qué fila toca una sentencia, qué columnas escribe y a qué filas ata un bind. |
-| `grafo.py` | `build_graph` y un `Resolutor` por tipo de objeto (`Generico`, `Funcion`, `FilaQuery`, `Acumulativo`, `SinIdentidad`): status de cada escritura y `estado` final. Binds de `role_query`, líneas y veredicto. |
-| `usos.py` | Quién usa qué: llamadas SQL y Java, referencias a tablas, firmas cambiadas, huérfanas y llamadas a funciones borradas. |
-| `historia.py` | Autoría y números libres en todas las ramas (git). |
-| `poda.py` | Recorte por firma exacta con `precision.py`. |
-| `categories.py` | Taxonomía funcional y **la única** agregación por categoría. |
-| `analyze_migrations.py` | `construir()` orquesta lo anterior sin escribir nada; el CLI lo envuelve. |
-| `modelo.py` | Punto único de acceso al modelo, con caché por huella de las migraciones y de estos módulos. |
-| `oraculo.py` + `catalogo.sql` | Verifica el modelo contra un Postgres real con todo el historial aplicado (ver Precisión). |
-| `render.py` + `render_categories.py` | Solo pintan el modelo: no recalculan ninguna cifra. |
+Cada carpeta es un paquete; `__main__.py` es el CLI.
+
+| Paquete | Módulos | Qué hace |
+|---|---|---|
+| `base/` | `sqlscan`, `nucleo`, `modelo` | Splitter de SQL y máscara de lo que no se ejecuta; tipos (`Write`, `Migration`), orden de versiones (`vkey`, `vnum`) y rutas; acceso cacheado al modelo (`modelo.cargar`). |
+| `lectura/` | `extraccion`, `consultas` | `LectorMigracion` lee un archivo: `EXTRACTORES_DDL` (una clase por familia de DDL) y `_DML` por tabla destino; `Registro` resuelve esquemas como Postgres. Filas de `public.query` y destinos de los binds. |
+| `analisis/` | `construir`, `grafo`, `usos`, `historia`, `poda`, `categories` | `construir()` arma el modelo; un `Resolutor` por tipo de objeto decide qué vive; usos y firmas; autoría y números libres (git); recorte con `precision.py`; la única agregación por categoría. |
+| `vista/` | `render`, `render_categories` | El HTML: solo pinta el modelo, no recalcula ninguna cifra. |
+| `comandos/` | `informe`, `lint`, `orden`, `mapa`, `oraculo` | Un módulo por subcomando, con su `main(argv)` y sus datos al lado (`lint-baseline.json`, `catalogo.sql`). |
+
+Solo `base/`, `lectura/` y `analisis/` (más `precision.py`) entran en la huella
+del caché: cambiar la vista o un comando no obliga a recalcular el modelo.
 
 **Extender**: un tipo de DDL nuevo es una subclase de `ExtractorDDL` en
 `EXTRACTORES_DDL` (o una fila de `SIMPLE_DDL` si es un objeto con nombre
@@ -92,7 +89,7 @@ categoría) → JSON / HTML / consumidores. Una cifra se calcula en un solo siti
 
 **Todos los consumidores leen por `modelo.cargar()`**: `deps.py`, `precision`,
 `lint.py` (y su hook), `orden.py`, `migration-reapply-set.py`,
-`generar-mapa.py` (y el hook Stop) y `limpiando-migraciones/propuesta.py`.
+`migration-analysis mapa` (y el hook Stop) y `limpiando-migraciones/propuesta.py`.
 El modelo se cachea en `%TEMP%/sso-migrations-model.json` con la huella de
 todas las migraciones y del código del analizador (incluido `precision.py`):
 si cambia un `.sql` o una regla se reconstruye solo, y nadie necesita
@@ -157,7 +154,7 @@ y lo marca como `sin-precision`.
 
 La pestaña **Líneas y comentarios** mide también el presupuesto de CLAUDE.md
 (cabecera de ≤12 líneas, ≤20% de comentario) con el **mismo criterio que
-`scripts/migration-analysis/lint.py`**: líneas que empiezan con `--`, y fuera de
+`scripts/migration-analysis/comandos/lint.py`**: líneas que empiezan con `--`, y fuera de
 presupuesto sólo si pasa el 20% *y* tiene más de 20 líneas de comentario. Así
 el informe y el linter no pueden contradecirse. La escala es de tres niveles
 —dentro / 20-40% / >40%— porque con un solo umbral quedaban 249 de 384
@@ -283,8 +280,8 @@ patrón (`LIKE '/planeador/%'`) no se pueden nombrar y se tratan como persistent
 ### Verificación contra una base real
 
 ```bash
-python scripts/migration-analysis/oraculo.py            # ~2 min
-python scripts/migration-analysis/oraculo.py --mantener # y luego --reusar
+python scripts/migration-analysis oraculo            # ~2 min
+python scripts/migration-analysis oraculo --mantener # y luego --reusar
 ```
 
 Levanta un Postgres 16 desechable en local, aplica todo el historial con Flyway

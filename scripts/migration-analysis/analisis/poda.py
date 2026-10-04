@@ -10,7 +10,7 @@ import re
 import sys
 from collections import defaultdict
 
-from nucleo import REPO
+from base.nucleo import REPO
 
 
 # El modelo empareja funciones por nombre y aridad. precision.py (skill

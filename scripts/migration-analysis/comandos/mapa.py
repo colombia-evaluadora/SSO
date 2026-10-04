@@ -3,30 +3,24 @@
 
 Son ~110k lineas de SQL repartidas en 330 migraciones; sin indice, localizar
 "donde toco esto" es un grep. Este mapa se deriva del modelo de
-scripts/migration-analysis/analyze_migrations.py, asi que no puede mentir: sale
+scripts/migration-analysis/analisis/construir.py, asi que no puede mentir: sale
 del mismo grafo que dice que escritura sigue viva.
 
-    python scripts/generar-mapa.py            # -> docs/MAPA.md
-    python scripts/generar-mapa.py --check    # falla si esta desactualizado (CI)
+    python scripts/migration-analysis mapa            # -> docs/MAPA.md
+    python scripts/migration-analysis mapa --check    # falla si esta desactualizado (CI)
 """
 from __future__ import annotations
 
 import argparse
 import collections
 import re
-import sys
 from datetime import date
 from pathlib import Path
 
-REPO = Path(__file__).resolve().parents[1]
+from base import modelo
+from base.nucleo import REPO, consola_utf8
+
 OUT = REPO / "docs" / "MAPA.md"
-
-
-sys.path.insert(0, str(REPO / "scripts" / "migration-analysis"))
-import modelo  # noqa: E402
-from nucleo import consola_utf8  # noqa: E402
-
-consola_utf8()
 
 vsort = modelo.vkey
 
@@ -128,7 +122,7 @@ def build(model: dict) -> str:
     L: list[str] = []
     L.append("# Mapa del dominio")
     L.append("")
-    L.append("**Generado** por `python scripts/generar-mapa.py` — no editar a mano.")
+    L.append("**Generado** por `python scripts/migration-analysis mapa` — no editar a mano.")
     L.append(f"Estado: {meta['count']} migraciones (V{meta['range'][0]}–V{meta['range'][1]}), "
              f"{len(fns)} funciones vivas, {len(routes)} endpoints vivos. "
              f"Ultima generacion: {date.today().isoformat()}.")
@@ -147,7 +141,7 @@ def build(model: dict) -> str:
              "`deps.py --version <n>`.")
     L.append("")
     L.append("Las secciones son las categorias funcionales de "
-             "`scripts/migration-analysis/categories.py`, las mismas del informe HTML.")
+             "`scripts/migration-analysis/analisis/categories.py`, las mismas del informe HTML.")
     L.append("")
 
     L.append("## Indice")
@@ -185,11 +179,12 @@ def build(model: dict) -> str:
     return "\n".join(L) + "\n"
 
 
-def main() -> int:
-    ap = argparse.ArgumentParser(description=__doc__)
+def main(argv: list[str] | None = None) -> int:
+    consola_utf8()
+    ap = argparse.ArgumentParser(prog="migration-analysis mapa", description=__doc__)
     ap.add_argument("--check", action="store_true", help="solo verifica que este al dia")
     ap.add_argument("--refresh", action="store_true", help="recalcula el modelo")
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
 
     text = build(modelo.cargar(refresh=args.refresh))
 
@@ -197,7 +192,7 @@ def main() -> int:
         current = OUT.read_text(encoding="utf-8") if OUT.exists() else ""
         strip = lambda s: re.sub(r"Ultima generacion: \d{4}-\d{2}-\d{2}\.", "", s)
         if strip(current) != strip(text):
-            print("docs/MAPA.md esta desactualizado: corre python scripts/generar-mapa.py")
+            print("docs/MAPA.md esta desactualizado: corre python scripts/migration-analysis mapa")
             return 1
         print("docs/MAPA.md al dia.")
         return 0
@@ -207,6 +202,3 @@ def main() -> int:
     print(f"docs/MAPA.md -> {len(text.splitlines())} lineas")
     return 0
 
-
-if __name__ == "__main__":
-    sys.exit(main())

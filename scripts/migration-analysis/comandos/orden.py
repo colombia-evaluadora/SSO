@@ -33,7 +33,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from nucleo import MIGRATIONS, REPO, consola_utf8, vkey
+from base.nucleo import MIGRATIONS, REPO, consola_utf8, vkey
 
 # Una funcion creada solo si aun no existe: en un servidor no revierte nada y
 # en una base limpia la pisa la posterior, que es lo buscado.
@@ -134,7 +134,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     try:
-        import modelo
+        from base import modelo
         model = modelo.cargar(refresh=args.refresh)
     except (subprocess.SubprocessError, OSError, ValueError, SystemExit) as exc:
         sys.stderr.write(f"no se pudo construir el modelo de migraciones: {exc}\n")
