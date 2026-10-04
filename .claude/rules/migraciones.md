@@ -50,7 +50,9 @@ cada capa llamando solo a las de número menor (así una base limpia aplica):
 
 Numeración: si el dominio ya tiene un bloque, usar **huecos decimales junto a
 él** (`V496.1`–`V496.4`) en vez del techo global: reduce colisiones entre PRs
-(V523) y deja las capas contiguas. Re-escanear con `scan.sh` antes de fusionar.
+(V523) y deja las capas contiguas. `python scripts/migration-analysis hueco
+--categoria <id> [--objeto fn_x ...]` lo calcula (piso por dependencias,
+decimales de todas las ramas y PRs). Re-escanear antes de fusionar.
 
 ## Skills y agentes
 

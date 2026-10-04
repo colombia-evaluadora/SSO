@@ -82,6 +82,26 @@ cómo se usan. `precision.py` relee los `.sql` y corrige eso:
 
 ## Paso 3 — el número
 
+Para una migración **nueva**, el número se elige junto a su categoría, no al
+final de todo:
+
+```bash
+python scripts/migration-analysis hueco --categoria planeador
+python scripts/migration-analysis hueco --objeto fn_actividad_listar --objeto fn_unidad_crear
+```
+
+- **Piso:** cada `--objeto` que la migración redefine o usa fija un mínimo, la
+  migración que lo define hoy. Por debajo, la pisa la posterior (`orden`).
+- **Recomendado:** el primer decimal libre detrás de la última migración de la
+  categoría que supera el piso (`V531.1`). Así la funcionalidad queda contigua y
+  dos PRs casi nunca chocan en el mismo número.
+- **Libre de verdad:** se mira el árbol local, todas las ramas de `origin` y
+  las PRs abiertas, **decimales incluidos** (`scan.sh` solo ve enteros).
+- Los huecos enteros cercanos salen aparte: solo out-of-order deliberado.
+- Sin categoría clara o sin hueco junto a ella: el siguiente al techo.
+
+`scan.sh` sigue dando el panorama (máximo por rama, huecos, PRs abiertas):
+
 ```bash
 bash .claude/skills/next-migration-number/scan.sh
 ```
