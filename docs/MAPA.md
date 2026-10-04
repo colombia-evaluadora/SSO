@@ -1,7 +1,7 @@
 # Mapa del dominio
 
 **Generado** por `python scripts/generar-mapa.py` — no editar a mano.
-Estado: 470 migraciones (V1–V542), 1011 funciones vivas, 63 endpoints vivos. Ultima generacion: 2026-10-02.
+Estado: 471 migraciones (V1–V546), 1011 funciones vivas, 63 endpoints vivos. Ultima generacion: 2026-10-04.
 
 Para una **funcion**, la migracion dueña es la que hay que editar: es su ultima escritura viva, no la que la creo.
 
@@ -328,7 +328,7 @@ El detalle exacto (historial, firmas, dependencias) sale de `python .claude/skil
 | `academico_test.fn_actividad_validar_catalogo` | 3 | V496.1 | V496.5 |
 | `academico_test.fn_actividad_validar_coherencia` | 17 | V496.1 | V496.2 |
 | `academico_test.fn_actividad_validar_cotejo_captura` | 2 | V496.5 | V496.6 |
-| `academico_test.fn_actividad_validar_cotejo_definicion` | 2 | V496.5 | — |
+| `academico_test.fn_actividad_validar_cotejo_definicion` | 3 | V496.5 | — |
 | `academico_test.fn_actividad_validar_cotejo_item` | 2 | V496.5 | V496.6 |
 | `academico_test.fn_actividad_validar_criterio` | 3 | V496.1 | V496.2 |
 | `academico_test.fn_actividad_validar_cumplido` | 1 | V496.5 | V496.6 |
@@ -373,7 +373,7 @@ El detalle exacto (historial, firmas, dependencias) sale de `python .claude/skil
 | `academico_test.fn_actividad_validar_referente_calificable` | 1 | V496.5 | V496.6 |
 | `academico_test.fn_actividad_validar_requerido` | 2 | V496.1 | — |
 | `academico_test.fn_actividad_validar_rubrica_captura` | 2 | V496.5 | V496.6 |
-| `academico_test.fn_actividad_validar_rubrica_definicion` | 2 | V496.5 | — |
+| `academico_test.fn_actividad_validar_rubrica_definicion` | 3 | V496.5 | — |
 | `academico_test.fn_actividad_validar_rubrica_nivel` | 3 | V496.5 | V496.6 |
 | `academico_test.fn_actividad_validar_sin_asistencias` | 1 | V482 | — |
 | `academico_test.fn_actividad_validar_sin_notas` | 1 | V496.1 | V482 |
@@ -1207,7 +1207,7 @@ El detalle exacto (historial, firmas, dependencias) sale de `python .claude/skil
 | `academico_test.fn_refcurr_grados_vinculados_interno` | 1 | V214.3 | V492.1 |
 | `academico_test.fn_refcurr_impacto` | 2 | V214.3 | — |
 | `academico_test.fn_refcurr_impacto_interno` | 1 | V214.3 | — |
-| `academico_test.fn_refcurr_listar` | 11 | V214.3 | V214 |
+| `academico_test.fn_refcurr_listar` | 11 | V214.3 | V214, V546 |
 | `academico_test.fn_refcurr_listar_interno` | 10 | V214.3 | — |
 | `academico_test.fn_refcurr_niveles_listar` | 2 | V213 | V214 |
 | `academico_test.fn_refcurr_nombre_asignatura` | 2 | V214.3 | — |
