@@ -1,6 +1,6 @@
 # Mapa del dominio
 
-**Generado** por `python scripts/generar-mapa.py` — no editar a mano.
+**Generado** por `python scripts/migration-analysis mapa` — no editar a mano.
 Estado: 470 migraciones (V1–V542), 1006 funciones vivas, 58 endpoints vivos. Ultima generacion: 2026-10-03.
 
 Para una **funcion**, la migracion dueña es la que hay que editar: es su ultima escritura viva, no la que la creo.
@@ -9,7 +9,7 @@ Para un **endpoint** se listan todas las migraciones que lo tocan, sin elegir du
 
 El detalle exacto (historial, firmas, dependencias) sale de `python .claude/skills/next-migration-number/deps.py <nombre|ruta>` y `deps.py --version <n>`.
 
-Las secciones son las categorias funcionales de `scripts/migration-analysis/categories.py`, las mismas del informe HTML.
+Las secciones son las categorias funcionales de `scripts/migration-analysis/analisis/categories.py`, las mismas del informe HTML.
 
 ## Indice
 

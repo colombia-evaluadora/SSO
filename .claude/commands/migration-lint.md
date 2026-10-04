@@ -22,7 +22,7 @@ Cada regla viene de una regresión que ya ocurrió en este repo:
 
 **Baseline.** Las 330 migraciones existentes no se pueden reescribir sin romper
 checksums, así que su deuda está congelada en
-`scripts/migration-analysis/lint-baseline.json` y por defecto **solo se reporta lo
+`scripts/migration-analysis/comandos/lint-baseline.json` y por defecto **solo se reporta lo
 nuevo**. Con `--no-baseline` sale todo, útil para auditar.
 
 Al terminar:

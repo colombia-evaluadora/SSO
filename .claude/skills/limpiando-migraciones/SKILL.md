@@ -28,10 +28,10 @@ Herramientas de esta skill (todas locales, nunca contra un servidor):
 | `huella.sql`, `binds.sql`, `datos.sql` | Esquema, permisos por nombre, contenido de tablas |
 | `usos.py V<n> ...` | Usos que se ejecutan al migrar y se quedaron sin definicion |
 
-Y las del repo: `scripts/migration-analysis/analyze_migrations.py` (modelo),
+Y las del repo: `scripts/migration-analysis/analisis/construir.py` (modelo),
 `.claude/skills/next-migration-number/deps.py` (+ `precision.py`),
-`scripts/migration-reapply-set.py`, `scripts/migration-analysis/orden.py`,
-`scripts/migration-analysis/lint.py`, `scripts/generar-mapa.py`, `scan.sh`.
+`scripts/migration-reapply-set.py`, `scripts/migration-analysis/comandos/orden.py`,
+`scripts/migration-analysis/comandos/lint.py`, `scripts/migration-analysis/comandos/mapa.py`, `scan.sh`.
 
 ## 0. Rama
 
@@ -123,13 +123,13 @@ sobrecarga o un `DROP` de otra firma. `deps.py` ya no debe marcar `MUERTA` ni
 
 ```bash
 python scripts/migration-analysis lint <editados>                 # sin errores; --all no sube
-python scripts/generar-mapa.py --refresh
+python scripts/migration-analysis mapa --refresh
 git grep -n "V<n>__" -- ':!docs/MAPA.md'                     # refs a ficheros borrados
 # tras commitear:
 python scripts/migration-analysis orden --base origin/dev
 ```
 
-Podar de `scripts/migration-analysis/lint-baseline.json` las entradas de ficheros
+Podar de `scripts/migration-analysis/comandos/lint-baseline.json` las entradas de ficheros
 borrados y de hallazgos que ya no se dan.
 
 ## 6. Commits y PR

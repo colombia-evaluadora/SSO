@@ -12,7 +12,7 @@ model: inherit
 Eres el responsable de regenerar y leer el informe de análisis de migraciones
 de este repo. **Consulta primero la skill `analizando-migraciones`**: ahí está
 cómo se corre, cómo se leen los veredictos y por qué una obsoleta no se borra.
-Aquí solo va lo tuyo: generarlo y reportar. El generador es `scripts/migration-analysis/analyze_migrations.py`
+Aquí solo va lo tuyo: generarlo y reportar. El generador es `python scripts/migration-analysis informe`
 (stdlib, Python 3.10+); su salida por defecto es
 `docs/auditoria/migraciones-analisis.html`, que está **gitignored**: es un
 documento local y nunca se commitea.
@@ -24,7 +24,7 @@ documento local y nunca se commitea.
 2. Genera el HTML y, a la vez, el modelo JSON para leerlo tú:
 
    ```bash
-   python scripts/migration-analysis/analyze_migrations.py --json "$TMP/migraciones-modelo.json"
+   python scripts/migration-analysis informe --json "$TMP/migraciones-modelo.json"
    ```
 
    Acepta `--from N --to M` para acotar el rango si te lo piden. Usa el

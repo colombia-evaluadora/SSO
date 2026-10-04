@@ -34,7 +34,7 @@ parámetros):
 python .claude/skills/next-migration-number/deps.py --reutilizable planeador
 ```
 
-Lee el modelo de `scripts/migration-analysis/analyze_migrations.py` vía
+Lee el modelo de `scripts/migration-analysis/analisis/construir.py` vía
 `modelo.cargar()`: se cachea con la huella de las migraciones y se recalcula
 solo cuando cambia un `.sql`. Por cada objeto imprime su categoría funcional y:
 
@@ -175,7 +175,7 @@ busca la historia.
 
 ## Al cerrar
 
-1. `python scripts/migration-analysis/analyze_migrations.py` (o
+1. `python scripts/migration-analysis informe` (o
    `/migration-analysis`) para confirmar que no dejaste llamadores con la firma
    vieja ni colisión de número.
 2. Si el usuario pide probarla, contra el Postgres **local**

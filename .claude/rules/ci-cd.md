@@ -40,7 +40,7 @@ Un workflow nuevo o con cambios en permisos, triggers o acciones de terceros
 - **El orden de migraciones se compara con `sort -V`**, no lexicográfico: `V9` va
   antes que `V10`, y con `sort` a secas no.
 - **`deploy-test.yml` bloquea una migración que nace pisada.** El paso *Orden de
-  las migraciones* (`scripts/migration-analysis/orden.py`) falla si una migración del
+  las migraciones* (`scripts/migration-analysis/comandos/orden.py`) falla si una migración del
   diff reescribe un objeto que una versión POSTERIOR ya redefine: en una base
   limpia el cambio se pierde y en un servidor que ya pasó de ahí entra
   out-of-order y revierte lo posterior. No lo relajes para "desbloquear un

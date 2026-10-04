@@ -3,8 +3,8 @@ description: 'Checklist de cierre antes de abrir PR: lint, análisis, mapa y pla
 argument-hint: '[rama-base, por defecto dev]'
 allowed-tools: 'Bash(git status:*), Bash(git diff:*), Bash(git log:*),
   Bash(git branch:*), Bash(git fetch:*), Bash(python scripts/migration-analysis lint:*), Bash(python scripts/migration-analysis orden:*),
-  Bash(python scripts/migration-analysis/analyze_migrations.py:*),
-  Bash(python scripts/generar-mapa.py:*), Bash(bash .claude/skills/:*),
+  Bash(python scripts/migration-analysis informe:*),
+  Bash(python scripts/migration-analysis mapa:*), Bash(bash .claude/skills/:*),
   Bash(mvn -q -pl:*), Read, Grep, Glob, Edit'
 ---
 
@@ -27,7 +27,7 @@ Solo si el diff toca `postgres/migrations/`:
 
 ```bash
 python scripts/migration-analysis lint --all
-python scripts/migration-analysis/analyze_migrations.py
+python scripts/migration-analysis informe
 bash .claude/skills/next-migration-number/scan.sh
 ```
 
@@ -45,7 +45,7 @@ o despliegue; el resto se lista como opcional en el resumen.
 ## 3. Mapa del dominio
 
 ```bash
-python scripts/generar-mapa.py
+python scripts/migration-analysis mapa
 ```
 
 Si `docs/MAPA.md` cambia, va en el commit: es el índice que usa la siguiente

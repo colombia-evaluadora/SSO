@@ -39,7 +39,7 @@ por qué**. Si una existente sirve a medias, se extiende su dueña in-place.
   del dominio si existe. Número con
   `bash .claude/skills/next-migration-number/scan.sh` (todas las ramas y PRs
   abiertas). Un número menor que el de la dueña actual de un objeto no vale
-  (`scripts/migration-analysis/orden.py`).
+  (`scripts/migration-analysis/comandos/orden.py`).
 
 ## 3. Escribir
 
@@ -55,7 +55,7 @@ de menú sin tildes, cabecera ≤ 12 líneas. SQL portado de Oracle: skill
 ```bash
 python scripts/migration-analysis lint --all
 python .claude/skills/next-migration-number/deps.py <fn>
-python scripts/migration-analysis/analyze_migrations.py
+python scripts/migration-analysis informe
 ```
 
 Probar contra Postgres solo si el usuario lo pidió, y solo contra el local

@@ -34,7 +34,7 @@ Instrucciones para trabajar en este repo. Prevalecen sobre el comportamiento por
 ## Invariantes del dominio
 
 Reglas que se violan en silencio: el SQL aplica sin error y el fallo aparece en
-producción. `scripts/migration-analysis/lint.py` verifica casi todas y corre solo como
+producción. `scripts/migration-analysis/comandos/lint.py` verifica casi todas y corre solo como
 hook al editar una migración; las que ya están incumplidas en el código viejo
 van a su baseline, así que solo habla de lo nuevo.
 
@@ -75,7 +75,7 @@ decide si el siguiente paso duplica trabajo o pisa una migración.
 Antes de buscar con grep:
 
 - `docs/MAPA.md` — índice dominio → función viva → migración dueña → endpoints.
-  Regenerar con `python scripts/generar-mapa.py`.
+  Regenerar con `python scripts/migration-analysis mapa`.
 - `python .claude/skills/next-migration-number/deps.py <fn|ruta>` — quién define
   hoy un objeto, su historial, si cambió de firma y quién lo usa.
 - `deps.py --version <n>` — de qué depende una migración y quién depende de ella.
