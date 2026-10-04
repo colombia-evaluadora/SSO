@@ -96,11 +96,13 @@ python scripts/migration-analysis hueco --objeto fn_actividad_listar --objeto fn
   categoría que supera el piso (`V531.1`). Así la funcionalidad queda contigua y
   dos PRs casi nunca chocan en el mismo número.
 - **Libre de verdad:** se mira el árbol local, todas las ramas de `origin` y
-  las PRs abiertas, **decimales incluidos** (`scan.sh` solo ve enteros).
+  las PRs abiertas, **decimales incluidos**.
 - Los huecos enteros cercanos salen aparte: solo out-of-order deliberado.
 - Sin categoría clara o sin hueco junto a ella: el siguiente al techo.
 
-`scan.sh` sigue dando el panorama (máximo por rama, huecos, PRs abiertas):
+`scan.sh` da el panorama: máximo por rama (decimales incluidos), huecos,
+decimales de otras ramas que el árbol local no tiene, versiones que dos ramas
+usan con ficheros distintos (colisión al fusionar) y migraciones de PRs abiertas:
 
 ```bash
 bash .claude/skills/next-migration-number/scan.sh
