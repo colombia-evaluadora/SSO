@@ -55,11 +55,26 @@ necesita al migrar (ver "Qué se puede recortar").
 
 | Fichero | Qué hace |
 |---|---|
-| `sqlscan.py` | Parte el SQL en sentencias respetando literales, `$$ … $$` y comentarios. Todo lo demás depende de esto: un grep a secas matchea dentro de cuerpos de función y de comentarios. |
-| `analyze_migrations.py` | Extractores, grafo de reescritura, firmas, llamadores, slots, dependencias. `construir()` devuelve el modelo sin escribir nada; el CLI lo envuelve. |
+| `sqlscan.py` | Parte el SQL en sentencias respetando literales, `$$ … $$` y comentarios; enmascara lo que no se ejecuta al migrar (`mask_inert`) y da la firma de identidad de una función. |
+| `nucleo.py` | Tipos compartidos (`Write`, `Migration`), orden de versiones (`vkey`, `vnum`) y rutas del repo. |
+| `extraccion.py` | `LectorMigracion` lee un archivo; el DDL lo emiten los `EXTRACTORES_DDL` (una clase por familia: funciones, relaciones, ALTER TABLE, índices…) y el DML del catálogo se despacha por tabla destino (`_DML`). `Registro` resuelve esquemas como Postgres. |
+| `consultas.py` | Filas de `public.query`: qué fila toca una sentencia, qué columnas escribe y a qué filas ata un bind. |
+| `grafo.py` | `build_graph` y un `Resolutor` por tipo de objeto (`Generico`, `Funcion`, `FilaQuery`, `Acumulativo`, `SinIdentidad`): status de cada escritura y `estado` final. Binds de `role_query`, líneas y veredicto. |
+| `usos.py` | Quién usa qué: llamadas SQL y Java, referencias a tablas, firmas cambiadas, huérfanas y llamadas a funciones borradas. |
+| `historia.py` | Autoría y números libres en todas las ramas (git). |
+| `poda.py` | Recorte por firma exacta con `precision.py`. |
 | `categories.py` | Taxonomía funcional y **la única** agregación por categoría. |
-| `modelo.py` | Punto único de acceso al modelo, con caché por huella. |
+| `analyze_migrations.py` | `construir()` orquesta lo anterior sin escribir nada; el CLI lo envuelve. |
+| `modelo.py` | Punto único de acceso al modelo, con caché por huella de las migraciones y de estos módulos. |
+| `oraculo.py` + `catalogo.sql` | Verifica el modelo contra un Postgres real con todo el historial aplicado (ver Precisión). |
 | `render.py` + `render_categories.py` | Solo pintan el modelo: no recalculan ninguna cifra. |
+
+**Extender**: un tipo de DDL nuevo es una subclase de `ExtractorDDL` en
+`EXTRACTORES_DDL` (o una fila de `SIMPLE_DDL` si es un objeto con nombre
+propio); un objeto con reglas de vida propias, una subclase de `Resolutor`
+registrada en `RESOLUTORES`; una tabla del catálogo con reglas propias, un
+método en `LectorMigracion._DML`. Tras cualquier cambio: el modelo debe salir
+idéntico salvo lo que se quiso cambiar, y `oraculo.py` sin discrepancias.
 
 El flujo es uno: `construir()` → `apply_precision()` (corrige el mapa de
 líneas de cada migración) → `categorize()` (agrega esos mismos mapas por
@@ -203,19 +218,83 @@ pestaña Migraciones filtra por categoría. El JSON lo expone como `categories`;
 
 ## Precisión
 
-El informe muestra su propia cobertura: cuántas sentencias no logró clasificar.
-Nada se descarta en silencio. Puntos donde es deliberadamente conservador:
+### Qué texto se lee
 
-- **DDL dinámico** (`EXECUTE format('CREATE TRIGGER … ON %I.%I')`): no se puede
-  saber estáticamente sobre qué tablas actúa, así que cuenta como escritura
-  real y persistente en vez de encadenarse con otras.
-- **Sobrecargas**: si una migración define el mismo nombre con distinta aridad,
-  no se chequea el número de argumentos de sus llamadas.
-- **Llamadas sin esquema** (`fn_x(...)` con `search_path`): se resuelven por
-  nombre cuando existe en un solo esquema; si está en `academico_test` y en
-  `pigse`, cuenta como uso pero no se verifica su firma.
-- **Binds** (`role_query`, `role_route`…): se cuentan pero no se encadenan — no
-  hay forma fiable de identificar la fila concreta desde el SQL.
+Un grep sobre migraciones confunde lo que se **menciona** con lo que se
+**ejecuta**. El extractor solo busca DDL en el texto que corre al migrar
+(`sqlscan.mask_inert`: misma longitud, literales y cuerpos `$$` en blanco):
 
-Las "llamadas fuera de la firma viva" son **candidatas**: el conteo de
-argumentos es textual. Cada fila trae `archivo:línea` para verificar en un clic.
+- el **cuerpo de una función** corre cuando se la llama, no al crearla: un
+  `CREATE TEMP TABLE` o un `DROP TABLE` dentro de él no es DDL de la migración;
+- un **bloque `DO`** sí corre: se lee su cuerpo sin comentarios (también los
+  internos: `-- DROP INDEX falla` en V146 era un índice fantasma) y el SQL de
+  cada `EXECUTE '...'` / `EXECUTE format($f$...$f$)`;
+- un **literal** (mensajes, `detail`, el SQL de una fila de `public.query`) no
+  es DDL; las comparaciones `col = '...'` del catálogo se buscan solo a nivel
+  superior y el valor se lee del original en la misma posición.
+
+### Cómo se nombra un objeto
+
+- **Esquema como en Postgres**: un `Registro` lleva lo que existe hasta cada
+  migración y el `search_path` de cada archivo (Flyway lo restaura al terminar
+  cada una). Un nombre sin esquema se resuelve al primer esquema del path donde
+  ya existe; un índice vive en el esquema de su tabla. Antes `tarchivo` y
+  `academico_test.tarchivo` eran dos cadenas y la primera parecía muerta.
+- **Funciones por firma de identidad** (tipos de entrada, sin `OUT` ni
+  `DEFAULT`): `f(int)` y `f(int, text)` son dos objetos. Un `CREATE` reescribe
+  solo su firma; un `DROP FUNCTION f(firma)` sin recreación la borra.
+- **Orden real dentro de una sentencia** (`Write.pos`): en un `DO` con
+  `DROP INDEX` y luego `CREATE INDEX`, el vivo es el segundo.
+- **`public.query`**: la identidad real es la ruta (servicio, path, método). Un
+  `INSERT ... ON CONFLICT` sobre una ruta existente no crea el uuid que trae.
+  `(path = a AND method = 'POST') OR (path = b AND method = 'PUT')` se empareja
+  por ruta, sin producto cartesiano.
+
+### Estado de cada objeto
+
+`model["estado"][clave]` dice si el objeto **existe** al final del historial,
+qué migración lo **define hoy** (`duena`), dónde se **borró** (`borrada_en`) y,
+para funciones, lo mismo **por firma**. Un `DROP` que borra de verdad es código
+vigente pero el objeto no existe: los consumidores (`deps.py`, el mapa) leen
+`estado` en vez de inferirlo de los status.
+
+`model["llamadas_rotas"]` lista llamadas a funciones que ya no existen desde la
+definición vigente de algo que sí existe: un error en tiempo de ejecución.
+
+### Binds
+
+Un `INSERT INTO role_query` vale mientras viva su fila de `public.query` (FK
+`ON DELETE CASCADE`): si la fila se borra después —aunque se vuelva a crear con
+otro id— el bind está muerto; si no existía al atar, fue un no-op. La fila
+destino sale del `WHERE` o de las tuplas `VALUES`, leyendo qué columna es ruta,
+verbo o servicio del propio `JOIN` (`q.path_template = d.ruta`). Los binds por
+patrón (`LIKE '/planeador/%'`) no se pueden nombrar y se tratan como persistentes.
+
+### Verificación contra una base real
+
+```bash
+python scripts/migration-analysis/oraculo.py            # ~2 min
+python scripts/migration-analysis/oraculo.py --mantener # y luego --reusar
+```
+
+Levanta un Postgres 16 desechable en local, aplica todo el historial con Flyway
+(como el job de CI), lee el catálogo (`catalogo.sql`) y lo compara con
+`estado`: funciones por firma y su migración dueña (por cuerpo idéntico a
+`prosrc`), tablas, vistas, índices, secuencias, triggers, columnas,
+constraints, tipos, filas de `public.query` y binds. Sale con 1 si hay
+discrepancias. Correrlo tras tocar un extractor o el grafo.
+
+Lo que **no puede** ver por definición sale como informativo: los triggers
+`trg_audit_ctx` que un `DO` crea con `format('%I')` sobre cada tabla, y los
+binds de roles `CEVAL-*` que llegan por el dump base (en una base limpia el
+`INSERT ... SELECT` no inserta).
+
+### Límites que quedan
+
+- **DDL dinámico** con objetivo en tiempo de ejecución: cuenta como escritura
+  persistente, no se encadena.
+- **Ramas de un `DO`** (`IF ... THEN DROP ... ELSE ...`): se toma el orden
+  textual; no se evalúan condiciones.
+- **Llamadas sin esquema** se resuelven por nombre si existe en un solo
+  esquema. Las "llamadas fuera de la firma viva" son candidatas: el conteo de
+  argumentos es textual. Cada fila trae `archivo:línea`.
