@@ -145,8 +145,8 @@ def construir(use_git: bool = False, highlight: tuple = (None, None),
     return model
 
 
-def main() -> int:
-    ap = argparse.ArgumentParser(description=__doc__,
+def main(argv: list[str] | None = None) -> int:
+    ap = argparse.ArgumentParser(prog="migration-analysis informe", description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--out", type=Path, default=None,
                     help=f"HTML de salida (default: {DEFAULT_OUT.relative_to(REPO)}; "
@@ -159,7 +159,7 @@ def main() -> int:
     ap.add_argument("--no-git", action="store_true",
                     help="no consultar ramas de origin para los slots")
     ap.add_argument("--open", action="store_true", help="abrir el HTML al terminar")
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
 
     import modelo
     print("Analizando migraciones...")

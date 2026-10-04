@@ -12,6 +12,17 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 
+def consola_utf8() -> None:
+    """La consola de Windows es cp1252: sin esto los mensajes con tildes salen
+    rotos (justo en la regla del lint que habla de tildes)."""
+    import sys
+    for s in (sys.stdout, sys.stderr):
+        try:
+            s.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError):
+            pass
+
+
 def vkey(v: str | None) -> tuple:
     """Orden de versiones de Flyway como tupla: V496.10 va despues de V496.9 y
     V214.3 entre V214 y V215. Acepta "V214.3", "214.3" o None."""

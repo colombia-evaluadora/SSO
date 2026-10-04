@@ -28,7 +28,8 @@ CACHE = Path(tempfile.gettempdir()) / "sso-migrations-model.json"
 
 # El HTML no forma parte del modelo: cambiar como se pinta no lo invalida.
 # Cualquier otro .py de esta carpeta (extractores, grafo, categorias...) si.
-_SIN_EFECTO_EN_MODELO = ("render.py", "render_categories.py", "oraculo.py")
+_SIN_EFECTO_EN_MODELO = ("render.py", "render_categories.py", "oraculo.py",
+                         "lint.py", "orden.py")
 
 if str(HERE) not in sys.path:
     sys.path.insert(0, str(HERE))

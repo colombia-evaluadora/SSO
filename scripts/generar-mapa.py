@@ -21,14 +21,12 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[1]
 OUT = REPO / "docs" / "MAPA.md"
 
-for _s in (sys.stdout, sys.stderr):
-    try:
-        _s.reconfigure(encoding="utf-8", errors="replace")
-    except (AttributeError, ValueError):
-        pass
 
 sys.path.insert(0, str(REPO / "scripts" / "migration-analysis"))
 import modelo  # noqa: E402
+from nucleo import consola_utf8  # noqa: E402
+
+consola_utf8()
 
 vsort = modelo.vkey
 

@@ -33,17 +33,15 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import modelo  # noqa: E402
 from sqlscan import identity_sig, parse_params  # noqa: E402
+from nucleo import consola_utf8  # noqa: E402
+
+consola_utf8()
 
 CONTAINER = "sso-oraculo-pg"
 PORT = 55440
 DB = "oraculo"
 FLYWAY = "flyway/flyway:11-alpine"   # el mismo major que CI
 
-for _s in (sys.stdout, sys.stderr):
-    try:
-        _s.reconfigure(encoding="utf-8", errors="replace")
-    except (AttributeError, ValueError):
-        pass
 
 
 def sh(*args: str, check: bool = True, capture: bool = False) -> str:
@@ -223,14 +221,14 @@ def comparar(m: dict, cat: dict) -> tuple[dict[str, list], dict[str, list]]:
     return fallos, info
 
 
-def main() -> int:
-    ap = argparse.ArgumentParser(description=__doc__,
+def main(argv: list[str] | None = None) -> int:
+    ap = argparse.ArgumentParser(prog="migration-analysis oraculo", description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--reusar", action="store_true", help="no levanta: usa el contenedor existente")
     ap.add_argument("--mantener", action="store_true", help="no borra el contenedor al terminar")
     ap.add_argument("--json", type=Path, help="vuelca discrepancias e informativo")
     ap.add_argument("-n", type=int, default=8, help="ejemplos por grupo")
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
 
     try:
         if not args.reusar:
