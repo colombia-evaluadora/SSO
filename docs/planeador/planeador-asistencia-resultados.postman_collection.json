@@ -2,7 +2,7 @@
   "info": {
     "_postman_id": "6887b8d9-9d09-4f79-9ab7-59f20498bd31",
     "name": "SSO — Planeador: asistencia de la actividad y estado del resultado (eval-col)",
-    "description": "Asistencia marcada desde la tabla de calificaciones del Planeador (PUT /planeador/actividades/estudiantes/:ID/asistencia) y su efecto en el estado del resultado: No asistido bloquea calificar, J/NJ lo decide la excusa de la Vista, No presentó exige que no haya nota. Necesita un docente dueño de `actividadId` con al menos un estudiante Pendiente. Queda en cero salvo la asistencia marcada en el Planeador (Asistió, que no cambia el resultado).",
+    "description": "Asistencia marcada desde la tabla de calificaciones del Planeador (PUT /planeador/actividades/estudiantes/:ID/asistencia) y su efecto en el estado del resultado: un cambio vale solo para la actividad y no toca la asistencia tomada (sin Vista ese día, la oficial se calcula por bloque con las marcas de todas las actividades del día), sin asistencia o en No asistido no se califica, J/NJ lo decide la excusa de la Vista, No presentó exige que no haya nota. Necesita un docente dueño de `actividadId` con al menos un estudiante Pendiente. Queda en cero salvo la asistencia marcada en el Planeador de esa actividad (Asistió, que no cambia el resultado ni la Vista); si el estudiante no tenía asistencia ese día, además queda la oficial calculada desde el Planeador (ORIGEN PLANEADOR).",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "item": [

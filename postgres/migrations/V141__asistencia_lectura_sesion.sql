@@ -6,7 +6,7 @@
 -- Depende de: TGRUPO/TGRADO/TPERIODO_ACADEMICO/TMATRICULA/TESTUDIANTE/
 -- TUSUARIO/TASIGNATURA/TACTIVIDAD/THORARIO/TLISTA_VALOR/TDOCENTE_ASIGNATURA
 -- (V22), V140 (fn_asistencia_puede_ver, v_asistencia_detalle,
--- fn_asistencia_franja_bloque), V137 (fn_asistencia_periodo_eval).
+-- fn_asistencia_franja_bloque), V137 (fn_asistencia_periodo_eval), V496.18 (Regla 75).
 -- ===========================================================================
 
 SET search_path TO academico_test, public;
@@ -61,6 +61,9 @@ $$;
 COMMENT ON FUNCTION academico_test.fn_asistencia_actividades_dia(BIGINT, BIGINT, DATE, BIGINT)
     IS 'Actividades de un grupo VIGENTES en una fecha (equivalente formativo de fn_asistencia_asignaturas_sesion). Vigencia por RANGO [COALESCE(FECHA_INICIO,FECHA_CREACION), COALESCE(FECHA_CIERRE,FECHA_INICIO,FECHA_CREACION)]. p_fk_tfuncionario no NULL acota a TDOCENTE_ASIGNATURA. Gate: fn_asistencia_assert_puede_ver (Regla 74: el docente solo ve las asignaturas que dicta). Copia identica de V220, redefinida aqui (V141) para trazabilidad.';
 
+-- Cambiar el RETURNS TABLE exige soltarla: CREATE OR REPLACE no lo permite.
+DROP FUNCTION IF EXISTS academico_test.fn_asistencia_estudiantes_sesion(BIGINT, BIGINT, BIGINT, DATE, NUMERIC, BIGINT);
+
 CREATE OR REPLACE FUNCTION academico_test.fn_asistencia_estudiantes_sesion(
     p_pk_usuario     BIGINT,
     p_fk_tgrupo      BIGINT,
@@ -84,9 +87,15 @@ RETURNS TABLE (
     hora_inicio            TIMESTAMP,
     hora_fin               TIMESTAMP,
     total_estudiantes      BIGINT,
-    registrados            BIGINT
+    registrados            BIGINT,
+    -- Regla 75: si el periodo ya no es calificable, guardar abre una solicitud.
+    periodo_calificable          BOOLEAN,
+    pk_tsolicitud_aprobacion     BIGINT,
+    cambio_tipo_asistencia_valor INTEGER
 )
 LANGUAGE plpgsql STABLE AS $$
+DECLARE
+    v_calificable BOOLEAN;
 BEGIN
     PERFORM academico_test.fn_asistencia_assert_puede_ver(p_pk_usuario, p_fk_tgrupo, p_fk_tasignatura);
 
@@ -113,6 +122,8 @@ BEGIN
         RAISE EXCEPTION 'la actividad (%) no existe, no esta activa o no pertenece al grupo %',
             p_fk_tactividad, p_fk_tgrupo USING ERRCODE = '23503';
     END IF;
+
+    v_calificable := NOT academico_test.fn_asistencia_fecha_requiere_aprobacion(p_fk_tgrupo, p_fecha);
 
     RETURN QUERY
     WITH horario AS (
@@ -159,11 +170,29 @@ BEGIN
         (SELECT h.HORA_INICIO FROM horario h),
         (SELECT h.HORA_FIN    FROM horario h),
         count(*)            OVER ()::BIGINT,
-        count(r.PK_TASISTENCIA) OVER ()::BIGINT
+        count(r.PK_TASISTENCIA) OVER ()::BIGINT,
+        v_calificable,
+        sp.pk,
+        sp.tipo
       FROM academico_test.TMATRICULA  m
       JOIN academico_test.TESTUDIANTE es ON es.PK_TESTUDIANTE = m.FK_TESTUDIANTE
       JOIN academico_test.TUSUARIO    u  ON u.PK_TUSUARIO = es.FK_TUSUARIO
  LEFT JOIN registros r ON r.FK_TMATRICULA = m.PK_TMATRICULA
+ -- La solicitud se busca por la sesion y no por el registro visible: la de una
+ -- captura tardia cuelga de una fila que sigue inactiva.
+ LEFT JOIN LATERAL (
+        SELECT s.PK_TSOLICITUD_APROBACION AS pk,
+               NULLIF(s.VALOR_PROPUESTO->>'tipoAsistencia', '')::INTEGER AS tipo
+          FROM academico_test.TASISTENCIA t
+          JOIN academico_test.TSOLICITUD_APROBACION s
+            ON s.PK_TSOLICITUD_APROBACION = academico_test.fn_asistencia_solicitud_pendiente(t.PK_TASISTENCIA)
+         WHERE t.FK_TMATRICULA = m.PK_TMATRICULA AND t.FECHA = p_fecha
+           AND COALESCE(t.FK_TASIGNATURA, 0) = COALESCE(p_fk_tasignatura, 0)
+           AND COALESCE(t.FK_TACTIVIDAD, 0)  = COALESCE(p_fk_tactividad, 0)
+           AND COALESCE(t.BLOQUE, 0) = COALESCE(p_bloque, 0)
+         ORDER BY s.FECHA_SOLICITUD DESC
+         LIMIT 1
+ ) sp ON TRUE
      WHERE m.FK_TGRUPO = p_fk_tgrupo AND m.ACTIVE = TRUE
      ORDER BY u.PRIMER_APELLIDO, u.SEGUNDO_APELLIDO, u.PRIMER_NOMBRE,
               u.SEGUNDO_NOMBRE, m.PK_TMATRICULA;
@@ -172,7 +201,7 @@ $$;
 
 COMMENT ON FUNCTION academico_test.fn_asistencia_estudiantes_sesion(
     BIGINT, BIGINT, BIGINT, DATE, NUMERIC, BIGINT
-) IS 'Padron de una sesion para "Asistencia manual": una fila por matricula activa del grupo con su estado ACTUAL (NULL si falta tomarlo). Cabecera de sesion (fk_tperiodo_evaluacion, hora_inicio/hora_fin) repetida en cada fila. Gate: fn_asistencia_assert_puede_ver (Regla 74: el docente solo ve las asignaturas que dicta). Copia identica de V220, redefinida aqui (V141) para trazabilidad.';
+) IS 'Padron de una sesion para "Asistencia manual": una fila por matricula activa del grupo con su estado ACTUAL (NULL si falta tomarlo). Cabecera de sesion (fk_tperiodo_evaluacion, hora_inicio/hora_fin, periodo_calificable) repetida en cada fila. Regla 75: pk_tsolicitud_aprobacion y cambio_tipo_asistencia_valor traen la correccion pendiente del estudiante en esa sesion (tambien la de una captura tardia, cuya fila sigue inactiva); el estado ACTUAL sigue siendo el vigente. Gate: fn_asistencia_assert_puede_ver (Regla 74: el docente solo ve las asignaturas que dicta).';
 
 CREATE OR REPLACE FUNCTION academico_test.fn_asistencia_asignaturas_sesion(
     p_pk_usuario      BIGINT,

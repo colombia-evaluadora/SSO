@@ -1,12 +1,25 @@
--- V450 - Asistencia de una actividad: la de su primer día (FECHA_INICIO),
--- agregando los bloques de la asignatura (en formativas, de cualquier
--- asignatura); la Vista Asistencias predomina sobre la tomada en el Planeador.
+-- V450 - Asistencia de una actividad: la de su fecha fin (FECHA_CIERRE) en
+-- cuanto llega y se toma; antes, la de su primer día. Agrega los bloques de
+-- la asignatura (en formativas, de cualquier asignatura); la Vista
+-- Asistencias predomina sobre la tomada en el Planeador.
 -- Solo lectura. También es_formativa en GET /planeador/actividades/:ID.
 -- Depende de: V137 (fn_asistencia_tipo_pk), V139 (TASISTENCIA.ORIGEN), V243.
 
 DROP FUNCTION IF EXISTS academico_test.fn_actividad_asistencia_valida(BIGINT, BIGINT, DATE);
 
 CREATE OR REPLACE FUNCTION academico_test.fn_actividad_fecha_asistencia(p_pk_tactividad BIGINT)
+RETURNS DATE
+LANGUAGE sql
+STABLE
+AS $$
+    SELECT CASE WHEN a.FECHA_CIERRE IS NOT NULL AND a.FECHA_CIERRE <= CURRENT_DATE THEN a.FECHA_CIERRE
+                ELSE COALESCE(a.FECHA_INICIO, a.FECHA_CREACION) END
+      FROM academico_test.TACTIVIDAD a
+     WHERE a.PK_TACTIVIDAD = p_pk_tactividad;
+$$;
+
+-- Primer día de la actividad: vale mientras la fecha fin no tenga asistencia.
+CREATE OR REPLACE FUNCTION academico_test.fn_actividad_fecha_inicio_asistencia(p_pk_tactividad BIGINT)
 RETURNS DATE
 LANGUAGE sql
 STABLE
@@ -29,19 +42,28 @@ RETURNS TABLE (fecha DATE, tipo_valor VARCHAR, fk_tlv_tipo_asistencia BIGINT, au
 LANGUAGE sql
 STABLE
 AS $$
-    WITH act AS (
+    WITH base AS (
         SELECT a.FK_TASIGNATURA,
-               academico_test.fn_actividad_fecha_asistencia(a.PK_TACTIVIDAD) AS fecha,
+               academico_test.fn_actividad_fecha_asistencia(a.PK_TACTIVIDAD) AS fin,
+               academico_test.fn_actividad_fecha_inicio_asistencia(a.PK_TACTIVIDAD) AS inicio,
                academico_test.fn_actividad_es_formativa(a.PK_TACTIVIDAD) AS formativa
           FROM academico_test.TACTIVIDAD a
          WHERE a.PK_TACTIVIDAD = p_pk_tactividad
-    ), filas AS (
+    ), candidatas AS (
         SELECT s.*, lv.VALOR AS valor
-          FROM act
+          FROM base
           JOIN academico_test.TASISTENCIA s
-            ON s.FK_TMATRICULA = p_fk_tmatricula AND s.FECHA = act.fecha AND s.ACTIVE = TRUE
-           AND (act.formativa OR s.FK_TASIGNATURA = act.FK_TASIGNATURA)
+            ON s.FK_TMATRICULA = p_fk_tmatricula AND s.FECHA IN (base.fin, base.inicio) AND s.ACTIVE = TRUE
+           AND (base.formativa OR s.FK_TASIGNATURA = base.FK_TASIGNATURA)
           JOIN academico_test.TLISTA_VALOR lv ON lv.PK_LISTA_VALOR = s.FK_TLV_TIPO_ASISTENCIA
+    ), act AS (
+        -- La fecha fin manda si ya se tomó; si no, sigue el primer día.
+        SELECT base.FK_TASIGNATURA, base.formativa,
+               CASE WHEN EXISTS (SELECT 1 FROM candidatas c WHERE c.FECHA = base.fin)
+                    THEN base.fin ELSE base.inicio END AS fecha
+          FROM base
+    ), filas AS (
+        SELECT c.* FROM candidatas c JOIN act ON c.FECHA = act.fecha
     ), vigentes AS (
         -- La de la Vista predomina; la del Planeador vale solo si la Vista no se tomó.
         SELECT f.* FROM filas f
@@ -72,9 +94,11 @@ AS $$
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_actividad_fecha_asistencia(BIGINT)
-    IS 'Fecha cuya asistencia vale para la actividad: su primer día (FECHA_INICIO; sin ella, FECHA_CREACION). Siempre es un día con clase porque la actividad no se crea fuera del horario.';
+    IS 'Fecha a la que se escribe la asistencia de la actividad: su fecha fin (FECHA_CIERRE) si ya llegó; si no, su primer día (FECHA_INICIO; sin ella, FECHA_CREACION). Ambas son días con clase porque la actividad no se crea fuera del horario.';
+COMMENT ON FUNCTION academico_test.fn_actividad_fecha_inicio_asistencia(BIGINT)
+    IS 'Primer día de la actividad (FECHA_INICIO; sin ella, FECHA_CREACION): su asistencia vale mientras la fecha fin no tenga asistencia tomada. La usan fn_actividad_asistencia_dia y la sincronización con la Vista.';
 COMMENT ON FUNCTION academico_test.fn_actividad_asistencia_dia(BIGINT, BIGINT)
-    IS 'Asistencia tomada (TASISTENCIA) del estudiante en el primer día de la actividad, agregada por bloques: de la asignatura de la actividad, o de cualquiera si es formativa. Filas de la Vista (ORIGEN ASISTENCIA) predominan sobre la del Planeador. tipo_valor normalizado a 1/2/5; ausente si todos los bloques son No asistió; justificada si algún bloque trae archivo (o 3/6 históricos). Sin filas no devuelve nada. No mira la copia congelada de TACTIVIDAD_NOTA: eso es fn_actividad_asistencia_estudiante (V496.5).';
+    IS 'Asistencia tomada (TASISTENCIA) del estudiante en la fecha fin de la actividad si ya llegó y tiene asistencia, o si no en su primer día, agregada por bloques: de la asignatura de la actividad, o de cualquiera si es formativa. Filas de la Vista (ORIGEN ASISTENCIA) predominan sobre la del Planeador. tipo_valor normalizado a 1/2/5; ausente si todos los bloques son No asistió; justificada si algún bloque trae archivo (o 3/6 históricos). Sin filas no devuelve nada. No mira la copia congelada de TACTIVIDAD_NOTA: eso es fn_actividad_asistencia_estudiante (V496.5).';
 
 CREATE OR REPLACE FUNCTION academico_test.fn_actividad_asistencia_fecha_resolver(
     p_fk_tmatricula BIGINT,

@@ -906,6 +906,7 @@ BEGIN
         p_pk_usuario_solicitante, 'INFORMES', 'EDITAR',
         v_fk_ee, v_fk_sede, v_fk_jornada
     );
+    PERFORM academico_test.fn_informe_assert_puede_escribir(p_pk_usuario_solicitante);
 
     -- V490 -- el recorte por grupo, DESPUES del gate de arriba. Para
     -- quien alcanza la sede entera es un no-op.
@@ -1092,6 +1093,7 @@ BEGIN
         p_pk_usuario_solicitante, 'INFORMES', 'EDITAR',
         v_fk_ee, v_fk_sede, v_fk_jornada
     );
+    PERFORM academico_test.fn_informe_assert_puede_escribir(p_pk_usuario_solicitante);
 
     -- V490 -- el recorte por grupo, DESPUES del gate de arriba. Para
     -- quien alcanza la sede entera es un no-op.
@@ -1468,6 +1470,7 @@ BEGIN
         p_pk_usuario_solicitante, 'INFORMES', 'EDITAR',
         v_fk_ee, v_fk_sede, v_fk_jornada
     );
+    PERFORM academico_test.fn_informe_assert_puede_escribir(p_pk_usuario_solicitante);
 
     -- V490 -- el recorte por grupo, DESPUES del gate de arriba. Para
     -- quien alcanza la sede entera es un no-op.
@@ -1594,6 +1597,7 @@ BEGIN
         p_pk_usuario_solicitante, 'INFORMES', 'ELIMINAR',
         v_fk_ee, v_fk_sede, v_fk_jornada
     );
+    PERFORM academico_test.fn_informe_assert_puede_escribir(p_pk_usuario_solicitante);
 
     -- V490 -- el recorte por grupo, DESPUES del gate de arriba. Para
     -- quien alcanza la sede entera es un no-op.
@@ -1726,6 +1730,7 @@ BEGIN
         p_pk_usuario_solicitante, 'INFORMES', 'EDITAR',
         v_fk_ee, v_fk_sede, v_fk_jornada
     );
+    PERFORM academico_test.fn_informe_assert_puede_escribir(p_pk_usuario_solicitante);
 
     -- V490 -- el recorte por grupo, DESPUES del gate de arriba. Para
     -- quien alcanza la sede entera es un no-op.
@@ -1837,6 +1842,7 @@ BEGIN
         p_pk_usuario_solicitante, 'INFORMES', 'ELIMINAR',
         v_fk_ee, v_fk_sede, v_fk_jornada
     );
+    PERFORM academico_test.fn_informe_assert_puede_escribir(p_pk_usuario_solicitante);
 
     -- V490 -- el recorte por grupo, DESPUES del gate de arriba. Para
     -- quien alcanza la sede entera es un no-op.
