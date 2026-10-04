@@ -1,15 +1,13 @@
--- V521 separó PMI/PFI (excluyentes por ETNIAS, igual que PEI/PEC) y V523
--- arregló que fn_cumplimiento_listar volviera a traer filas, agregando ya la
--- columna "pfi" al resultado. Pero el filtro de estado del tablero
--- ("Monitoreo y cumplimiento institucional") solo tenía p_pei/p_pec/p_pmi:
--- faltaba el cuarto filtro para que el monitor pueda filtrar "¿quién me debe
--- el PFI?" igual que ya puede con PEI/PEC/PMI.
---
 -- Agrega p_pfi VARCHAR[] a fn_cumplimiento_listar_paginado (mismo patrón que
--- los otros tres) y actualiza el endpoint /cumplimiento/query para pasar
--- BODY.FILTERS.PFI. Aditivo: el bind nuevo no es obligatorio (sin filtro cae
--- a NULL = "no filtra"), así que un front viejo que no lo mande sigue
--- funcionando igual que antes.
+-- p_pei/p_pec/p_pmi) para que "Monitoreo y cumplimiento institucional" filtre
+-- "¿quién me debe el PFI?", y /cumplimiento/query pasa BODY.FILTERS.PFI.
+-- Aditivo: sin filtro cae a NULL = "no filtra"; un front viejo sigue igual.
+--
+-- La firma de 8 (V261) se borra: con todos los parámetros con DEFAULT, una
+-- llamada de hasta 8 argumentos encajaría en las dos sobrecargas (42725).
+DROP FUNCTION IF EXISTS pigse.fn_cumplimiento_listar_paginado(
+    VARCHAR, VARCHAR[], VARCHAR[], VARCHAR[], VARCHAR, BOOLEAN, INTEGER, INTEGER);
+
 CREATE OR REPLACE FUNCTION pigse.fn_cumplimiento_listar_paginado(
     p_search     VARCHAR   DEFAULT NULL,
     p_pei        VARCHAR[] DEFAULT NULL,
