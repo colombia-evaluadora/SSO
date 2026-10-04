@@ -5,6 +5,16 @@ quedaron obsoletas, qué objeto reescribió a cuál, qué firmas de función
 cambiaron y quién se quedó llamándolas con la firma vieja, y cuál es el próximo
 número de versión realmente libre.
 
+Un solo CLI, con subcomandos:
+
+```bash
+python scripts/migration-analysis lint --all           # invariantes (antes scripts/migration-lint.py)
+python scripts/migration-analysis orden --base origin/dev  # orden de versiones (antes migration-orden.py)
+python scripts/migration-analysis oraculo             # verifica el modelo contra un Postgres real
+```
+
+Sin subcomando genera el informe:
+
 ```bash
 python scripts/migration-analysis/analyze_migrations.py            # -> docs/auditoria/migraciones-analisis.html
 python scripts/migration-analysis/analyze_migrations.py --open     # y lo abre
@@ -81,7 +91,7 @@ líneas de cada migración) → `categorize()` (agrega esos mismos mapas por
 categoría) → JSON / HTML / consumidores. Una cifra se calcula en un solo sitio.
 
 **Todos los consumidores leen por `modelo.cargar()`**: `deps.py`, `precision`,
-`migration-lint.py` (y su hook), `migration-orden.py`, `migration-reapply-set.py`,
+`lint.py` (y su hook), `orden.py`, `migration-reapply-set.py`,
 `generar-mapa.py` (y el hook Stop) y `limpiando-migraciones/propuesta.py`.
 El modelo se cachea en `%TEMP%/sso-migrations-model.json` con la huella de
 todas las migraciones y del código del analizador (incluido `precision.py`):
@@ -147,7 +157,7 @@ y lo marca como `sin-precision`.
 
 La pestaña **Líneas y comentarios** mide también el presupuesto de CLAUDE.md
 (cabecera de ≤12 líneas, ≤20% de comentario) con el **mismo criterio que
-`scripts/migration-lint.py`**: líneas que empiezan con `--`, y fuera de
+`scripts/migration-analysis/lint.py`**: líneas que empiezan con `--`, y fuera de
 presupuesto sólo si pasa el 20% *y* tiene más de 20 líneas de comentario. Así
 el informe y el linter no pueden contradecirse. La escala es de tres niveles
 —dentro / 20-40% / >40%— porque con un solo umbral quedaban 249 de 384

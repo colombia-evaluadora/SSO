@@ -30,8 +30,8 @@ Herramientas de esta skill (todas locales, nunca contra un servidor):
 
 Y las del repo: `scripts/migration-analysis/analyze_migrations.py` (modelo),
 `.claude/skills/next-migration-number/deps.py` (+ `precision.py`),
-`scripts/migration-reapply-set.py`, `scripts/migration-orden.py`,
-`scripts/migration-lint.py`, `scripts/generar-mapa.py`, `scan.sh`.
+`scripts/migration-reapply-set.py`, `scripts/migration-analysis/orden.py`,
+`scripts/migration-analysis/lint.py`, `scripts/generar-mapa.py`, `scan.sh`.
 
 ## 0. Rama
 
@@ -122,14 +122,14 @@ sobrecarga o un `DROP` de otra firma. `deps.py` ya no debe marcar `MUERTA` ni
 ## 5. Gates
 
 ```bash
-python scripts/migration-lint.py <editados>                 # sin errores; --all no sube
+python scripts/migration-analysis lint <editados>                 # sin errores; --all no sube
 python scripts/generar-mapa.py --refresh
 git grep -n "V<n>__" -- ':!docs/MAPA.md'                     # refs a ficheros borrados
 # tras commitear:
-python scripts/migration-orden.py --base origin/dev
+python scripts/migration-analysis orden --base origin/dev
 ```
 
-Podar de `scripts/migration-lint-baseline.json` las entradas de ficheros
+Podar de `scripts/migration-analysis/lint-baseline.json` las entradas de ficheros
 borrados y de hallazgos que ya no se dan.
 
 ## 6. Commits y PR

@@ -34,7 +34,7 @@ Instrucciones para trabajar en este repo. Prevalecen sobre el comportamiento por
 ## Invariantes del dominio
 
 Reglas que se violan en silencio: el SQL aplica sin error y el fallo aparece en
-producción. `scripts/migration-lint.py` verifica casi todas y corre solo como
+producción. `scripts/migration-analysis/lint.py` verifica casi todas y corre solo como
 hook al editar una migración; las que ya están incumplidas en el código viejo
 van a su baseline, así que solo habla de lo nuevo.
 

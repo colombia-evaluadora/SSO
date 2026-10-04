@@ -54,8 +54,8 @@ errores, no los silencies.
 
 ## 5. Verificación
 
-- `python scripts/migration-lint.py --all` y
-  `python scripts/migration-orden.py --base dev`, con su salida en el informe.
+- `python scripts/migration-analysis lint --all` y
+  `python scripts/migration-analysis orden --base dev`, con su salida en el informe.
 - Si el usuario pide probar: Postgres local (`probando-en-contenedores-locales`),
   nunca un servidor. Suite SQL en `postgres/tests/<dominio>/` si existe una.
 - Colección Postman (`documentando-con-postman`).

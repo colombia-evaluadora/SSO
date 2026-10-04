@@ -1154,7 +1154,7 @@ function renderLnTable() {
 function renderLines() { renderStack(); renderRank(); renderLnTable(); }
 
 /* ---------- comentarios ----------
-   El presupuesto del repo (CLAUDE.md, y scripts/migration-lint.py lo verifica):
+   El presupuesto del repo (CLAUDE.md, y scripts/migration-analysis/lint.py lo verifica):
    ≤20% de líneas de comentario y cabecera de ≤12. Se usa el MISMO criterio que
    el linter —líneas que empiezan con `--`, umbral 20% con más de 20 líneas—
    para que el informe no pueda contradecirlo. */
@@ -1912,7 +1912,7 @@ no mata lo anterior, lo modifica. Regenerá esta página con
   <p class="note">El repo pide cabecera de <b>≤12 líneas</b> y <b>≤20%</b> de líneas de
   comentario: la narración de la investigación va al commit o al PR, porque dentro del
   <code>.sql</code> queda mintiendo en cuanto se edite. Se mide con el mismo criterio que
-  <code>scripts/migration-lint.py</code> —líneas que empiezan con <code>--</code>, y se marca
+  <code>scripts/migration-analysis/lint.py</code> —líneas que empiezan con <code>--</code>, y se marca
   fuera de presupuesto sólo si pasa el 20% <i>y</i> tiene más de 20 líneas de comentario—, así
   que el informe y el linter no pueden contradecirse.</p>
   <figure class="fig">

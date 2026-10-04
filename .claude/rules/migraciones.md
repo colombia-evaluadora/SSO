@@ -1,7 +1,6 @@
 ---
 paths:
   - "postgres/**"
-  - "scripts/migration-lint.py"
   - "scripts/migration-analysis/**"
 ---
 
@@ -217,7 +216,7 @@ dentro del `.sql` queda mintiendo en cuanto alguien edite la función.
   define V500, una migración nueva V301 que la reescriba se pierde en una base
   limpia y revierte V500 en un servidor que ya pasó de ahí — los dos entornos
   quedan distintos. `deploy-test.yml` lo bloquea
-  (`python scripts/migration-orden.py --base <ref>`).
+  (`python scripts/migration-analysis orden --base <ref>`).
 - **Los huecos no son números libres.** Casi siempre son una rama borrada o una
   migración ya aplicada en un servidor. Reutilizar uno es una decisión explícita
   de orden (out-of-order), confirmada antes con `/server-status`.
@@ -255,7 +254,7 @@ dentro del `.sql` queda mintiendo en cuanto alguien edite la función.
 ## Al cerrar
 
 ```bash
-python scripts/migration-lint.py --all        # sin errores nuevos
+python scripts/migration-analysis lint --all        # sin errores nuevos
 python scripts/migration-analysis/analyze_migrations.py
 python scripts/generar-mapa.py                # si cambiaron funciones o endpoints
 python scripts/generar-mapa.py --check        # lo comprueba sin reescribir (lo corre el hook Stop)

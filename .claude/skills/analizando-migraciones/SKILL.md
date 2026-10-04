@@ -82,7 +82,8 @@ Regla práctica: **`deps.py` para una pregunta, el informe para una revisión.**
 
 El código está en `scripts/migration-analysis/` y no en esta skill a propósito:
 lo usan también dos hooks, dos comandos, dos agentes, `generar-mapa.py` y el
-propio `migration-lint.py` (que importa su `sqlscan`). Es infraestructura
+lint y el control de orden, que viven ahi mismo como subcomandos del CLI
+(`python scripts/migration-analysis lint|orden`). Es infraestructura
 compartida; esta skill es la puerta de entrada, no su dueña.
 
 `scripts/migration-analysis/README.md` tiene la referencia completa de

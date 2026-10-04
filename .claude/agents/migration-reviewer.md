@@ -19,8 +19,8 @@ requisitos o plan).
 
 ```bash
 git diff --name-status <base>...HEAD -- postgres/migrations
-python scripts/migration-lint.py --all
-python scripts/migration-orden.py --base <base>
+python scripts/migration-analysis lint --all
+python scripts/migration-analysis orden --base <base>
 bash .claude/skills/next-migration-number/scan.sh
 ```
 

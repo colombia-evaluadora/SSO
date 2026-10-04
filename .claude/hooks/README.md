@@ -107,7 +107,7 @@ Sale con código 2 cuando hay un error.
 
 ## `migration_lint.py`
 
-`PostToolUse` sobre `Write`/`Edit`: pasa `scripts/migration-lint.py` a la
+`PostToolUse` sobre `Write`/`Edit`: pasa `scripts/migration-analysis/lint.py` a la
 migración recién editada. Cada una de sus reglas corresponde a una regresión que
 ya ocurrió; no valida SQL —para eso está el Postgres local— sino las
 convenciones que se violan en silencio.
