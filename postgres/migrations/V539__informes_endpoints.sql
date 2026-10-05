@@ -4,9 +4,10 @@
 -- con upsert que conserva el id y con él los role_query de cada servidor: no
 -- se tocan roles (V496.26 quitó DOCENTE y DIRECTOR_GRUPO de las escrituras).
 -- Las consultas no cambian; el detail de /informes/grupo agrega la C y la R.
--- Quedan fuera las de observaciones, final, formativo, tabla, desactualizado
--- y boletin, que siguen en sus migraciones.
--- Depende de: V537, V538 (funciones), V342-V496.24 (filas).
+-- /informes/tabla solo actualiza query, param_types y detail (la crea V434).
+-- Quedan fuera las de observaciones, final, formativo, desactualizado y
+-- boletin, que siguen en sus migraciones.
+-- Depende de: V537, V538, V496.25 (funciones), V342-V496.24 (filas).
 
 -- POST /informes/anos
 INSERT INTO public.query (uuid, microservice_id, path_template, http_method, type, execution_mode, out_param_names,
@@ -286,3 +287,22 @@ ON CONFLICT (microservice_id, path_template, http_method) WHERE path_template IS
        public_end = EXCLUDED.public_end, captcha = EXCLUDED.captcha, cacheable = EXCLUDED.cacheable,
        cache_ttl_seconds = EXCLUDED.cache_ttl_seconds, action = EXCLUDED.action, style = EXCLUDED.style,
        param_types = EXCLUDED.param_types, detail = EXCLUDED.detail, query = EXCLUDED.query;
+
+-- POST /informes/tabla (la crea V434 con sus roles; aqui su version vigente)
+INSERT INTO public.query (uuid, query, type, public_end, captcha, microservice_id, path_template,
+                          execution_mode, http_method, param_types, out_param_names, detail, action, style)
+SELECT 'eval-col-informes-tabla-001',
+       'SELECT * FROM academico_test.fn_informe_grupo_tabla(
+    public.fn_get_academico_usuario_id(:CONTEXT.USER_ID::BIGINT),
+    CAST(:BODY.FILTERS.FK_TGRUPO AS BIGINT),
+    CAST(:BODY.FILTERS.PERIODOS AS BIGINT[]),
+    CAST(:BODY.FILTERS.SEARCH AS VARCHAR)
+);',
+       'postgres', false, false, m.id_microservice, '/informes/tabla', 'SELECT', 'POST',
+       '{"BODY.FILTERS.FK_TGRUPO": "BIGINT", "BODY.FILTERS.PERIODOS": "BIGINT[]", "BODY.FILTERS.SEARCH": "VARCHAR"}'::jsonb,
+       NULL,
+       'La tabla de informes tal como se esta viendo, aplanada para bajarla. Lo consume reporting-service bajo la clave "informes-tabla" (POST /reportes/informes-tabla), no el front directamente. A diferencia del BOLETIN no filtra nada: salen lo consolidado, lo proyectado, lo requerido y lo que no tiene nota, cada uno dicho con todas las letras en ESTADO, mas una columna CONSOLIDADO. Respeta los filtros de la pantalla, SEARCH incluido. EL FINAL SE PIDE CON -1 EN PERIODOS (V439; el bind INCLUIR_FINAL ya no existe).',
+       'informes-tabla', 'DEFAULT'
+  FROM public.microservice m WHERE m.serviceid = 'eval-col'
+ON CONFLICT (microservice_id, path_template, http_method) WHERE path_template IS NOT NULL DO UPDATE
+   SET query = EXCLUDED.query, param_types = EXCLUDED.param_types, detail = EXCLUDED.detail;

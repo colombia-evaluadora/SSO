@@ -416,17 +416,9 @@ COMMENT ON FUNCTION academico_test.fn_informe_final_guardar(BIGINT, BIGINT, BIGI
     IS 'POST /informes/final/guardar: consolida la nota del año de un grupo en TASIGNATURA_DEFINITIVA (fn_informe_final_guardar_interno). Solo por llamada explicita: ninguna lectura la recalcula. Gate EDITAR sobre INFORMES con alcance (establecimiento, sede, jornada) del grupo y recorte por grupo propio (fn_informe_assert_grupo_propio). 404 (P0002) si el grupo no existe.';
 
 -- La vigente es posterior; esta solo hace falta en una base limpia (V496.25:sql-body, V516:objeto, V537:sql-body).
--- Al migrar desde cero puede existir la de V439, sin PROMEDIO_FORMATO en el
--- retorno: esa se reemplaza. La vigente de V537 si lo trae y no se toca.
 DO $guarda$
-DECLARE
-    v_fn regprocedure := to_regprocedure('academico_test.fn_informe_grupo_listar(bigint,bigint,bigint[],varchar)');
 BEGIN
-    IF v_fn IS NOT NULL AND pg_get_function_result(v_fn) NOT LIKE '%promedio_formato%' THEN
-        DROP FUNCTION academico_test.fn_informe_grupo_listar(BIGINT, BIGINT, BIGINT[], VARCHAR);
-        v_fn := NULL;
-    END IF;
-    IF v_fn IS NULL THEN
+    IF to_regprocedure('academico_test.fn_informe_grupo_listar(bigint,bigint,bigint[],varchar)') IS NULL THEN
         EXECUTE $crear$CREATE OR REPLACE FUNCTION academico_test.fn_informe_grupo_listar(p_pk_usuario_solicitante bigint, p_fk_tgrupo bigint, p_fk_periodos_evaluacion bigint[] DEFAULT NULL::bigint[], p_search character varying DEFAULT NULL::character varying)
  RETURNS TABLE(fk_tmatricula bigint, estudiante character varying, documento character varying, fk_tperiodo_evaluacion bigint, periodo_nombre character varying, periodo_abreviacion character varying, periodo_inicio date, modo_periodo character varying, formato character varying, es_cualitativo boolean, consolidado boolean, promedio_guardado numeric, promedio_proyectado numeric, puesto bigint, asignaturas_total bigint, aprobadas bigint, reprobadas bigint, sin_definir bigint, tiene_cambios_propuestos boolean, asignaturas jsonb, observacion text, observacion_estado character varying, observacion_desactualizada boolean, evidencias bigint, total_count bigint, promedio_valoracion character varying, promedio_simbolo character varying, promedio_proyectado_valoracion character varying, promedio_proyectado_simbolo character varying, promedio_formato character varying)
  LANGUAGE plpgsql
