@@ -1,7 +1,7 @@
 # Mapa del dominio
 
 **Generado** por `python scripts/migration-analysis mapa` — no editar a mano.
-Estado: 460 migraciones (V1–V546), 1007 funciones vivas, 58 endpoints vivos. Ultima generacion: 2026-10-05.
+Estado: 460 migraciones (V1–V546), 1008 funciones vivas, 58 endpoints vivos. Ultima generacion: 2026-10-05.
 
 Para una **funcion**, la migracion dueña es la que hay que editar: es su ultima escritura viva, no la que la creo.
 
@@ -16,7 +16,7 @@ Las secciones son las categorias funcionales de `scripts/migration-analysis/anal
 - [PIGSE](#pigse) — 85 funcion(es), 21 endpoint(s)
 - [Prematrícula](#prematricula) — 16 funcion(es), 0 endpoint(s)
 - [Matrícula](#matricula) — 60 funcion(es), 0 endpoint(s)
-- [Informes](#informes) — 48 funcion(es), 0 endpoint(s)
+- [Informes](#informes) — 49 funcion(es), 0 endpoint(s)
 - [Observaciones](#observaciones) — 30 funcion(es), 0 endpoint(s)
 - [Asistencias](#asistencias) — 59 funcion(es), 1 endpoint(s)
 - [Planilla de calificación](#planilla) — 33 funcion(es), 0 endpoint(s)
@@ -253,6 +253,7 @@ Las secciones son las categorias funcionales de `scripts/migration-analysis/anal
 | `academico_test.fn_informe_assert_puede_escribir` | 1 | V535 | V490, V496.24, V538 |
 | `academico_test.fn_informe_boletin_cabecera_interno` | 1 | V540 | V541 |
 | `academico_test.fn_informe_boletin_director_interno` | 1 | V540 | V541 |
+| `academico_test.fn_informe_boletin_firmante_interno` | 3 | V540 | — |
 | `academico_test.fn_informe_boletin_foto_interno` | 1 | V540 | V541 |
 | `academico_test.fn_informe_boletin_nota_texto` | 1 | V540 | — |
 | `academico_test.fn_informe_boletin_notas` | 4 | V540 | — |
@@ -431,7 +432,7 @@ Las secciones son las categorias funcionales de `scripts/migration-analysis/anal
 | `academico_test.fn_planilla_grupo_asignatura_assert` | 3 | V469.2 | V469.4, V490, V537, V538 |
 | `academico_test.fn_planilla_periodo_eval_resolver` | 2 | V469.3 | V469.4 |
 | `academico_test.fn_planilla_validar_periodo_del_grupo` | 2 | V469.2 | V469.3 |
-| `academico_test.fn_promedio_homologar` | 2 | V474 | V496.24, V536 |
+| `academico_test.fn_promedio_homologar` | 2 | V474 | V496.24, V536, V540 |
 | `academico_test.fn_recuperacion_aprobada_vigente` | 3 | V496.18 | V496.19 |
 | `academico_test.fn_recuperacion_combinar` | 7 | V496.19 | V496.19 |
 | `academico_test.fn_recuperacion_definitiva_periodo` | 3 | V408 | V496.19 |
@@ -1161,7 +1162,7 @@ Las secciones son las categorias funcionales de `scripts/migration-analysis/anal
 | `academico_test.fn_asignatura_tipo_evaluacion` | 2 | V428 | V432, V536 |
 | `academico_test.fn_criterio_eval_actualizar` | 14 | V41 | V76 |
 | `academico_test.fn_criterio_eval_obtener` | 2 | V41 | V76 |
-| `academico_test.fn_criterio_evaluacion_formato` | 1 | V227 | V428, V455, V474, V496.1, V496.2, V496.5 |
+| `academico_test.fn_criterio_evaluacion_formato` | 1 | V227 | V428, V455, V474, V496.1, V496.2, V496.5… |
 | `academico_test.fn_criterio_evaluacion_porcentaje_inicial` | 1 | V239 | V227, V408, V496.18, V496.19, V496.23 |
 | `academico_test.fn_criterio_prom_guardar` | 13 | V38 | V43, V76 |
 | `academico_test.fn_criterio_prom_obtener` | 3 | V38 | V43, V76 |
