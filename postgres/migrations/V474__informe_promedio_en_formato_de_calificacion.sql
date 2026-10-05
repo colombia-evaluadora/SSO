@@ -71,13 +71,3 @@ $function$;
 
 COMMENT ON FUNCTION academico_test.fn_promedio_homologar(NUMERIC, BIGINT, BIGINT)
     IS 'Convierte un PROMEDIO en porcentaje 0-100 al FORMATO DE CALIFICACION configurado en el criterio de evaluacion GENERAL de un periodo academico, y devuelve ademas la banda de la escala en la que cae. Hermana de fn_nota_homologar (V227/V428) para el grano en el que no hay una asignatura de la que sacar el formato: un promedio agrega varias, y cada una podria resolver por la cadena de V428 a un formato distinto. El criterio general se lee con fn_criterio_evaluacion_formato del PK del periodo academico, porque TCRITERIO_EVALUACION comparte PK con TPERIODO_ACADEMICO (V22). En los formatos numericos (CINCO/DIEZ/CIEN) devuelve el numero redondeado a los decimales configurados; en LITERAL/SIMBOLO/CARITA devuelve promedio NULL y lo que vale es la valoracion, igual que hace fn_nota_homologar con las notas. Sin criterio o sin formato configurado devuelve el porcentaje CRUDO -- no hay formato al que convertir y anularlo borraria el dato. Nunca devuelve cero filas: con porcentaje NULL devuelve la fila en NULL, para que un LEFT JOIN LATERAL no pierda al estudiante sin calificar. Con P_FK_TGRADO, si el criterio del periodo no tiene escala las bandas salen de la del nivel del grado (fn_grado_escala_aplicable); la banda se busca con fn_escala_valoracion_banda. Punto unico de esta conversion; la consumen fn_informe_grupo_listar_interno (promedios) y el boletin de notas (areas).';
-
-DO $$
-DECLARE
-    v_fn regprocedure := to_regprocedure('academico_test.fn_informe_grupo_listar(bigint,bigint,bigint[],varchar)');
-BEGIN
-    IF v_fn IS NOT NULL AND pg_get_function_result(v_fn) NOT LIKE '%promedio_formato%' THEN
-        DROP FUNCTION academico_test.fn_informe_grupo_listar(BIGINT, BIGINT, BIGINT[], VARCHAR);
-    END IF;
-END $$;
-
