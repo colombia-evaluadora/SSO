@@ -1,13 +1,10 @@
 -- ===========================================================================
--- V496.24 - Regla 79, informe final: la nota del año por asignatura.
---   - Cada periodo vale COALESCE(guardada, proyectada) y se pesa con
---     PORCENTAJE / CRITERIO_FINAL igual que V410 (regla extraida a
---     fn_asignatura_periodos_ponderar, que ahora usan las dos).
---   - La fila Final de /informes/grupo lee TASIGNATURA_DEFINITIVA si existe y,
---     si no, la calcula al vuelo. Nada la recalcula solo: se escribe con
---     POST /informes/final/guardar (fn_informe_final_guardar).
--- Depende de: V410, V490 (fn_informe_grupo_listar), V496.23, V489, V66.
+-- V496.24 - informes final definitiva anual
+-- Recortada: las funciones de informes que V535-V541 reescriben en capas
+-- se quitaron de aqui y viven alli. Queda lo que sigue vivo y lo que una
+-- base limpia necesita al migrar (CREATE solo si la funcion no existe).
 -- ===========================================================================
+
 
 CREATE OR REPLACE FUNCTION academico_test.fn_asignatura_periodos_ponderar(
     p_fk_tasignatura BIGINT,
@@ -46,7 +43,6 @@ $function$;
 
 COMMENT ON FUNCTION academico_test.fn_asignatura_periodos_ponderar(BIGINT, BIGINT)
     IS 'INTERNO: TRUE si la nota del año de (asignatura, grado) pondera los periodos por TPERIODO_EVALUACION.PORCENTAJE: CRITERIO_FINAL_PERACA = 2 en el criterio vigente Y los porcentajes del periodo academico suman 100. FALSE (equitativo) si el criterio no esta configurado o los pesos estan rotos. Regla unica para fn_asignatura_nota_requerida_periodo y fn_asignatura_definitiva_anual_calcular_interno.';
-
 
 CREATE OR REPLACE FUNCTION academico_test.fn_asignatura_nota_requerida_periodo(
     p_fk_tmatricula          BIGINT,
@@ -140,7 +136,6 @@ $function$;
 COMMENT ON FUNCTION academico_test.fn_asignatura_nota_requerida_periodo(BIGINT, BIGINT, BIGINT)
     IS 'INTERNO: cuanto necesita sacar un estudiante en un periodo SIN CALIFICACIONES para no perder la asignatura en el AÑO. Despeje sobre TODOS los periodos del año: con S = suma(nota*peso) de los periodos con nota (COALESCE(guardada, proyectada)), W = suma(peso) de todos y E = suma(peso) de los vacios, requerido = (minimo*W - S)/E. El peso de cada periodo lo decide fn_asignatura_periodos_ponderar (PORCENTAJE si CRITERIO_FINAL = 2 y suman 100; si no, equitativo). El minimo sale de fn_grado_desempeno_minimo (TCRITERIO_PROMOCION.DESEMPENHO_MINIMO). NULL si el periodo pedido ya tiene nota, si no hay incognitas o si el grado no tiene minimo configurado: no se inventa un umbral. Puede superar el maximo o ser negativo y se devuelve igual. La usa fn_informe_periodo_requerido.';
 
-
 CREATE OR REPLACE FUNCTION academico_test.fn_asignatura_definitiva_anual_calcular_interno(
     p_fk_tmatricula  BIGINT,
     p_fk_tasignatura BIGINT
@@ -197,7 +192,6 @@ $function$;
 COMMENT ON FUNCTION academico_test.fn_asignatura_definitiva_anual_calcular_interno(BIGINT, BIGINT)
     IS 'INTERNO: nota del año (porcentaje 0-100) de una asignatura calculada al vuelo (Regla 79): cada periodo vale COALESCE(TASIGNATURA_NOTA.DEFINITIVA, fn_asignatura_definitiva_proyectada_periodo) y se pesa segun fn_asignatura_periodos_ponderar; los periodos sin ningun valor salen del denominador. NULL si ningun periodo tiene valor. Sin gate. La usan fn_asignatura_definitiva_anual_interno (lectura) y fn_informe_final_guardar_interno (escritura).';
 
-
 CREATE OR REPLACE FUNCTION academico_test.fn_asignatura_definitiva_anual_interno(
     p_fk_tmatricula  BIGINT,
     p_fk_tasignatura BIGINT
@@ -219,7 +213,6 @@ $function$;
 
 COMMENT ON FUNCTION academico_test.fn_asignatura_definitiva_anual_interno(BIGINT, BIGINT)
     IS 'INTERNO: nota del año que muestra la fila Final de informes: la guardada en TASIGNATURA_DEFINITIVA si existe y, si no, la calculada al vuelo (fn_asignatura_definitiva_anual_calcular_interno). Una lectura nunca escribe ni recalcula lo guardado. Sin gate. La usa fn_informe_grupo_listar.';
-
 
 CREATE OR REPLACE FUNCTION academico_test.fn_informe_final_guardar_interno(
     p_pk_usuario_auditoria BIGINT,
@@ -363,7 +356,6 @@ $function$;
 COMMENT ON FUNCTION academico_test.fn_informe_final_guardar_interno(BIGINT, BIGINT, BIGINT[])
     IS 'INTERNO: escribe en TASIGNATURA_DEFINITIVA la nota del año (fn_asignatura_definitiva_anual_calcular_interno) de cada asignatura de las matriculas activas del grupo (todas si p_fk_tmatriculas es NULL o vacio). CALIFICACION y DEFINITIVA en porcentaje; si la fila ya tiene RECUPERACION solo se actualiza CALIFICACION. Una asignatura sin ningun periodo con valor no se escribe (sin_nota). p_pk_usuario_auditoria solo va a CREATED_BY/MODIFIED_BY. Sin gate. La usa fn_informe_final_guardar (POST /informes/final/guardar).';
 
-
 CREATE OR REPLACE FUNCTION academico_test.fn_informe_final_guardar(
     p_pk_usuario_solicitante BIGINT,
     p_fk_tgrupo              BIGINT,
@@ -423,12 +415,11 @@ $function$;
 COMMENT ON FUNCTION academico_test.fn_informe_final_guardar(BIGINT, BIGINT, BIGINT[])
     IS 'POST /informes/final/guardar: consolida la nota del año de un grupo en TASIGNATURA_DEFINITIVA (fn_informe_final_guardar_interno). Solo por llamada explicita: ninguna lectura la recalcula. Gate EDITAR sobre INFORMES con alcance (establecimiento, sede, jornada) del grupo y recorte por grupo propio (fn_informe_assert_grupo_propio). 404 (P0002) si el grupo no existe.';
 
-
--- ---------------------------------------------------------------------------
--- fn_informe_grupo_listar: la fila Final usa fn_asignatura_definitiva_anual_interno
--- en vez de sumar lo guardado y dividir por el numero de periodos.
--- ---------------------------------------------------------------------------
-CREATE OR REPLACE FUNCTION academico_test.fn_informe_grupo_listar(p_pk_usuario_solicitante bigint, p_fk_tgrupo bigint, p_fk_periodos_evaluacion bigint[] DEFAULT NULL::bigint[], p_search character varying DEFAULT NULL::character varying)
+-- La vigente es posterior; esta solo hace falta en una base limpia (V496.25:sql-body, V516:objeto, V537:sql-body).
+DO $guarda$
+BEGIN
+    IF to_regprocedure('academico_test.fn_informe_grupo_listar(bigint,bigint,bigint[],varchar)') IS NULL THEN
+        EXECUTE $crear$CREATE OR REPLACE FUNCTION academico_test.fn_informe_grupo_listar(p_pk_usuario_solicitante bigint, p_fk_tgrupo bigint, p_fk_periodos_evaluacion bigint[] DEFAULT NULL::bigint[], p_search character varying DEFAULT NULL::character varying)
  RETURNS TABLE(fk_tmatricula bigint, estudiante character varying, documento character varying, fk_tperiodo_evaluacion bigint, periodo_nombre character varying, periodo_abreviacion character varying, periodo_inicio date, modo_periodo character varying, formato character varying, es_cualitativo boolean, consolidado boolean, promedio_guardado numeric, promedio_proyectado numeric, puesto bigint, asignaturas_total bigint, aprobadas bigint, reprobadas bigint, sin_definir bigint, tiene_cambios_propuestos boolean, asignaturas jsonb, observacion text, observacion_estado character varying, observacion_desactualizada boolean, evidencias bigint, total_count bigint, promedio_valoracion character varying, promedio_simbolo character varying, promedio_proyectado_valoracion character varying, promedio_proyectado_simbolo character varying, promedio_formato character varying)
  LANGUAGE plpgsql
  STABLE
@@ -941,11 +932,10 @@ BEGIN
         OR s.o_doc    ILIKE '%' || TRIM(p_search) || '%'
      ORDER BY s.o_nombre NULLS LAST, s.o_mat, s.o_pe_inicio;
 END;
-$function$
-;
+$function$$crear$;
+    END IF;
+END $guarda$;
 
-
--- role_query cae por ON DELETE CASCADE y se vuelve a copiar abajo.
 DELETE FROM public.query WHERE uuid = 'eval-col-informes-final-guardar-001';
 
 INSERT INTO public.query
@@ -970,7 +960,6 @@ SELECT
 ON CONFLICT (microservice_id, path_template, http_method)
     WHERE path_template IS NOT NULL DO NOTHING;
 
--- Mismos roles que la consolidacion por periodo.
 INSERT INTO public.role_query (role_id, query_id)
 SELECT rq.role_id, nuevo.id_query
   FROM public.query nuevo
@@ -982,13 +971,3 @@ SELECT rq.role_id, nuevo.id_query
  WHERE nuevo.uuid = 'eval-col-informes-final-guardar-001'
 ON CONFLICT DO NOTHING;
 
--- El detail de /informes/grupo (V439) anunciaba que un periodo sin nota vale cero.
-UPDATE public.query q
-   SET detail = replace(q.detail,
-           'se calcula al vuelo sobre todos los periodos del año y un periodo sin nota guardada vale cero.',
-           'vale lo guardado en TASIGNATURA_DEFINITIVA (POST /informes/final/guardar) o, si no hay, se calcula al vuelo: cada periodo con su nota guardada o proyectada, pesado por PORCENTAJE segun el criterio final; un periodo sin ningun valor no cuenta.')
-  FROM public.microservice m
- WHERE q.microservice_id = m.id_microservice
-   AND m.serviceid       = 'eval-col'
-   AND q.path_template   = '/informes/grupo'
-   AND q.http_method     = 'POST';
