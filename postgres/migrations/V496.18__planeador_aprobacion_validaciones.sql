@@ -353,7 +353,37 @@ AS $$
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_usuario_sedes_coordinador(BIGINT)
-    IS 'Sedes activas donde el usuario es Coordinador (TSEDE_USUARIO + TROL.CODIGO). Fuente única de "es coordinador": la usan fn_usuario_es_coordinador_sede (gates de aprobación) y fn_mi_establecimiento_para_auditoria (claim est del JWT).';
+    IS 'Sedes activas donde el usuario es Coordinador (TSEDE_USUARIO + TROL.CODIGO). Fuente única de "es coordinador": la usan fn_usuario_sedes_aprobador (gates de aprobación) y fn_mi_establecimiento_para_auditoria (claim est del JWT).';
+
+-- Quién resuelve solicitudes: el Coordinador en su sede, y el Rector, el Jefe de
+-- sistema y el Auxiliar administrativo en todas las sedes de su establecimiento.
+CREATE OR REPLACE FUNCTION academico_test.fn_usuario_sedes_aprobador(p_pk_tusuario BIGINT)
+RETURNS SETOF BIGINT
+LANGUAGE sql
+STABLE
+AS $$
+    SELECT academico_test.fn_usuario_sedes_coordinador(p_pk_tusuario)
+    UNION
+    SELECT s.PK_TSEDE
+      FROM academico_test.TSEDE s
+     WHERE s.ACTIVE = TRUE
+       AND s.FK_TESTABLECIMIENTO IN (
+           SELECT sr.FK_TESTABLECIMIENTO
+             FROM academico_test.TSEDE_USUARIO su
+             JOIN academico_test.TSEDE sr ON sr.PK_TSEDE = su.FK_TSEDE AND sr.ACTIVE = TRUE
+             JOIN academico_test.TROL r   ON r.PK_TROL   = su.FK_TROL
+            WHERE su.FK_TUSUARIO = p_pk_tusuario
+              AND su.ACTIVE = TRUE
+              AND UPPER(TRIM(r.CODIGO)) IN ('RECTOR', 'JEFE_SISTEMA_ESTABLECIMIENTO', 'AUXILIAR_ADMINISTRATIVO')
+           UNION
+           SELECT e.PK_ESTABLECIMIENTO
+             FROM academico_test.TESTABLECIMIENTO e
+             JOIN academico_test.TFUNCIONARIO f ON f.PK_TFUNCIONARIO = e.FK_TFUNCIONARIO_RECTOR
+            WHERE e.ACTIVE = TRUE AND f.ACTIVE = TRUE AND f.FK_TUSUARIO = p_pk_tusuario);
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_usuario_sedes_aprobador(BIGINT)
+    IS 'Sedes activas donde el usuario resuelve solicitudes de aprobación: las suyas como Coordinador (fn_usuario_sedes_coordinador) y todas las del establecimiento donde es Rector (TSEDE_USUARIO o FK_TFUNCIONARIO_RECTOR), Jefe de sistema o Auxiliar administrativo, por TROL.CODIGO. La usa fn_usuario_es_aprobador_sede.';
 
 CREATE OR REPLACE FUNCTION academico_test.fn_solicitud_valor_vigente_recuperacion(
     p_pk_tactividad_estudiante BIGINT,
