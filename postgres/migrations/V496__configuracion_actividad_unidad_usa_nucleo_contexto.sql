@@ -313,8 +313,10 @@ BEGIN
             RAISE EXCEPTION 'No se encontro el grupo solicitado' USING ERRCODE = 'P0002';
         END IF;
         IF v_grupo_grado IS DISTINCT FROM v_fk_tgrado THEN
-            RAISE EXCEPTION 'El grupo "%" no pertenece al grado de la unidad "%"',
-                v_grupo_nombre, v_nombre_unidad USING ERRCODE = '22023';
+            RAISE EXCEPTION 'El grupo "%" no pertenece al grado de %',
+                v_grupo_nombre, lower(academico_test.fn_unidad_rotulo(
+                    (SELECT FK_REFERENTE_CURRICULAR FROM academico_test.TUNIDAD WHERE PK_TUNIDAD = p_pk_tunidad)))
+                    || ' "' || v_nombre_unidad || '"' USING ERRCODE = '22023';
         END IF;
     ELSE
         -- Con un solo grupo activo en el grado no hay nada que elegir. Con

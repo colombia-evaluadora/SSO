@@ -243,8 +243,11 @@ BEGIN
 
         v_nivel := academico_test.fn_usuario_categoria_rol_nivel(p_pk_usuario_solicitante);
         IF v_nivel IS DISTINCT FROM 0 AND v_nivel IS DISTINCT FROM 1 THEN
-            RAISE EXCEPTION 'No se pudo determinar la sede de la actividad, asi que no se '
-                            'puede verificar el alcance del usuario'
+            RAISE EXCEPTION 'No se pudo determinar la sede de %, asi que no se '
+                            'puede verificar el alcance del usuario',
+                COALESCE(academico_test.fn_actividad_etiqueta(p_pk_tactividad),
+                         academico_test.fn_unidad_etiqueta(v_unidad),
+                         lower(academico_test.fn_actividad_rotulo(v_grupo, NULL, v_unidad)))
                 USING ERRCODE = '42501',
                       HINT    = 'Indique grupo, grado o unidad, y verifique que el grado tenga '
                              || 'periodo academico y sede';

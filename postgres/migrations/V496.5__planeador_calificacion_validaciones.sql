@@ -1041,7 +1041,7 @@ BEGIN
                 WHERE n.FK_TACTIVIDAD_ESTUDIANTE = p_pk_tactividad_estudiante AND n.ACTIVE = TRUE
                   AND (n.CALIFICACION IS NOT NULL
                        OR academico_test.fn_actividad_estado_resultado(n.PK_TACTIVIDAD_NOTA) = 'CALIFICADO')) THEN
-        RAISE EXCEPTION '% ya tiene resultado en %: su asistencia en la actividad no se puede cambiar',
+        RAISE EXCEPTION '% ya tiene resultado en %: su asistencia ya no se puede cambiar',
             academico_test.fn_actividad_estudiante_etiqueta(p_pk_tactividad_estudiante),
             academico_test.fn_actividad_etiqueta(academico_test.fn_actividad_estudiante_actividad(p_pk_tactividad_estudiante))
             USING ERRCODE = '22023';
@@ -1112,8 +1112,8 @@ STABLE
 AS $$
 BEGIN
     IF NOT academico_test.fn_actividad_es_formativa(p_pk_tactividad) THEN
-        RAISE EXCEPTION '% tiene referente evaluativo (o no tiene unidad): se califica con su instrumento, no con observaciones',
-            academico_test.fn_actividad_etiqueta(p_pk_tactividad) USING ERRCODE = '22023';
+        RAISE EXCEPTION '% tiene referente evaluativo (o no tiene %): se califica con su instrumento, no con observaciones',
+            academico_test.fn_actividad_etiqueta(p_pk_tactividad), lower(academico_test.fn_unidad_rotulo(NULL)) USING ERRCODE = '22023';
     END IF;
 END;
 $$;

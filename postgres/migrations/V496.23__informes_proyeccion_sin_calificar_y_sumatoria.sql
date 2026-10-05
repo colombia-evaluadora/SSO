@@ -116,13 +116,13 @@ BEGIN
 
     IF v_elemento = 'ACTIVIDADES' THEN
         IF v_modo IN ('PONDERAR', 'SUMATORIA') THEN
-            SELECT t.titulo INTO v_falta
+            SELECT academico_test.fn_actividad_etiqueta(t.pk_tactividad) INTO v_falta
               FROM academico_test.fn_asignatura_notas_periodo_interno(
                    p_fk_tmatricula, p_fk_tasignatura, p_fk_tperiodo_evaluacion) t
              WHERE (CASE WHEN v_modo = 'SUMATORIA' THEN t.puntaje ELSE t.ponderacion END) IS NULL
              LIMIT 1;
             IF FOUND THEN
-                RAISE EXCEPTION 'La actividad "%" no tiene % y la asignatura calcula por %',
+                RAISE EXCEPTION '% no tiene % y la asignatura calcula por %',
                     v_falta,
                     CASE WHEN v_modo = 'SUMATORIA' THEN 'puntaje' ELSE 'ponderacion' END,
                     v_modo
@@ -151,8 +151,9 @@ BEGIN
     -- unidad sin peso o actividades sin unidad son error; en el fallback se
     -- conserva el promedio simple.
     IF v_elemento = 'UNIDADES' THEN
-        SELECT format('la actividad "%s" de la unidad "%s" no tiene %s',
-                      t.titulo, tu.NOMBRE,
+        SELECT format('%s de %s no tiene %s',
+                      academico_test.fn_actividad_etiqueta(t.pk_tactividad),
+                      academico_test.fn_unidad_etiqueta(tu.PK_TUNIDAD),
                       CASE WHEN m.modo = 'SUMATORIA' THEN 'puntaje' ELSE 'ponderacion' END)
           INTO v_falta
           FROM academico_test.fn_asignatura_notas_periodo_interno(
@@ -164,8 +165,9 @@ BEGIN
          LIMIT 1;
         IF v_falta IS NULL AND v_modo IN ('PONDERAR', 'SUMATORIA') THEN
             SELECT CASE WHEN t.fk_tunidad IS NULL
-                        THEN format('la actividad "%s" no tiene unidad', t.titulo)
-                        ELSE format('la unidad "%s" no tiene ponderacion', tu.NOMBRE)
+                        THEN format('%s no tiene %s', academico_test.fn_actividad_etiqueta(t.pk_tactividad),
+                                    lower(academico_test.fn_unidad_rotulo(NULL)))
+                        ELSE format('%s no tiene ponderacion', academico_test.fn_unidad_etiqueta(tu.PK_TUNIDAD))
                    END
               INTO v_falta
               FROM academico_test.fn_asignatura_notas_periodo_interno(
