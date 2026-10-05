@@ -428,7 +428,6 @@
  "postgres/migrations/V47__microservice_eval_col.sql|CABECERA",
  "postgres/migrations/V47__microservice_eval_col.sql|COMENTARIOS",
  "postgres/migrations/V490__informes_enganche_alcance_por_grupo.sql|AUTO-REFERENCIA|el cuerpo de la funcion menciona V490: la funcion sobrevive a su migracion, el numero deja de ser cierto en cuanto otra la reescriba",
- "postgres/migrations/V491__informes_alertas_e_historial_solo_mis_grupos.sql|AUTO-REFERENCIA|el cuerpo de la funcion menciona V491: la funcion sobrevive a su migracion, el numero deja de ser cierto en cuanto otra la reescriba",
  "postgres/migrations/V49__add_query_param_types.sql|CABECERA",
  "postgres/migrations/V49__add_query_param_types.sql|COMENTARIOS",
  "postgres/migrations/V50__utilities_establishment_module.sql|CABECERA",
