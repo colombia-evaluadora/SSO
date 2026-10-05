@@ -259,7 +259,7 @@ BEGIN
         )
         SELECT 1 FROM ancestros WHERE pk = p_pk_lista_valor
     ) THEN
-        RAISE EXCEPTION 'No se puede asignar % como padre de %: la relación quedaría en ciclo',
+        RAISE EXCEPTION 'No se puede asignar % como padre: es % o uno de sus descendientes y la relación quedaría en ciclo',
             academico_test.fn_listavalor_etiqueta(p_pk_padre),
             academico_test.fn_listavalor_etiqueta(p_pk_lista_valor)
             USING ERRCODE = '22023';

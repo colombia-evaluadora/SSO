@@ -63,7 +63,7 @@ BEGIN
                 WHERE PK_LISTA_VALOR = p_pk_lista_valor AND ES_SISTEMA
                   AND (NOMBRE IS DISTINCT FROM TRIM(p_nombre)
                        OR ACCION IS DISTINCT FROM NULLIF(TRIM(p_accion), ''))) THEN
-        RAISE EXCEPTION 'Solo el super administrador puede cambiar el nombre o la acción de %: es un valor del sistema',
+        RAISE EXCEPTION 'Solo el super administrador puede cambiar el nombre o la acción: % es un valor del sistema',
             academico_test.fn_listavalor_etiqueta(p_pk_lista_valor)
             USING ERRCODE = '42501';
     END IF;
