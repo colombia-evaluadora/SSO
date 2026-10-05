@@ -1,7 +1,7 @@
 # Mapa del dominio
 
 **Generado** por `python scripts/migration-analysis mapa` — no editar a mano.
-Estado: 458 migraciones (V1–V546), 1015 funciones vivas, 58 endpoints vivos. Ultima generacion: 2026-10-05.
+Estado: 462 migraciones (V1–V546), 1025 funciones vivas, 58 endpoints vivos. Ultima generacion: 2026-10-05.
 
 Para una **funcion**, la migracion dueña es la que hay que editar: es su ultima escritura viva, no la que la creo.
 
@@ -20,9 +20,9 @@ Las secciones son las categorias funcionales de `scripts/migration-analysis/anal
 - [Observaciones](#observaciones) — 30 funcion(es), 0 endpoint(s)
 - [Asistencias](#asistencias) — 59 funcion(es), 1 endpoint(s)
 - [Planilla de calificación](#planilla) — 33 funcion(es), 0 endpoint(s)
-- [Calificación con instrumentos](#calificacion) — 87 funcion(es), 1 endpoint(s)
+- [Calificación con instrumentos](#calificacion) — 89 funcion(es), 1 endpoint(s)
 - [Referentes curriculares](#referentes) — 68 funcion(es), 1 endpoint(s)
-- [Planeador (unidades, actividades)](#planeador) — 265 funcion(es), 22 endpoint(s)
+- [Planeador (unidades, actividades)](#planeador) — 273 funcion(es), 22 endpoint(s)
 - [Auditoría](#auditoria) — 6 funcion(es), 9 endpoint(s)
 - [Periodos académicos](#periodos) — 43 funcion(es), 0 endpoint(s)
 - [Funcionarios](#funcionarios) — 27 funcion(es), 2 endpoint(s)
@@ -64,7 +64,7 @@ Las secciones son las categorias funcionales de `scripts/migration-analysis/anal
 | Funcion | Params | Migracion dueña | La usan |
 |---|---|---|---|
 | `academico_test.fn_actividad_validar_archivo_existente` | 2 | V496.1 | V496.3, V496.5 |
-| `academico_test.fn_actividad_validar_existente` | 1 | V496.1 | V496.2, V496.3, V496.5, V496.7 |
+| `academico_test.fn_actividad_validar_existente` | 1 | V496.1 | V496.2, V496.3, V496.5, V496.7, V531.3 |
 | `academico_test.fn_ente_usuario_crear` | 6 | V150 | V263 |
 | `academico_test.fn_ente_usuario_soft_delete` | 4 | V150 | — |
 | `academico_test.fn_pigse_cumplimiento_listar` | 0 | V156 | V196 |
@@ -344,7 +344,7 @@ Las secciones son las categorias funcionales de `scripts/migration-analysis/anal
 |---|---|---|---|
 | `academico_test.fn_actividad_asistencia_congelar_interno` | 1 | V496.6 | — |
 | `academico_test.fn_actividad_asistencia_dia` | 2 | V450 | V496.5, V496.6 |
-| `academico_test.fn_actividad_asistencia_estudiante` | 1 | V496.5 | V496.6 |
+| `academico_test.fn_actividad_asistencia_estudiante` | 1 | V496.5 | V469.3, V496.6 |
 | `academico_test.fn_actividad_asistencia_fecha_resolver` | 2 | V496.5 | V469.3 |
 | `academico_test.fn_actividad_asistencia_planeador_set` | 3 | V496.7 | V496.8 |
 | `academico_test.fn_actividad_asistencia_planeador_set_interno` | 3 | V496.6 | V496.7 |
@@ -400,7 +400,7 @@ Las secciones son las categorias funcionales de `scripts/migration-analysis/anal
 | `academico_test.fn_enfasis_resolver` | 4 | V40 | V77 |
 | `academico_test.fn_enfasis_soft_delete` | 2 | V40 | V77 |
 | `academico_test.fn_especialidad_enfasis_listar` | 2 | V40 | V77 |
-| `academico_test.fn_solicitud_aprobacion_aprobar_interno` | 3 | V496.19 | V496.20 |
+| `academico_test.fn_solicitud_aprobacion_aprobar_interno` | 3 | V496.19 | V496.20, V536 |
 
 <a id="planilla"></a>
 
@@ -414,13 +414,13 @@ Las secciones son las categorias funcionales de `scripts/migration-analysis/anal
 | `academico_test.fn_actividad_recuperacion_consolidar` | 3 | V496.19 | V496.19 |
 | `academico_test.fn_actividad_recuperacion_consolidar_interno` | 3 | V496.19 | V536 |
 | `academico_test.fn_actividad_recuperacion_revertir` | 2 | V408 | V482, V496.2 |
-| `academico_test.fn_actividad_validar_recuperacion_config` | 1 | V496.1 | V496.2 |
+| `academico_test.fn_actividad_validar_recuperacion_config` | 4 | V496.1 | V496.2 |
 | `academico_test.fn_actividad_validar_recuperacion_herencia` | 1 | V496.1 | — |
 | `academico_test.fn_actividad_validar_recuperacion_sumativa` | 3 | V496.1 | — |
 | `academico_test.fn_actividad_validar_sin_recuperaciones` | 1 | V482 | — |
 | `academico_test.fn_asignatura_definitiva_anual_calcular_interno` | 2 | V496.24 | — |
 | `academico_test.fn_asignatura_definitiva_anual_interno` | 2 | V496.24 | V536 |
-| `academico_test.fn_asignatura_definitiva_proyectada_periodo` | 3 | V496.23 | V408, V428, V469.3, V490, V496.24, V536… |
+| `academico_test.fn_asignatura_definitiva_proyectada_periodo` | 4 | V496.23 | V408, V428, V469.3, V490, V496.23, V496.24… |
 | `academico_test.fn_asignatura_plan_calculo_definitiva_modo` | 1 | V239 | V333, V492.1, V496.23 |
 | `academico_test.fn_criterio_evaluacion_porcentaje_maximo_recuperacion` | 1 | V239 | V227, V496.18, V496.19 |
 | `academico_test.fn_planilla_actividades_universo` | 6 | V469.3 | — |
@@ -439,7 +439,7 @@ Las secciones son las categorias funcionales de `scripts/migration-analysis/anal
 | `academico_test.fn_recuperacion_tipo_aprobacion` | 1 | V496.18 | V496.19 |
 | `academico_test.fn_solicitud_valor_vigente_recuperacion` | 2 | V496.18 | V496.19 |
 | `academico_test.fn_unidad_calculo_definitiva_modo` | 1 | V223 | V239, V333, V479, V492.1, V492.2, V492.3… |
-| `academico_test.fn_unidad_validar_calculo_definitiva` | 1 | V492.1 | — |
+| `academico_test.fn_unidad_validar_calculo_definitiva` | 2 | V492.1 | — |
 | `academico_test.tg_actividad_recuperacion_herencia` | 0 | V496.1 | — |
 
 <a id="calificacion"></a>
@@ -492,6 +492,8 @@ Las secciones son las categorias funcionales de `scripts/migration-analysis/anal
 | `academico_test.fn_actividad_nota_guardar_interno` | 3 | V496.6 | V496.19 |
 | `academico_test.fn_actividad_nota_obtener` | 2 | V496.7 | V247, V496.8 |
 | `academico_test.fn_actividad_nota_obtener_interno` | 1 | V496.6 | V496.7 |
+| `academico_test.fn_actividad_nota_previsualizar` | 4 | V496.7 | V496.8 |
+| `academico_test.fn_actividad_nota_previsualizar_interno` | 4 | V496.6 | V496.7 |
 | `academico_test.fn_actividad_nota_redondear` | 2 | V496.5 | V496.6 |
 | `academico_test.fn_actividad_nota_resultado_instrumento` | 1 | V496.6 | V469.3, V490, V537 |
 | `academico_test.fn_actividad_nota_rubrica_recalcular` | 1 | V496.6 | V496.9, V496.19 |
@@ -508,7 +510,7 @@ Las secciones son las categorias funcionales de `scripts/migration-analysis/anal
 | `academico_test.fn_actividad_validar_instrumento` | 2 | V496.5 | V496.6 |
 | `academico_test.fn_actividad_validar_instrumento_definicion` | 2 | V496.5 | V496.6 |
 | `academico_test.fn_actividad_validar_instrumento_permitido` | 2 | V496.5 | — |
-| `academico_test.fn_actividad_validar_nota_maxima` | 1 | V496.1 | — |
+| `academico_test.fn_actividad_validar_nota_maxima` | 4 | V496.1 | — |
 | `academico_test.fn_actividad_validar_permite_calificar` | 1 | V496.5 | V496.6 |
 | `academico_test.fn_actividad_validar_rubrica_captura` | 2 | V496.5 | V496.6 |
 | `academico_test.fn_actividad_validar_rubrica_definicion` | 3 | V496.5 | — |
@@ -659,7 +661,7 @@ Las secciones son las categorias funcionales de `scripts/migration-analysis/anal
 | `academico_test.fn_actividad_assert_propietario` | 2 | V496.1 | V492.3, V496.3 |
 | `academico_test.fn_actividad_assert_propietario_resultados` | 2 | V496.5 | V496.7 |
 | `academico_test.fn_actividad_assert_resultados` | 3 | V496.7 | V461, V463 |
-| `academico_test.fn_actividad_auditar` | 3 | V496.3 | V461, V463, V496.7 |
+| `academico_test.fn_actividad_auditar` | 3 | V496.3 | V461, V463, V496.7, V531.3 |
 | `academico_test.fn_actividad_buscar_por_pk` | 3 | V452 | V246, V272, V450 |
 | `academico_test.fn_actividad_calendario` | 9 | V528 | V528 |
 | `academico_test.fn_actividad_calendario_docente` | 8 | V528 | V529 |
@@ -693,8 +695,8 @@ Las secciones son las categorias funcionales de `scripts/migration-analysis/anal
 | `academico_test.fn_actividad_estudiantes_piar_excluidos` | 1 | V496.2 | — |
 | `academico_test.fn_actividad_estudiantes_set` | 4 | V496.3 | — |
 | `academico_test.fn_actividad_estudiantes_set_detalle` | 4 | V496.3 | V496.4 |
-| `academico_test.fn_actividad_etiqueta` | 1 | V496.1 | V461, V463, V496.2, V496.3, V496.5, V496.6… |
-| `academico_test.fn_actividad_etiqueta_de` | 4 | V496.1 | V496.2, V496.3 |
+| `academico_test.fn_actividad_etiqueta` | 1 | V496.1 | V277, V461, V463, V482, V492.1, V492.2… |
+| `academico_test.fn_actividad_etiqueta_de` | 4 | V496.1 | V223, V479, V496.2, V496.3 |
 | `academico_test.fn_actividad_evaluacion_requerida` | 1 | V479 | V214.2 |
 | `academico_test.fn_actividad_evidencia_quitar` | 2 | V496.3 | V246, V496.4 |
 | `academico_test.fn_actividad_evidencia_quitar_interno` | 2 | V496.2 | V496.3 |
@@ -742,19 +744,27 @@ Las secciones son las categorias funcionales de `scripts/migration-analysis/anal
 | `academico_test.fn_actividad_resultados_completos` | 1 | V496.5 | V496.6 |
 | `academico_test.fn_actividad_resumen_estados` | 9 | V530 | V530 |
 | `academico_test.fn_actividad_resumen_estados_docente` | 8 | V530 | V250, V252, V531 |
-| `academico_test.fn_actividad_rotulo` | 3 | V496.1 | — |
-| `academico_test.fn_actividad_sede` | 2 | V479 | V496.3 |
+| `academico_test.fn_actividad_rotulo` | 3 | V496.1 | V223, V272, V277, V479, V482, V492.1 |
+| `academico_test.fn_actividad_sede` | 2 | V479 | V496.3, V531.3 |
 | `academico_test.fn_actividad_unidad_configuracion` | 2 | V214.2 | V246, V452 |
 | `academico_test.fn_actividad_url_host` | 1 | V496.1 | — |
-| `academico_test.fn_actividad_validar_activa` | 1 | V496.1 | V496.2, V496.3, V496.5, V496.6, V496.7 |
+| `academico_test.fn_actividad_validacion_assert_validador` | 2 | V531.3 | — |
+| `academico_test.fn_actividad_validacion_coordinador_consultar` | 2 | V531.3 | V531.4 |
+| `academico_test.fn_actividad_validacion_coordinador_estado_interno` | 1 | V531.2 | V531.3 |
+| `academico_test.fn_actividad_validacion_coordinador_resolver` | 4 | V531.3 | V531.4 |
+| `academico_test.fn_actividad_validacion_coordinador_resolver_interno` | 4 | V531.2 | V531.3 |
+| `academico_test.fn_actividad_validacion_puede_validar` | 2 | V531.3 | — |
+| `academico_test.fn_actividad_validacion_validar_decision` | 2 | V531.1 | V531.3 |
+| `academico_test.fn_actividad_validacion_validar_requerida` | 1 | V531.1 | V531.3 |
+| `academico_test.fn_actividad_validar_activa` | 1 | V496.1 | V496.2, V496.3, V496.5, V496.6, V496.7, V531.3 |
 | `academico_test.fn_actividad_validar_archivo_formato` | 4 | V496.1 | V496.5 |
 | `academico_test.fn_actividad_validar_archivo_material` | 2 | V496.1 | — |
 | `academico_test.fn_actividad_validar_asignatura` | 1 | V496.1 | — |
 | `academico_test.fn_actividad_validar_calificable` | 1 | V496.5 | V496.6 |
-| `academico_test.fn_actividad_validar_campos` | 17 | V496.1 | V496.2 |
+| `academico_test.fn_actividad_validar_campos` | 19 | V496.1 | V496.2 |
 | `academico_test.fn_actividad_validar_catalogo` | 3 | V496.1 | V496.5 |
 | `academico_test.fn_actividad_validar_coherencia` | 17 | V496.1 | V496.2 |
-| `academico_test.fn_actividad_validar_criterio` | 3 | V496.1 | V496.2 |
+| `academico_test.fn_actividad_validar_criterio` | 5 | V496.1 | V496.2 |
 | `academico_test.fn_actividad_validar_cumplido` | 1 | V496.5 | V496.6 |
 | `academico_test.fn_actividad_validar_editable` | 1 | V496.1 | V496.3 |
 | `academico_test.fn_actividad_validar_eliminable` | 1 | V482 | V496.3 |
@@ -765,28 +775,28 @@ Las secciones son las categorias funcionales de `scripts/migration-analysis/anal
 | `academico_test.fn_actividad_validar_estudiantes_lote` | 2 | V496.5 | V496.6 |
 | `academico_test.fn_actividad_validar_estudiantes_minimo` | 1 | V496.1 | V496.2, V496.3 |
 | `academico_test.fn_actividad_validar_evaluativa_contexto` | 4 | V496.1 | — |
-| `academico_test.fn_actividad_validar_evidencia` | 3 | V496.1 | V496.2 |
+| `academico_test.fn_actividad_validar_evidencia` | 5 | V496.1 | V496.2 |
 | `academico_test.fn_actividad_validar_evidencias_cantidad` | 1 | V496.5 | V496.6 |
 | `academico_test.fn_actividad_validar_evidencias_minimo` | 3 | V496.1 | — |
 | `academico_test.fn_actividad_validar_evidencias_narrativas` | 4 | V496.5 | V496.6 |
 | `academico_test.fn_actividad_validar_fechas_orden` | 2 | V496.1 | — |
 | `academico_test.fn_actividad_validar_formativa` | 1 | V496.5 | V496.6 |
 | `academico_test.fn_actividad_validar_grupo` | 1 | V496.1 | — |
-| `academico_test.fn_actividad_validar_materiales` | 1 | V496.1 | V496.2 |
+| `academico_test.fn_actividad_validar_materiales` | 4 | V496.1 | V496.2 |
 | `academico_test.fn_actividad_validar_momento` | 1 | V496.5 | V496.6 |
 | `academico_test.fn_actividad_validar_otro_definicion` | 2 | V496.5 | — |
-| `academico_test.fn_actividad_validar_periodo_evaluacion_unico` | 4 | V496.1 | — |
+| `academico_test.fn_actividad_validar_periodo_evaluacion_unico` | 6 | V496.1 | — |
 | `academico_test.fn_actividad_validar_peso_requerido` | 5 | V496.1 | — |
-| `academico_test.fn_actividad_validar_ponderacion` | 4 | V496.1 | — |
+| `academico_test.fn_actividad_validar_ponderacion` | 6 | V496.1 | — |
 | `academico_test.fn_actividad_validar_porcentaje` | 2 | V496.5 | V496.6 |
 | `academico_test.fn_actividad_validar_recuperable` | 3 | V496.1 | V496.2 |
 | `academico_test.fn_actividad_validar_requerido` | 2 | V496.1 | — |
 | `academico_test.fn_actividad_validar_sin_notas` | 1 | V496.1 | V482 |
 | `academico_test.fn_actividad_validar_texto` | 3 | V496.1 | V496.5 |
-| `academico_test.fn_actividad_validar_tiene_unidad` | 3 | V496.1 | — |
-| `academico_test.fn_actividad_validar_titulo` | 2 | V496.1 | — |
-| `academico_test.fn_actividad_validar_titulo_unico` | 5 | V496.1 | V496.2 |
-| `academico_test.fn_actividad_validar_unidad` | 1 | V496.1 | — |
+| `academico_test.fn_actividad_validar_tiene_unidad` | 5 | V496.1 | — |
+| `academico_test.fn_actividad_validar_titulo` | 5 | V496.1 | — |
+| `academico_test.fn_actividad_validar_titulo_unico` | 6 | V496.1 | V496.2 |
+| `academico_test.fn_actividad_validar_unidad` | 3 | V496.1 | — |
 | `academico_test.fn_actividad_validar_unidad_compatible` | 4 | V496.1 | — |
 | `academico_test.fn_actividad_validar_url` | 2 | V496.1 | V496.5 |
 | `academico_test.fn_actividad_validar_url_dominio` | 4 | V496.1 | — |
@@ -802,7 +812,7 @@ Las secciones son las categorias funcionales de `scripts/migration-analysis/anal
 | `academico_test.fn_planeador_periodo_vigente` | 3 | V203 | V272, V340 |
 | `academico_test.fn_planeador_rotulo_actividad` | 4 | V511 | — |
 | `academico_test.fn_planeador_rotulo_actividad_interno` | 3 | V511 | — |
-| `academico_test.fn_planeador_rotulo_pluralizar` | 1 | V525 | — |
+| `academico_test.fn_planeador_rotulo_pluralizar` | 1 | V525 | V223, V239, V272, V492.1, V496.1 |
 | `academico_test.fn_planeador_sn` | 2 | V274 | V340 |
 | `academico_test.fn_resultado_correccion_requiere_aprobacion` | 2 | V496.18 | V496.6 |
 | `academico_test.fn_sed_listar_todos_planeador` | 1 | V396 | — |
@@ -831,7 +841,7 @@ Las secciones son las categorias funcionales de `scripts/migration-analysis/anal
 | `academico_test.fn_unidad_actividades_resumen_interno` | 1 | V492.2 | V492.3 |
 | `academico_test.fn_unidad_actualizar` | 16 | V492.3 | V492.4 |
 | `academico_test.fn_unidad_actualizar_interno` | 16 | V492.2 | V492.3 |
-| `academico_test.fn_unidad_assert_autor` | 2 | V492.1 | V492.3 |
+| `academico_test.fn_unidad_assert_autor` | 3 | V492.1 | V492.3 |
 | `academico_test.fn_unidad_assert_criterio_propietario` | 2 | V492.1 | V492.3 |
 | `academico_test.fn_unidad_assert_minimo_enunciado` | 1 | V483 | V496.2 |
 | `academico_test.fn_unidad_assert_propietario` | 2 | V492.1 | V492.3 |
@@ -864,7 +874,7 @@ Las secciones son las categorias funcionales de `scripts/migration-analysis/anal
 | `academico_test.fn_unidad_enunciados_desactivar_interno` | 3 | V492.2 | — |
 | `academico_test.fn_unidad_enunciados_reemplazar_interno` | 3 | V492.2 | — |
 | `academico_test.fn_unidad_estado` | 3 | V224 | V488 |
-| `academico_test.fn_unidad_etiqueta` | 1 | V492.1 | V492.2, V496.1 |
+| `academico_test.fn_unidad_etiqueta` | 1 | V492.1 | V223, V277, V479, V492.2, V496.1, V496.2… |
 | `academico_test.fn_unidad_listar` | 12 | V488 | V492.4 |
 | `academico_test.fn_unidad_listar_interno` | 15 | V488 | — |
 | `academico_test.fn_unidad_objetivos_listar` | 2 | V492.3 | V492.4 |
@@ -876,7 +886,7 @@ Las secciones son las categorias funcionales de `scripts/migration-analysis/anal
 | `academico_test.fn_unidad_ponderacion_disponible_interno` | 2 | V492.2 | V492.3 |
 | `academico_test.fn_unidad_ponderacion_intra_asignatura_asignada` | 3 | V239 | V248, V492.1 |
 | `academico_test.fn_unidad_ponderacion_recalcular_sumatoria` | 2 | V223 | V482, V492.2, V496.2 |
-| `academico_test.fn_unidad_rotulo` | 1 | V492.1 | — |
+| `academico_test.fn_unidad_rotulo` | 1 | V492.1 | V239, V479, V492.3, V496, V496.1, V496.2… |
 | `academico_test.fn_unidad_sede` | 2 | V492.3 | — |
 | `academico_test.fn_unidad_sumatoria_desde_ponderacion_interno` | 2 | V492.2 | — |
 | `academico_test.fn_unidad_sumatoria_puntaje_maximo` | 2 | V492.2 | — |
@@ -888,15 +898,15 @@ Las secciones son las categorias funcionales de `scripts/migration-analysis/anal
 | `academico_test.fn_unidad_validar_asignatura` | 1 | V492.1 | — |
 | `academico_test.fn_unidad_validar_bandera_sn` | 2 | V492.1 | V492.2 |
 | `academico_test.fn_unidad_validar_calculo_requerido` | 2 | V492.1 | V492.2 |
-| `academico_test.fn_unidad_validar_campos` | 10 | V492.1 | V492.2 |
+| `academico_test.fn_unidad_validar_campos` | 11 | V492.1 | V492.2 |
 | `academico_test.fn_unidad_validar_cesion` | 4 | V492.1 | V492.2 |
 | `academico_test.fn_unidad_validar_coherencia` | 7 | V492.1 | V492.2 |
-| `academico_test.fn_unidad_validar_contenidos_titulos` | 2 | V492.1 | V492.2 |
+| `academico_test.fn_unidad_validar_contenidos_titulos` | 3 | V492.1 | V492.2 |
 | `academico_test.fn_unidad_validar_criterio_activo` | 1 | V492.1 | V492.2, V492.3 |
 | `academico_test.fn_unidad_validar_criterio_niveles_edicion` | 2 | V492.1 | V492.2 |
 | `academico_test.fn_unidad_validar_criterio_niveles_nuevos` | 2 | V492.1 | V492.2 |
 | `academico_test.fn_unidad_validar_criterio_texto` | 2 | V492.1 | V492.2 |
-| `academico_test.fn_unidad_validar_descripcion` | 1 | V492.1 | — |
+| `academico_test.fn_unidad_validar_descripcion` | 2 | V492.1 | — |
 | `academico_test.fn_unidad_validar_docente` | 1 | V492.1 | — |
 | `academico_test.fn_unidad_validar_eliminable` | 1 | V492.1 | V492.2 |
 | `academico_test.fn_unidad_validar_enfoque_actividades` | 2 | V492.1 | — |
@@ -905,12 +915,12 @@ Las secciones son las categorias funcionales de `scripts/migration-analysis/anal
 | `academico_test.fn_unidad_validar_enunciado_grado` | 2 | V492.1 | V496.1 |
 | `academico_test.fn_unidad_validar_enunciado_nivel1` | 1 | V492.1 | — |
 | `academico_test.fn_unidad_validar_grado` | 1 | V492.1 | — |
-| `academico_test.fn_unidad_validar_nombre` | 2 | V492.1 | — |
+| `academico_test.fn_unidad_validar_nombre` | 3 | V492.1 | — |
 | `academico_test.fn_unidad_validar_nombre_unico` | 4 | V492.1 | — |
 | `academico_test.fn_unidad_validar_ponderacion_actividad` | 4 | V492.1 | V492.2 |
 | `academico_test.fn_unidad_validar_ponderacion_actividad_manual` | 1 | V492.1 | V492.2, V496.1 |
 | `academico_test.fn_unidad_validar_ponderacion_aplica` | 2 | V492.1 | — |
-| `academico_test.fn_unidad_validar_ponderacion_rango` | 1 | V492.1 | — |
+| `academico_test.fn_unidad_validar_ponderacion_rango` | 2 | V492.1 | — |
 | `academico_test.fn_unidad_validar_ponderacion_total` | 4 | V492.1 | — |
 | `academico_test.fn_unidad_validar_textos` | 3 | V492.1 | — |
 | `academico_test.tg_planeador_minimo_enunciado_evidencia` | 0 | V496.2 | — |
@@ -948,7 +958,7 @@ Las secciones son las categorias funcionales de `scripts/migration-analysis/anal
 | Funcion | Params | Migracion dueña | La usan |
 |---|---|---|---|
 | `academico_test.fn_anio_lectivo_numero` | 1 | V417 | V537, V540 |
-| `academico_test.fn_asignatura_notas_periodo_interno` | 3 | V496.23 | — |
+| `academico_test.fn_asignatura_notas_periodo_interno` | 4 | V496.23 | — |
 | `academico_test.fn_asignatura_periodos_ponderar` | 2 | V496.24 | — |
 | `academico_test.fn_descanso_agregar` | 4 | V37 | V75 |
 | `academico_test.fn_descanso_eliminar` | 2 | V37 | V75 |
@@ -1140,7 +1150,7 @@ Las secciones son las categorias funcionales de `scripts/migration-analysis/anal
 | `academico_test.fn_list_roles` | 1 | V113 | V126 |
 | `academico_test.fn_rol_categoria_nivel` | 1 | V29 | V297, V298, V300, V302, V489, V535 |
 | `academico_test.fn_sincronizar_rol_publico` | 1 | V302 | V150, V300, V301, V399, V414 |
-| `academico_test.fn_solicitud_aprobacion_assert_rol_aprobador` | 2 | V496.20 | — |
+| `academico_test.fn_solicitud_aprobacion_assert_rol_aprobador` | 2 | V496.20 | V531.3 |
 | `academico_test.fn_solicitud_aprobacion_listar` | 4 | V496.20 | V496.21 |
 | `academico_test.fn_solicitud_aprobacion_roles_ee` | 0 | V496.18 | — |
 | `academico_test.fn_sync_trol_to_public_role` | 0 | V113 | — |
@@ -1249,8 +1259,8 @@ Las secciones son las categorias funcionales de `scripts/migration-analysis/anal
 | `academico_test.fn_sync_users_to_tusuario` | 0 | V215 | — |
 | `academico_test.fn_tlv_estado_resultado_pk` | 1 | V496.5 | V496.6 |
 | `academico_test.fn_tlv_momento_registro_pk` | 1 | V496.5 | V496.6 |
-| `academico_test.fn_tlv_solicitud_estado_pk` | 1 | V496.18 | V496.19 |
-| `academico_test.fn_tlv_solicitud_tipo_pk` | 1 | V496.18 | V496.19 |
+| `academico_test.fn_tlv_solicitud_estado_pk` | 1 | V496.18 | V469.3, V496.19, V496.23, V536, V537 |
+| `academico_test.fn_tlv_solicitud_tipo_pk` | 1 | V496.18 | V469.3, V496.19, V496.23, V536, V537 |
 | `academico_test.fn_usu_buscar_por_documento` | 3 | V51 | V93 |
 | `academico_test.fn_usu_crear` | 15 | V51 | — |
 | `academico_test.fn_usuario_ee_accesibles` | 1 | V29 | V40, V51, V116, V140, V179, V233… |

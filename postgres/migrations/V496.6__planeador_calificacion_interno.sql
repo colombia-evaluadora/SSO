@@ -621,6 +621,43 @@ BEGIN
 END;
 $$;
 
+-- Vista previa: la nota que dejaría una captura, sin guardar ni abrir solicitud.
+CREATE OR REPLACE FUNCTION academico_test.fn_actividad_nota_previsualizar_interno(
+    p_pk_usuario_solicitante   BIGINT,
+    p_pk_tactividad_estudiante BIGINT,
+    p_calificacion             JSONB,
+    p_fecha                    DATE
+)
+RETURNS TABLE (porcentaje NUMERIC, nota_homologada NUMERIC)
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_txt TEXT;
+    v_pct NUMERIC;
+BEGIN
+    -- Captura como si estuviera aprobada (sin PA055) y el error final
+    -- deshace la escritura y el set_config: solo queda el porcentaje.
+    BEGIN
+        PERFORM set_config('academico_test.aprobacion_en_curso', 'on', TRUE);
+        v_pct := academico_test.fn_actividad_nota_calificar_interno(
+                     p_pk_usuario_solicitante, p_pk_tactividad_estudiante, p_calificacion, p_fecha);
+        RAISE EXCEPTION 'vista previa' USING ERRCODE = 'PV001', DETAIL = COALESCE(v_pct::TEXT, '');
+    EXCEPTION WHEN SQLSTATE 'PV001' THEN
+        GET STACKED DIAGNOSTICS v_txt = PG_EXCEPTION_DETAIL;
+    END;
+
+    RETURN QUERY
+    SELECT NULLIF(v_txt, '')::NUMERIC, h.nota_homologada
+      FROM academico_test.TACTIVIDAD_ESTUDIANTE ae
+      JOIN academico_test.TACTIVIDAD a  ON a.PK_TACTIVIDAD = ae.FK_TACTIVIDAD
+      JOIN academico_test.TMATRICULA m  ON m.PK_TMATRICULA = ae.FK_TMATRICULA
+      JOIN academico_test.TGRUPO gr     ON gr.PK_TGRUPO = m.FK_TGRUPO
+      LEFT JOIN LATERAL academico_test.fn_nota_homologar(
+                    NULLIF(v_txt, '')::NUMERIC, a.FK_TASIGNATURA, gr.FK_TGRADO) h ON TRUE
+     WHERE ae.PK_TACTIVIDAD_ESTUDIANTE = p_pk_tactividad_estudiante;
+END;
+$$;
+
 -- ---------------------------------------------------------------------------
 -- Captura en bloque: un mismo valor para varios estudiantes
 -- ---------------------------------------------------------------------------
@@ -1602,6 +1639,8 @@ COMMENT ON FUNCTION academico_test.fn_actividad_nota_cotejo_recalcular(BIGINT)
     IS 'INTERNO: nota (0-100) de la lista de cotejo: suma de los puntajes cumplidos sobre el total posible (sin puntaje pesa 1), con piso y tope. No escribe.';
 COMMENT ON FUNCTION academico_test.fn_actividad_nota_guardar_interno(BIGINT, BIGINT, NUMERIC)
     IS 'INTERNO: decide cómo guardar la nota de un estudiante (porcentaje 0-100). Si es una corrección con el periodo de evaluación ya no calificable lanza PA055 con el porcentaje en DETAIL, para que quien capturó revierta la captura y abra la solicitud (Reglas 55 y 70); si no, la escribe con fn_actividad_nota_aplicar_interno. Con academico_test.aprobacion_en_curso = on (aprobación) escribe directo. Lo usan todos los _interno de calificación, individuales y en bloque.';
+COMMENT ON FUNCTION academico_test.fn_actividad_nota_previsualizar_interno(BIGINT, BIGINT, JSONB, DATE)
+    IS 'INTERNO: porcentaje y nota homologada que dejaría fn_actividad_nota_calificar_interno con esa captura (validaciones, Regla 42, piso y tope incluidos), sin guardar nada ni abrir solicitud: captura con aprobacion_en_curso y revierte. Lo usa fn_actividad_nota_previsualizar.';
 COMMENT ON FUNCTION academico_test.fn_actividad_nota_calificar_interno(BIGINT, BIGINT, JSONB, DATE)
     IS 'INTERNO: valida la calificación (fn_actividad_validar_calificacion) y la despacha según el instrumento efectivo: {niveles}, {itemsMarcados}, {pkNivel|valorNumerico} o {criterios}, {porcentaje}. Si la corrección exige aprobación (PA055) revierte la captura, abre la solicitud con fn_actividad_resultado_correccion_diferir_interno y devuelve la nota vigente. Lo usan fn_actividad_nota_calificar y la aprobación de una corrección.';
 COMMENT ON FUNCTION academico_test.fn_actividad_nota_obtener_interno(BIGINT)
