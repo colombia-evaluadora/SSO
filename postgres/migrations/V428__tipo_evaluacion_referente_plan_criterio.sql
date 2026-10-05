@@ -2,7 +2,7 @@
 -- V428 - El tipo de evaluacion sale del REFERENTE, no del criterio: primero el
 -- referente del (grado, asignatura), luego el plan de estudio y al final el
 -- criterio. Quedan fn_asignatura_tipo_evaluacion y fn_nota_homologar (con el
--- ROWS 1 de V432). fn_informe_estudiante_asignaturas y
+-- ROWS 1). fn_informe_estudiante_asignaturas y
 -- fn_informe_periodo_requerido viven hoy como _interno en V536; aqui solo se
 -- crean si faltan, porque los DO de V439 y V496.24 las llaman al migrar una
 -- base limpia. fn_informe_grupo_listar vive en V490.
@@ -307,6 +307,9 @@ BEGIN
                     v_fmt.fk_tescala, p_porcentaje) b ON TRUE;
 END;
 $function$;
+
+COMMENT ON FUNCTION academico_test.fn_nota_homologar(NUMERIC, BIGINT, BIGINT)
+    IS 'Traduce una calificacion del Planeador (porcentaje 0-100, que es como se guarda SIEMPRE en TACTIVIDAD_NOTA) a lo que el colegio muestra. El formato y la escala salen de fn_asignatura_tipo_evaluacion: referente, plan de estudio y criterio de evaluacion de la (asignatura, grado), con su criterio propio si la asignatura lo tiene; si ninguno trae bandas, la escala del grado (criterio del periodo y luego TNIVEL_ESCALA del nivel). Devuelve SIEMPRE una fila, incluso con p_porcentaje NULL o sin configuracion, para poder usarse en LEFT JOIN LATERAL desde un listado sin perder al estudiante sin calificar. nota_homologada = ROUND(% / 100 * nota_maxima, decimales) SOLO en los formatos numericos (CINCO/DIEZ/CIEN); en LITERAL/SIMBOLO/CARITA viene NULL porque ahi el colegio no califica con un numero. La valoracion (la banda Bajo/Basico/Alto/Superior) la da fn_escala_valoracion_banda contra el porcentaje, porque LIMITE_INFERIOR/SUPERIOR estan en 0-100; si cae en un hueco entre bandas viene NULL en vez de aproximar. NO aplica piso ni tope: de eso se encarga fn_actividad_nota_ajustar_por_criterio en la ESCRITURA.';
 
 -- La vigente es posterior; esta solo hace falta en una base limpia (V439:migracion, V439:migracion, V496.24:migracion, V496.24:migracion).
 DO $guarda$
