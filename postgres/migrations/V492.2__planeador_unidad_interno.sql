@@ -389,8 +389,12 @@ DECLARE
 BEGIN
     PERFORM academico_test.fn_unidad_validar_campos(
         NULL, p_nombre, p_descripcion, p_fk_tasignatura, p_fk_tgrado, p_fk_tfuncionario,
-        p_fk_tlv_calculo_definitiva, p_objetivos, p_contenidos, p_ponderacion);
-    PERFORM academico_test.fn_unidad_validar_contenidos_titulos(p_contenidos, p_contenidos_titulos);
+        p_fk_tlv_calculo_definitiva, p_objetivos, p_contenidos, p_ponderacion,
+        COALESCE(p_fk_referente_curricular,
+                 academico_test.fn_unidad_referente_aplicable(p_fk_tgrado, p_fk_tasignatura)));
+    PERFORM academico_test.fn_unidad_validar_contenidos_titulos(p_contenidos, p_contenidos_titulos,
+        COALESCE(p_fk_referente_curricular,
+                 academico_test.fn_unidad_referente_aplicable(p_fk_tgrado, p_fk_tasignatura)));
 
     v_referente := academico_test.fn_unidad_referente_efectivo_interno(
         NULL, p_fk_tgrado, p_fk_tasignatura, p_fk_referente_curricular);
@@ -456,8 +460,10 @@ BEGIN
     PERFORM academico_test.fn_unidad_validar_activa(p_pk_tunidad);
     PERFORM academico_test.fn_unidad_validar_campos(
         p_pk_tunidad, p_nombre, p_descripcion, p_fk_tasignatura, p_fk_tgrado, p_fk_tfuncionario,
-        p_fk_tlv_calculo_definitiva, p_objetivos, p_contenidos, p_ponderacion);
-    PERFORM academico_test.fn_unidad_validar_contenidos_titulos(p_contenidos, p_contenidos_titulos);
+        p_fk_tlv_calculo_definitiva, p_objetivos, p_contenidos, p_ponderacion, p_fk_referente_curricular);
+    PERFORM academico_test.fn_unidad_validar_contenidos_titulos(p_contenidos, p_contenidos_titulos,
+        COALESCE(p_fk_referente_curricular,
+                 (SELECT FK_REFERENTE_CURRICULAR FROM academico_test.TUNIDAD WHERE PK_TUNIDAD = p_pk_tunidad)));
 
     SELECT * INTO v_actual FROM academico_test.TUNIDAD WHERE PK_TUNIDAD = p_pk_tunidad;
     v_nombre      := COALESCE(NULLIF(TRIM(p_nombre), ''), v_actual.NOMBRE);
@@ -836,7 +842,8 @@ BEGIN
     PERFORM academico_test.fn_unidad_validar_actividad_activa(p_pk_tactividad);
     PERFORM academico_test.fn_unidad_validar_actividad_vinculada(p_pk_tactividad);
     IF p_ponderacion IS NULL THEN
-        RAISE EXCEPTION 'Indique el peso (%%) de la actividad' USING ERRCODE = '22023';
+        RAISE EXCEPTION 'Indique el peso (%%) de %', academico_test.fn_actividad_etiqueta(p_pk_tactividad)
+            USING ERRCODE = '22023';
     END IF;
 
     SELECT FK_TUNIDAD, FK_TGRUPO INTO v_unidad, v_grupo
