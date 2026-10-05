@@ -6,13 +6,17 @@
 --   3.4:      solo actividades sumativas (ES_EVALUATIVA) y no de recuperacion.
 -- El universo de notas sale a fn_asignatura_notas_periodo_interno para que
 -- las dos ramas (actividades / unidades) no repitan los filtros.
--- Depende de: V333, V408 (politica sin calificar), V239, V496.5 (ESTADO_RESULTADO).
+-- Con p_con_propuestas la nota de una correccion pendiente (Regla 55) reemplaza a la vigente.
+-- Depende de: V333, V408 (politica sin calificar), V239, V496.5 (ESTADO_RESULTADO), V496.18.
 -- ===========================================================================
+
+DROP FUNCTION IF EXISTS academico_test.fn_asignatura_notas_periodo_interno(BIGINT, BIGINT, BIGINT);
 
 CREATE OR REPLACE FUNCTION academico_test.fn_asignatura_notas_periodo_interno(
     p_fk_tmatricula          BIGINT,
     p_fk_tasignatura         BIGINT,
-    p_fk_tperiodo_evaluacion BIGINT
+    p_fk_tperiodo_evaluacion BIGINT,
+    p_con_propuestas         BOOLEAN
 )
 RETURNS TABLE(
     pk_tactividad BIGINT,
@@ -56,6 +60,7 @@ BEGIN
                    a.PONDERACION::NUMERIC               AS ponderacion,
                    a.NOTA_MAXIMA::NUMERIC               AS puntaje,
                    CASE
+                       WHEN sp.porcentaje IS NOT NULL THEN sp.porcentaje
                        WHEN UPPER(TRIM(er.VALOR)) IN ('PENDIENTE', 'NO_ASISTIO_JUSTIFICADA')
                        THEN NULL
                        WHEN UPPER(TRIM(er.VALOR)) IN ('NO_PRESENTO', 'NO_ASISTIO_NO_JUSTIFICADA')
@@ -72,6 +77,16 @@ BEGIN
                AND n.ACTIVE = TRUE
               LEFT JOIN academico_test.TLISTA_VALOR er
                 ON er.PK_LISTA_VALOR = n.FK_TLV_ESTADO_RESULTADO
+              LEFT JOIN LATERAL (
+                  SELECT (s.VALOR_PROPUESTO->>'porcentaje')::NUMERIC AS porcentaje
+                    FROM academico_test.TSOLICITUD_APROBACION s
+                   WHERE s.TABLA_OBJETO = 'TACTIVIDAD_ESTUDIANTE'
+                     AND s.FK_OBJETO = ae.PK_TACTIVIDAD_ESTUDIANTE
+                     AND s.FK_TLV_TIPO = academico_test.fn_tlv_solicitud_tipo_pk('CORRECCION_RESULTADO')
+                     AND s.FK_TLV_ESTADO = academico_test.fn_tlv_solicitud_estado_pk('PENDIENTE')
+                     AND s.ACTIVE = TRUE
+                   LIMIT 1
+              ) sp ON p_con_propuestas
              WHERE a.ACTIVE = TRUE
                AND a.FK_TASIGNATURA = p_fk_tasignatura
                AND COALESCE(a.ES_EVALUATIVA::VARCHAR, 'S') = 'S'
@@ -84,14 +99,15 @@ BEGIN
 END;
 $function$;
 
-COMMENT ON FUNCTION academico_test.fn_asignatura_notas_periodo_interno(BIGINT, BIGINT, BIGINT)
-    IS 'INTERNO: universo de notas que computan para (matricula, asignatura, periodo de evaluacion), una fila por actividad con su peso (PONDERACION), su puntaje (NOTA_MAXIMA) y la nota en porcentaje ya resuelta por la Regla 77 segun TACTIVIDAD_NOTA.FK_TLV_ESTADO_RESULTADO y la politica "Sin calificaciones" del criterio (fn_criterio_evaluacion_desempeno_sin_calificar): PENDIENTE y NO_ASISTIO_JUSTIFICADA nunca computan; NO_PRESENTO y NO_ASISTIO_NO_JUSTIFICADA valen PORCENTAJE_INICIAL_CALIF (0 si no hay) con MENOR y se excluyen con NINGUNA o sin politica. Solo actividades sumativas (ES_EVALUATIVA = S), no de recuperacion (su efecto ya esta en DEFINITIVA) y CALIFICABLE <> N. Sin gate. La usa fn_asignatura_definitiva_proyectada_periodo.';
+COMMENT ON FUNCTION academico_test.fn_asignatura_notas_periodo_interno(BIGINT, BIGINT, BIGINT, BOOLEAN)
+    IS 'INTERNO: universo de notas que computan para (matricula, asignatura, periodo de evaluacion), una fila por actividad con su peso (PONDERACION), su puntaje (NOTA_MAXIMA) y la nota en porcentaje ya resuelta por la Regla 77 segun TACTIVIDAD_NOTA.FK_TLV_ESTADO_RESULTADO y la politica "Sin calificaciones" del criterio (fn_criterio_evaluacion_desempeno_sin_calificar): PENDIENTE y NO_ASISTIO_JUSTIFICADA nunca computan; NO_PRESENTO y NO_ASISTIO_NO_JUSTIFICADA valen PORCENTAJE_INICIAL_CALIF (0 si no hay) con MENOR y se excluyen con NINGUNA o sin politica. Solo actividades sumativas (ES_EVALUATIVA = S), no de recuperacion (su efecto ya esta en DEFINITIVA) y CALIFICABLE <> N. Con p_con_propuestas la nota propuesta de una CORRECCION_RESULTADO pendiente reemplaza a la vigente. Sin gate. La usa fn_asignatura_definitiva_proyectada_periodo.';
 
 
 CREATE OR REPLACE FUNCTION academico_test.fn_asignatura_definitiva_proyectada_periodo(
     p_fk_tmatricula          BIGINT,
     p_fk_tasignatura         BIGINT,
-    p_fk_tperiodo_evaluacion BIGINT
+    p_fk_tperiodo_evaluacion BIGINT,
+    p_con_propuestas         BOOLEAN
 )
 RETURNS NUMERIC
 LANGUAGE plpgsql
@@ -118,7 +134,7 @@ BEGIN
         IF v_modo IN ('PONDERAR', 'SUMATORIA') THEN
             SELECT academico_test.fn_actividad_etiqueta(t.pk_tactividad) INTO v_falta
               FROM academico_test.fn_asignatura_notas_periodo_interno(
-                   p_fk_tmatricula, p_fk_tasignatura, p_fk_tperiodo_evaluacion) t
+                   p_fk_tmatricula, p_fk_tasignatura, p_fk_tperiodo_evaluacion, p_con_propuestas) t
              WHERE (CASE WHEN v_modo = 'SUMATORIA' THEN t.puntaje ELSE t.ponderacion END) IS NULL
              LIMIT 1;
             IF FOUND THEN
@@ -142,7 +158,7 @@ BEGIN
                    END, 2)
           INTO v_resultado
           FROM academico_test.fn_asignatura_notas_periodo_interno(
-                   p_fk_tmatricula, p_fk_tasignatura, p_fk_tperiodo_evaluacion) t;
+                   p_fk_tmatricula, p_fk_tasignatura, p_fk_tperiodo_evaluacion, p_con_propuestas) t;
 
         RETURN v_resultado;
     END IF;
@@ -157,7 +173,7 @@ BEGIN
                       CASE WHEN m.modo = 'SUMATORIA' THEN 'puntaje' ELSE 'ponderacion' END)
           INTO v_falta
           FROM academico_test.fn_asignatura_notas_periodo_interno(
-                   p_fk_tmatricula, p_fk_tasignatura, p_fk_tperiodo_evaluacion) t
+                   p_fk_tmatricula, p_fk_tasignatura, p_fk_tperiodo_evaluacion, p_con_propuestas) t
           JOIN academico_test.TUNIDAD tu ON tu.PK_TUNIDAD = t.fk_tunidad
           CROSS JOIN LATERAL (SELECT academico_test.fn_unidad_calculo_definitiva_modo(t.fk_tunidad) AS modo) m
          WHERE (m.modo = 'PONDERAR'  AND t.ponderacion IS NULL)
@@ -171,7 +187,7 @@ BEGIN
                    END
               INTO v_falta
               FROM academico_test.fn_asignatura_notas_periodo_interno(
-                   p_fk_tmatricula, p_fk_tasignatura, p_fk_tperiodo_evaluacion) t
+                   p_fk_tmatricula, p_fk_tasignatura, p_fk_tperiodo_evaluacion, p_con_propuestas) t
               LEFT JOIN academico_test.TUNIDAD tu ON tu.PK_TUNIDAD = t.fk_tunidad
              WHERE tu.PONDERACION IS NULL
              LIMIT 1;
@@ -192,7 +208,7 @@ BEGIN
                END AS nota_calc,
                AVG(t.nota) AS nota_prom
           FROM academico_test.fn_asignatura_notas_periodo_interno(
-                   p_fk_tmatricula, p_fk_tasignatura, p_fk_tperiodo_evaluacion) t
+                   p_fk_tmatricula, p_fk_tasignatura, p_fk_tperiodo_evaluacion, p_con_propuestas) t
          GROUP BY t.fk_tunidad
     ),
     con_peso AS (
@@ -215,6 +231,23 @@ BEGIN
     RETURN v_resultado;
 END;
 $function$;
+
+-- La firma de 3 argumentos se conserva: V408 la busca por to_regprocedure.
+CREATE OR REPLACE FUNCTION academico_test.fn_asignatura_definitiva_proyectada_periodo(
+    p_fk_tmatricula          BIGINT,
+    p_fk_tasignatura         BIGINT,
+    p_fk_tperiodo_evaluacion BIGINT
+)
+RETURNS NUMERIC
+LANGUAGE sql
+STABLE
+AS $function$
+    SELECT academico_test.fn_asignatura_definitiva_proyectada_periodo(
+               p_fk_tmatricula, p_fk_tasignatura, p_fk_tperiodo_evaluacion, FALSE);
+$function$;
+
+COMMENT ON FUNCTION academico_test.fn_asignatura_definitiva_proyectada_periodo(BIGINT, BIGINT, BIGINT, BOOLEAN)
+    IS 'INTERNO: como la de 3 argumentos; con p_con_propuestas TRUE computa las correcciones pendientes de aprobacion (Regla 55) con su nota propuesta. La usa la planilla para la definitiva propuesta.';
 
 COMMENT ON FUNCTION academico_test.fn_asignatura_definitiva_proyectada_periodo(BIGINT, BIGINT, BIGINT)
     IS 'INTERNO: nota proyectada (porcentaje 0-100, sin homologar) de una asignatura en UN periodo de evaluacion; el "gris" de informes. La usan fn_informe_estudiante_asignaturas, fn_asignatura_nota_requerida_periodo, fn_asignatura_definitiva_anual_calcular_interno, fn_informe_periodo_guardar y la recuperacion. Universo: fn_asignatura_notas_periodo_interno (Regla 77, solo sumativas, sin recuperaciones). Motor por fn_asignatura_plan_vigente: ACTIVIDADES -> calculo plano; UNIDADES -> cada unidad con su modo y luego entre unidades con TUNIDAD.PONDERACION; sin configuracion -> mismo camino por unidad con promedio simple como fallback. SUMATORIA suma puntos (nota x NOTA_MAXIMA / sum NOTA_MAXIMA de lo calificado); PONDERAR pondera por PONDERACION (Regla 33). Con el motor configurado, un peso o puntaje que falta, una unidad sin PONDERACION o actividades sin unidad lanzan 22023 nombrando la actividad o la unidad, en vez de caer a promedio. NULL si nada computa en el periodo.';

@@ -189,6 +189,9 @@ $$;
 COMMENT ON FUNCTION academico_test.fn_planilla_columnas_listar_interno(BIGINT, BIGINT, BIGINT, DATE, DATE, VARCHAR)
     IS 'INTERNO: header de la planilla para un periodo ya resuelto: una fila por actividad-columna del (grupo, asignatura) en el periodo, en el orden de fn_planilla_actividades_universo, con unidad, instrumento (y metodo si es OTRO), PONDERACION/NOTA_MAXIMA, ES_EVALUATIVA, es_formativa, fechas y progreso de ESE grupo (calificado = con nota o con OBSERVACION y CALIFICABLE = N). Lo usa fn_planilla_columnas_listar.';
 
+-- Cambia el tipo de retorno: CREATE OR REPLACE no basta.
+DROP FUNCTION IF EXISTS academico_test.fn_planilla_calificaciones_listar_interno(BIGINT, BIGINT, BIGINT, DATE, DATE, VARCHAR, VARCHAR, INT, INT);
+
 CREATE OR REPLACE FUNCTION academico_test.fn_planilla_calificaciones_listar_interno(
     p_fk_tgrupo              BIGINT,
     p_fk_tasignatura         BIGINT,
@@ -214,7 +217,8 @@ RETURNS TABLE (
     definitiva_registrada_homologada NUMERIC,
     formato_valor                    VARCHAR,
     nota_maxima                      NUMERIC,
-    es_numerico                      BOOLEAN
+    es_numerico                      BOOLEAN,
+    definitiva_propuesta_homologada  NUMERIC
 )
 LANGUAGE plpgsql
 STABLE
@@ -280,7 +284,8 @@ BEGIN
            hr.nota_homologada,
            hv.formato_valor,
            hv.nota_maxima,
-           COALESCE(hv.formato_valor IN ('CINCO', 'DIEZ', 'CIEN'), FALSE)
+           COALESCE(hv.formato_valor IN ('CINCO', 'DIEZ', 'CIEN'), FALSE),
+           hpr.nota_homologada
       FROM base b
       LEFT JOIN LATERAL (
           SELECT academico_test.fn_asignatura_definitiva_proyectada_periodo(
@@ -301,6 +306,24 @@ BEGIN
       LEFT JOIN LATERAL academico_test.fn_nota_homologar(def.proyectada, p_fk_tasignatura, v_fk_tgrado) hp ON TRUE
       LEFT JOIN LATERAL academico_test.fn_nota_homologar(reg.registrada, p_fk_tasignatura, v_fk_tgrado) hr ON TRUE
       LEFT JOIN LATERAL academico_test.fn_nota_homologar(COALESCE(reg.registrada, def.proyectada), p_fk_tasignatura, v_fk_tgrado) hv ON TRUE
+      -- Definitiva con las correcciones pendientes (Regla 55); solo si hay alguna.
+      LEFT JOIN LATERAL (
+          SELECT academico_test.fn_asignatura_definitiva_proyectada_periodo(
+                     b.PK_TMATRICULA, p_fk_tasignatura, v_pe, TRUE) AS propuesta
+           WHERE EXISTS (
+                     SELECT 1
+                       FROM academico_test.TSOLICITUD_APROBACION s
+                       JOIN academico_test.TACTIVIDAD_ESTUDIANTE ae2
+                         ON ae2.PK_TACTIVIDAD_ESTUDIANTE = s.FK_OBJETO
+                      WHERE s.TABLA_OBJETO = 'TACTIVIDAD_ESTUDIANTE'
+                        AND ae2.FK_TMATRICULA = b.PK_TMATRICULA
+                        AND s.FK_TASIGNATURA = p_fk_tasignatura
+                        AND s.FK_TPERIODO_EVALUACION = v_pe
+                        AND s.FK_TLV_TIPO = academico_test.fn_tlv_solicitud_tipo_pk('CORRECCION_RESULTADO')
+                        AND s.FK_TLV_ESTADO = academico_test.fn_tlv_solicitud_estado_pk('PENDIENTE')
+                        AND s.ACTIVE = TRUE)
+      ) prop ON TRUE
+      LEFT JOIN LATERAL academico_test.fn_nota_homologar(prop.propuesta, p_fk_tasignatura, v_fk_tgrado) hpr ON TRUE
       LEFT JOIN LATERAL (
           SELECT jsonb_agg(jsonb_build_object(
                      'ordenColumna',            c.orden_columna,
@@ -336,6 +359,10 @@ BEGIN
                              WHEN sa.ausente                                      THEN 'NO_ASISTIO_NO_JUSTIFICADA'
                              ELSE 'PENDIENTE'
                          END,
+                     -- Regla 55: corrección pendiente de aprobación y su nota propuesta.
+                     'solicitudPendiente',      (sp.pk IS NOT NULL),
+                     'notaPropuestaHomologada', hpp.nota_homologada,
+                     'calificacionPropuesta',   sp.calificacion,
                      'evidencias',    COALESCE(ev.evidencias, '[]'::jsonb))
                      ORDER BY c.orden_columna) AS celdas
             FROM columnas c
@@ -353,6 +380,23 @@ BEGIN
                    ON lve.PK_LISTA_VALOR = n.FK_TLV_ESTADO_RESULTADO
             LEFT JOIN LATERAL academico_test.fn_actividad_asistencia_estudiante(
                           ae.PK_TACTIVIDAD_ESTUDIANTE) sa ON ae.PK_TACTIVIDAD_ESTUDIANTE IS NOT NULL
+            LEFT JOIN LATERAL (
+                SELECT s.PK_TSOLICITUD_APROBACION AS pk,
+                       (s.VALOR_PROPUESTO->>'porcentaje')::NUMERIC AS porcentaje,
+                       -- Solo una captura completa (CALIFICAR) sirve para precargar el form;
+                       -- las de bloque son de un criterio o elemento.
+                       CASE WHEN s.VALOR_PROPUESTO->'capturas'->-1->>'operacion' = 'CALIFICAR'
+                            THEN s.VALOR_PROPUESTO->'capturas'->-1->'calificacion' END AS calificacion
+                  FROM academico_test.TSOLICITUD_APROBACION s
+                 WHERE s.TABLA_OBJETO = 'TACTIVIDAD_ESTUDIANTE'
+                   AND s.FK_OBJETO = ae.PK_TACTIVIDAD_ESTUDIANTE
+                   AND s.FK_TLV_TIPO = academico_test.fn_tlv_solicitud_tipo_pk('CORRECCION_RESULTADO')
+                   AND s.FK_TLV_ESTADO = academico_test.fn_tlv_solicitud_estado_pk('PENDIENTE')
+                   AND s.ACTIVE = TRUE
+                 LIMIT 1
+            ) sp ON ae.PK_TACTIVIDAD_ESTUDIANTE IS NOT NULL
+            LEFT JOIN LATERAL academico_test.fn_nota_homologar(
+                          sp.porcentaje, p_fk_tasignatura, v_fk_tgrado) hpp ON TRUE
             LEFT JOIN LATERAL (
                 SELECT academico_test.fn_actividad_asistencia_fecha_resolver(
                            b.PK_TMATRICULA, c.pk_tactividad) AS fecha
@@ -376,7 +420,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_planilla_calificaciones_listar_interno(BIGINT, BIGINT, BIGINT, DATE, DATE, VARCHAR, VARCHAR, INT, INT)
-    IS 'INTERNO: celdas de la planilla para un periodo ya resuelto: una fila por matricula del grupo con definitiva_proyectada (fn_asignatura_definitiva_proyectada_periodo) y definitiva_registrada (TASIGNATURA_NOTA) del periodo, tendencia, homologaciones al formato de la asignatura y una celda por actividad del periodo (mismo universo y orden que el header), con estadoResultado como en la tabla de calificaciones del Planeador. Lo usa fn_planilla_calificaciones_listar.';
+    IS 'INTERNO: celdas de la planilla para un periodo ya resuelto: una fila por matricula del grupo con definitiva_proyectada (fn_asignatura_definitiva_proyectada_periodo) y definitiva_registrada (TASIGNATURA_NOTA) del periodo, tendencia, homologaciones al formato de la asignatura y definitiva_propuesta_homologada (la proyectada con las correcciones pendientes, solo si hay alguna) y una celda por actividad del periodo (mismo universo y orden que el header), con estadoResultado como en la tabla de calificaciones del Planeador, y solicitudPendiente / notaPropuestaHomologada / calificacionPropuesta (el body de calificar) cuando hay una corrección CORRECCION_RESULTADO pendiente (Regla 55). Lo usa fn_planilla_calificaciones_listar.';
 
 CREATE OR REPLACE FUNCTION academico_test.fn_periodo_evaluacion_listar_interno(
     p_fk_tperiodo_academico BIGINT,

@@ -14,6 +14,8 @@ SET search_path TO academico_test, public;
 -- Firmas anteriores (sin periodo / sin grupo): cambia la aridad.
 DROP FUNCTION IF EXISTS academico_test.fn_planilla_columnas_listar(BIGINT, BIGINT, BIGINT, BIGINT, DATE, DATE, VARCHAR);
 DROP FUNCTION IF EXISTS academico_test.fn_planilla_calificaciones_listar(BIGINT, BIGINT, BIGINT, BIGINT, DATE, DATE, VARCHAR, VARCHAR, INT, INT);
+-- Retorno con definitiva_propuesta_homologada: CREATE OR REPLACE no basta.
+DROP FUNCTION IF EXISTS academico_test.fn_planilla_calificaciones_listar(BIGINT, BIGINT, BIGINT, BIGINT, DATE, DATE, VARCHAR, VARCHAR, INT, INT, BIGINT);
 DROP FUNCTION IF EXISTS academico_test.fn_periodo_evaluacion_listar(BIGINT, BIGINT, BIGINT, BIGINT);
 
 CREATE OR REPLACE FUNCTION academico_test.fn_planilla_columnas_listar(
@@ -93,7 +95,8 @@ RETURNS TABLE (
     definitiva_registrada_homologada NUMERIC,
     formato_valor                    VARCHAR,
     nota_maxima                      NUMERIC,
-    es_numerico                      BOOLEAN
+    es_numerico                      BOOLEAN,
+    definitiva_propuesta_homologada  NUMERIC
 )
 LANGUAGE plpgsql
 STABLE
