@@ -18,11 +18,18 @@ ALTER TABLE TACTIVIDAD DROP CONSTRAINT IF EXISTS CK_TACTIVIDAD_PONDERACION;
 ALTER TABLE TACTIVIDAD ADD CONSTRAINT CK_TACTIVIDAD_PONDERACION
   CHECK (PONDERACION IS NULL OR (PONDERACION >= 0 AND PONDERACION <= 100));
 
+-- DROP explicito (no solo IF NOT EXISTS en el CREATE): en un entorno donde
+-- V223 ya corrio con el indice viejo (FK_TUNIDAD, FK_TGRUPO), un simple
+-- "CREATE INDEX IF NOT EXISTS" con el mismo nombre pero columnas distintas
+-- es un no-op silencioso -- el indice viejo queda y el nuevo nunca se crea.
+-- Reaplicar esta migracion editada (migration-reapply-set.py) debe dejar el
+-- indice realmente en (FK_TASIGNATURA, FK_TGRUPO).
+DROP INDEX IF EXISTS IDX_TACTIVIDAD_27;
 CREATE INDEX IF NOT EXISTS IDX_TACTIVIDAD_27
-  ON TACTIVIDAD (FK_TUNIDAD, FK_TGRUPO) WHERE ACTIVE = true;
+  ON TACTIVIDAD (FK_TASIGNATURA, FK_TGRUPO) WHERE ACTIVE = true;
 
 COMMENT ON COLUMN TACTIVIDAD.PONDERACION IS
-  'Peso (%) de la actividad dentro de su unidad (FK_TUNIDAD), por grupo (FK_TGRUPO). 0..100. La suma por (FK_TUNIDAD, FK_TGRUPO) de las actividades ACTIVE no puede pasar de 100 (trigger tr_tactividad_ponderacion_unidad). Distinta de INFLUENCIA (V22, promedio ponderado de TUNIDAD_NOTA).';
+  'Peso (%) de la actividad dentro de su unidad (FK_TUNIDAD), por grupo (FK_TGRUPO). 0..100. El tope de 100 (trigger tr_tactividad_ponderacion_unidad) NO se evalua por (FK_TUNIDAD, FK_TGRUPO): se evalua por (grado, FK_TASIGNATURA, FK_TGRUPO) -- grado resuelto igual que fn_actividad_grado_resolver (V227, no se puede llamar desde aca: ver comentario de fn_unidad_ponderacion_asignada) -- porque la regla de negocio es por grado+asignatura+grupo sin importar a que unidad este vinculada cada actividad (una misma actividad puede recorrer varias unidades de esa asignatura/grado). Ver fn_unidad_ponderacion_asignada. Distinta de INFLUENCIA (V22, promedio ponderado de TUNIDAD_NOTA). V223, bucket corregido en V223 mismo (editada, no una migracion nueva).';
 
 CREATE OR REPLACE FUNCTION academico_test.fn_unidad_ponderacion_asignada(
     p_pk_tunidad           BIGINT,
@@ -33,9 +40,26 @@ RETURNS NUMERIC
 LANGUAGE sql
 STABLE
 AS $$
+    -- El grado de cada actividad candidata (au/ag) se resuelve inline con la
+    -- MISMA prioridad que fn_actividad_grado_resolver (V227): primero la
+    -- unidad a la que esta vinculada (au.FK_TGRADO via a.FK_TUNIDAD), y solo
+    -- si no tiene unidad, el grado de su grupo (ag.FK_TGRADO via
+    -- a.FK_TGRUPO). No se llama a esa funcion porque V227 es POSTERIOR a
+    -- V223 y esta es LANGUAGE SQL: a diferencia de plpgsql (que trata el
+    -- cuerpo como texto opaco hasta ejecutarlo), Postgres resuelve y valida
+    -- las llamadas a funcion de un LANGUAGE SQL al CREATE FUNCTION, asi que
+    -- referenciar una funcion que todavia no existe en el historial de
+    -- migraciones rompe el CREATE (confirmado en CI: 42883 "function ...
+    -- does not exist"). Si alguna vez se decide llamar a la funcion real en
+    -- vez de duplicar la logica, hay que pasar esta funcion a LANGUAGE
+    -- plpgsql.
     SELECT COALESCE(SUM(a.PONDERACION), 0)::NUMERIC
       FROM academico_test.TACTIVIDAD a
-     WHERE a.FK_TUNIDAD = p_pk_tunidad
+      JOIN academico_test.TUNIDAD u       ON u.PK_TUNIDAD = p_pk_tunidad
+      LEFT JOIN academico_test.TUNIDAD au ON au.PK_TUNIDAD = a.FK_TUNIDAD
+      LEFT JOIN academico_test.TGRUPO ag  ON ag.PK_TGRUPO = a.FK_TGRUPO
+     WHERE a.FK_TASIGNATURA = u.FK_TASIGNATURA
+       AND COALESCE(au.FK_TGRADO, ag.FK_TGRADO) = u.FK_TGRADO
        AND a.FK_TGRUPO IS NOT DISTINCT FROM p_fk_tgrupo
        AND a.ACTIVE = TRUE
        AND a.PONDERACION IS NOT NULL
@@ -43,7 +67,7 @@ AS $$
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_unidad_ponderacion_asignada(BIGINT, BIGINT, BIGINT)
-    IS 'Suma de PONDERACION de las actividades ACTIVE (y con PONDERACION no nula) de una (FK_TUNIDAD, FK_TGRUPO); grupo NULL es su propio bucket (IS NOT DISTINCT FROM). p_excluir_tactividad (opcional) deja fuera una actividad concreta, para validar un INSERT/UPDATE sin contar la fila que se esta tocando. Definicion UNICA usada por el trigger tr_tactividad_ponderacion_unidad, fn_unidad_actividad_vincular, fn_unidad_actividad_ponderacion_set y fn_unidad_ponderacion_disponible. Retorna 0 (nunca NULL) si no hay nada asignado. V223.';
+    IS 'Suma de PONDERACION de las actividades ACTIVE (y con PONDERACION no nula) del bucket (grado, FK_TASIGNATURA, FK_TGRUPO) -- NO de (FK_TUNIDAD, FK_TGRUPO): p_pk_tunidad solo se usa para resolver el grado/asignatura de contexto (via TUNIDAD), pero la suma recorre TODAS las actividades de esa asignatura+grado+grupo sin importar a que unidad esten vinculadas (fn_actividad_grado_resolver, V227, resuelve el grado por unidad o por grupo). Asi el tope de 100% es por grado+asignatura+grupo, como exige la regla de negocio: una misma actividad puede estar en varias unidades de la misma asignatura/grado. Grupo NULL es su propio bucket (IS NOT DISTINCT FROM). p_excluir_tactividad (opcional) deja fuera una actividad concreta, para validar un INSERT/UPDATE sin contar la fila que se esta tocando. Definicion UNICA usada por el trigger tr_tactividad_ponderacion_unidad, fn_unidad_validar_ponderacion_actividad (V492.1), fn_unidad_actividad_vincular, fn_unidad_actividad_ponderacion_set y fn_unidad_ponderacion_disponible. Retorna 0 (nunca NULL) si no hay nada asignado. V223 (bucket corregido de (unidad,grupo) a (grado,asignatura,grupo), editada en el mismo V223 por ser la dueña de la funcion -- no se creo una migracion nueva).';
 
 CREATE OR REPLACE FUNCTION academico_test.fn_unidad_calculo_definitiva_modo(
     p_pk_tunidad   BIGINT
@@ -141,9 +165,11 @@ BEGIN
 
     IF v_suma + NEW.PONDERACION > 100 THEN
         RAISE EXCEPTION
-          'Con % %% de peso, la actividad "%" haría que las actividades de la unidad "%" en % sumen % %% (ya suman % %%; el máximo es 100 %%)',
+          'Con % %% de peso, la actividad "%" haría que las actividades de % en % sumen % %% (ya suman % %%; el máximo es 100 %%, sin importar a que unidad esten vinculadas)',
           NEW.PONDERACION, NEW.TITULO,
-          (SELECT NOMBRE FROM academico_test.TUNIDAD WHERE PK_TUNIDAD = NEW.FK_TUNIDAD),
+          COALESCE((SELECT a.NOMBRE FROM academico_test.TASIGNATURA a
+                      JOIN academico_test.TUNIDAD u ON u.FK_TASIGNATURA = a.PK_TASIGNATURA
+                     WHERE u.PK_TUNIDAD = NEW.FK_TUNIDAD), 'la asignatura'),
           COALESCE((SELECT format('el grupo %s de %s', gr.NOMBRE, g.NOMBRE)
                       FROM academico_test.TGRUPO gr JOIN academico_test.TGRADO g ON g.PK_TGRADO = gr.FK_TGRADO
                      WHERE gr.PK_TGRUPO = NEW.FK_TGRUPO), 'las actividades sin grupo'),
@@ -156,7 +182,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_tactividad_ponderacion_unidad_check()
-    IS 'Trigger BEFORE INSERT/UPDATE de TACTIVIDAD: impide que la suma de PONDERACION de las actividades ACTIVE de un mismo (FK_TUNIDAD, FK_TGRUPO) pase de 100. Grupo NULL es su propio bucket (IS NOT DISTINCT FROM). Se SALTA cuando la unidad calcula por SUMATORIA (fn_unidad_calculo_definitiva_modo): ahi el % lo autocalcula el sistema como reparto proporcional de NOTA_MAXIMA (suma 100 por construccion) y el redondeo a NUMERIC(5,2) podria bloquear un recalculo legitimo.';
+    IS 'Trigger BEFORE INSERT/UPDATE de TACTIVIDAD: impide que la suma de PONDERACION de las actividades ACTIVE pase de 100, agrupando por (grado, FK_TASIGNATURA, FK_TGRUPO) -- NO por (FK_TUNIDAD, FK_TGRUPO): el grado/asignatura se resuelven desde la unidad de la fila que dispara el trigger (NEW.FK_TUNIDAD), pero fn_unidad_ponderacion_asignada suma TODAS las actividades de ese grado+asignatura+grupo sin filtrar por unidad, porque la regla de negocio es "el tope de 100% es por grado+asignatura+grupo, sin importar a que unidad este vinculada cada actividad" (una actividad puede repartirse entre varias unidades de la misma asignatura/grado). Grupo NULL es su propio bucket (IS NOT DISTINCT FROM). Se SALTA cuando la unidad calcula por SUMATORIA (fn_unidad_calculo_definitiva_modo): ahi el % lo autocalcula el sistema como reparto proporcional de NOTA_MAXIMA (suma 100 por construccion) y el redondeo a NUMERIC(5,2) podria bloquear un recalculo legitimo.';
 
 DROP TRIGGER IF EXISTS tr_tactividad_ponderacion_unidad ON TACTIVIDAD;
 

@@ -1,5 +1,6 @@
-#!/usr/bin/env python3
-"""Detecta una migracion cuyo contenido nace muerto por el orden de versiones.
+# -*- coding: utf-8 -*-
+"""
+Detecta una migracion cuyo contenido nace muerto por el orden de versiones.
 
 El caso: `fn_1` se define en V300, se reescribe en V450 y otra vez en V500. Hoy
 la define V500. Si ahora alguien escribe **V301** reescribiendo `fn_1`, esa
@@ -10,21 +11,16 @@ migracion no puede funcionar:
   * en un servidor que ya aplico hasta V500, V301 entra out-of-order y corre la
     ULTIMA: gana ella y revierte V450 y V500.
 
-Las dos son incorrectas y ademas se contradicen entre entornos, que es lo peor
-que puede pasar con una migracion. El arreglo siempre es el mismo: mover ese
-contenido a una migracion POSTERIOR a la que define el objeto hoy.
+Las dos son incorrectas y ademas se contradicen entre entornos. El arreglo
+siempre es el mismo: mover ese contenido a una migracion POSTERIOR a la que
+define el objeto hoy. Lo mismo vale al EDITAR una migracion antigua (V29 en el
+PR #311 revivio definiciones viejas de V294/V295/V298/V302).
 
-Lo mismo vale al EDITAR una migracion antigua: si el objeto lo define hoy una
-version posterior, la edicion no llega a producir efecto (paso con V29 en el
-PR #311, que revivio definiciones viejas de V294/V295/V298/V302).
+No reimplementa nada: usa el grafo de reescritura del analizador.
 
-No reimplementa nada: usa el grafo de reescritura de
-scripts/migration-analysis/analyze_migrations.py, que es el mismo que dice que
-escritura sigue viva.
-
-    python scripts/migration-orden.py --base origin/dev
-    python scripts/migration-orden.py postgres/migrations/V301__x.sql
-    python scripts/migration-orden.py --base origin/dev --json informe.json
+    python scripts/migration-analysis orden --base origin/dev
+    python scripts/migration-analysis orden postgres/migrations/V301__x.sql
+    python scripts/migration-analysis orden --base origin/dev --json informe.json
 
 Sale con 1 si encuentra alguna. Codigo 0 si no hay migraciones que revisar.
 """
@@ -35,23 +31,14 @@ import json
 import re
 import subprocess
 import sys
-import tempfile
 from pathlib import Path
 
-REPO = Path(__file__).resolve().parents[1]
-ANALYZER = REPO / "scripts" / "migration-analysis" / "analyze_migrations.py"
-MIGRATIONS = REPO / "postgres" / "migrations"
+from base.nucleo import MIGRATIONS, REPO, consola_utf8, vkey
 
-for _s in (sys.stdout, sys.stderr):
-    try:
-        _s.reconfigure(encoding="utf-8", errors="replace")
-    except (AttributeError, ValueError):
-        pass
-
-
-def vkey(v: str) -> tuple:
-    """Orden real de versiones: V214.3 va entre V214 y V215, no tras V2143."""
-    return tuple(int(x) for x in re.findall(r"\d+", v or "0"))
+# Una funcion creada solo si aun no existe: en un servidor no revierte nada y
+# en una base limpia la pisa la posterior, que es lo buscado.
+GUARDA = re.compile(r"IF\s+to_regprocedure\(\s*'([\w.]+)\(.*?\)'\s*\)\s+IS\s+NULL\s+THEN\s+EXECUTE",
+                    re.I | re.S)
 
 
 def version_de(nombre: str) -> str | None:
@@ -74,45 +61,33 @@ def cambiadas(base: str) -> dict[str, str]:
         if len(partes) < 2:
             continue
         estado, ruta = partes[0][0], partes[-1]
-        if estado == "D" or not ruta.endswith(".sql"):
-            continue
-        v = version_de(ruta)
+        v = version_de(ruta) if estado != "D" and ruta.endswith(".sql") else None
         if v:
             fuera[v] = estado
     return fuera
 
 
-def fichero_de(version: str) -> str:
-    """El .sql de esa version. Se nombra el fichero y no la linea porque el
-    modelo no siempre la conoce: una escritura pisada suele traer line=1."""
-    for p in MIGRATIONS.glob(f"V{version}__*.sql"):
-        return p.name
-    return f"V{version}__*.sql"
+class Migraciones:
+    """Acceso por version a los ficheros .sql, con lo que se pregunta de cada uno."""
+
+    def fichero(self, version: str) -> str:
+        """Se nombra el fichero y no la linea: una escritura pisada suele traer line=1."""
+        return next((p.name for p in MIGRATIONS.glob(f"V{version}__*.sql")), f"V{version}__*.sql")
+
+    def solo_si_falta(self, version: str) -> set[str]:
+        return {m.group(1).lower() for p in MIGRATIONS.glob(f"V{version}__*.sql")
+                for m in GUARDA.finditer(p.read_text(encoding="utf-8"))}
 
 
-def modelo(refresh: bool) -> dict:
-    destino = Path(tempfile.gettempdir()) / "sso-migrations-orden.json"
-    if refresh or not destino.exists():
-        subprocess.run([sys.executable, str(ANALYZER), "--no-git", "--json", str(destino)],
-                       cwd=REPO, check=True, stdout=subprocess.DEVNULL)
-    return json.loads(destino.read_text(encoding="utf-8"))
+def _firma(w: dict) -> object:
+    """Identidad de la sobrecarga: la firma de entrada si el modelo la trae."""
+    ex = w.get("extra") or {}
+    return ex.get("sig", ex.get("params"))
 
 
-GUARDA = re.compile(r"IF\s+to_regprocedure\(\s*'([\w.]+)\(.*?\)'\s*\)\s+IS\s+NULL\s+THEN\s+EXECUTE",
-                   re.I | re.S)
-
-
-def solo_si_falta(version: str) -> set[str]:
-    """Funciones que esa migracion crea solo si aun no existen: en un servidor
-    no revierten nada y en una base limpia las pisa la posterior, que es lo buscado."""
-    nombres: set[str] = set()
-    for p in MIGRATIONS.glob(f"V{version}__*.sql"):
-        nombres.update(m.group(1).lower() for m in GUARDA.finditer(p.read_text(encoding="utf-8")))
-    return nombres
-
-
-def hallazgos(model: dict, objetivo: dict[str, str]) -> list[dict]:
+def hallazgos(model: dict, objetivo: dict[str, str], migs: Migraciones | None = None) -> list[dict]:
     """Escrituras completas de las migraciones objetivo que ya nacen muertas."""
+    migs = migs or Migraciones()
     fuera = []
     for clave, escrituras in model.get("chains", {}).items():
         vivo = next((w.get("version") for w in escrituras
@@ -125,34 +100,28 @@ def hallazgos(model: dict, objetivo: dict[str, str]) -> list[dict]:
             if not matador or vkey(matador) <= vkey(v):
                 continue  # la mato una version ANTERIOR: eso es otra cosa
             if clave.startswith("function:"):
-                if clave.split(":", 1)[1].lower() in solo_si_falta(v):
+                if clave.split(":", 1)[1].lower() in migs.solo_si_falta(v):
                     continue
-                # Otra lista de tipos es otra sobrecarga, no una reescritura.
-                propios = (w.get("extra") or {}).get("params")
-                suyos = next(((e.get("extra") or {}).get("params") for e in escrituras
-                              if e.get("version") == matador and e.get("effect") == "full"), None)
-                if propios is not None and suyos is not None and propios != suyos:
+                # Otra firma es otra sobrecarga, no una reescritura.
+                suya = next((_firma(e) for e in escrituras
+                             if e.get("version") == matador and e.get("effect") == "full"), None)
+                if _firma(w) is not None and suya is not None and _firma(w) != suya:
                     continue
-            fuera.append({
-                "version": v,
-                "estado": objetivo[v],
-                "objeto": clave,
-                "fichero": fichero_de(v),
-                "pisada_por": matador,
-                "define_hoy": vivo,
-            })
+            fuera.append({"version": v, "estado": objetivo[v], "objeto": clave,
+                          "fichero": migs.fichero(v), "pisada_por": matador, "define_hoy": vivo})
     fuera.sort(key=lambda h: (vkey(h["version"]), h["objeto"]))
     return fuera
 
 
-def main() -> int:
-    ap = argparse.ArgumentParser(description=__doc__,
+def main(argv: list[str] | None = None) -> int:
+    consola_utf8()
+    ap = argparse.ArgumentParser(prog="migration-analysis orden", description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("ficheros", nargs="*", help="migraciones a revisar; por defecto, el diff")
     ap.add_argument("--base", help="rama base para calcular las migraciones cambiadas")
     ap.add_argument("--refresh", action="store_true", help="recalcula el modelo")
     ap.add_argument("--json", help="escribe los hallazgos en este fichero")
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
 
     if args.ficheros:
         objetivo = {v: "?" for v in (version_de(f) for f in args.ficheros) if v}
@@ -160,22 +129,20 @@ def main() -> int:
         objetivo = cambiadas(args.base)
     else:
         ap.error("hace falta --base o una lista de ficheros")
-
     if not objetivo:
         print("migration-orden: no hay migraciones que revisar.")
         return 0
 
     try:
-        model = modelo(args.refresh or bool(args.base))
-    except (subprocess.SubprocessError, OSError, ValueError) as exc:
+        from base import modelo
+        model = modelo.cargar(refresh=args.refresh)
+    except (subprocess.SubprocessError, OSError, ValueError, SystemExit) as exc:
         sys.stderr.write(f"no se pudo construir el modelo de migraciones: {exc}\n")
         return 0
 
     malas = hallazgos(model, objetivo)
     if args.json:
-        Path(args.json).write_text(json.dumps(malas, ensure_ascii=False, indent=2),
-                                   encoding="utf-8")
-
+        Path(args.json).write_text(json.dumps(malas, ensure_ascii=False, indent=2), encoding="utf-8")
     if not malas:
         print(f"migration-orden: {len(objetivo)} migracion(es) revisada(s), "
               f"ninguna queda pisada por una version posterior.")
@@ -184,8 +151,7 @@ def main() -> int:
     print("Hay migraciones cuyo contenido no va a tener efecto: una version "
           "POSTERIOR redefine el mismo objeto.\n")
     for h in malas:
-        etiqueta = {"A": " (nueva)", "M": " (editada)"}.get(h["estado"], "")
-        print(f"  {h['fichero']}{etiqueta}")
+        print(f"  {h['fichero']}{ {'A': ' (nueva)', 'M': ' (editada)'}.get(h['estado'], '') }")
         print(f"      objeto: {h['objeto']}")
         detalle = f"      lo redefine V{h['pisada_por']}"
         if h["define_hoy"] and h["define_hoy"] != h["pisada_por"]:
@@ -199,7 +165,3 @@ def main() -> int:
     print("hoy. `python .claude/skills/next-migration-number/deps.py <objeto>` dice")
     print("cual es, y `scan.sh` da el siguiente numero libre real.")
     return 1
-
-
-if __name__ == "__main__":
-    sys.exit(main())

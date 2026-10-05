@@ -18,6 +18,18 @@ DROP FUNCTION IF EXISTS academico_test.fn_actividad_nota_asistencia_assert(BIGIN
 DROP FUNCTION IF EXISTS academico_test.fn_actividad_validar_asistencia_calificar(BIGINT, DATE);
 DROP FUNCTION IF EXISTS academico_test.fn_actividad_observacion_validar_formativa(BIGINT);
 DROP FUNCTION IF EXISTS academico_test.fn_actividad_validar_evidencia_archivo(BIGINT);
+-- Agregan p_requiere_puntaje: el 2-arg queda reemplazado, no sobrecargado.
+DROP FUNCTION IF EXISTS academico_test.fn_actividad_validar_rubrica_definicion(JSONB, VARCHAR);
+DROP FUNCTION IF EXISTS academico_test.fn_actividad_validar_cotejo_definicion(JSONB, VARCHAR);
+
+-- Regla confirmada por negocio: el puntaje de cada nivel de un criterio de rúbrica (Bloque 5)
+-- pasa a ser opcional (pesa 1, igual que un elemento sin puntaje de la lista de cotejo,
+-- TACTIVIDAD_COTEJO_ITEM.PONDERACION) cuando la Unidad vinculada no exige puntaje (calcula por
+-- Promedio simple, o la actividad no tiene unidad). Con niveles sin puntaje explícito, dos
+-- niveles del mismo criterio pueden "empatar" en el peso por defecto (1): la UNIQUE que asumía
+-- puntaje siempre obligatorio y distinto ya no es válida en general; la distinción de puntajes
+-- cuando SÍ es obligatorio (Ponderar/Sumatoria) la arbitra fn_actividad_validar_rubrica_definicion.
+ALTER TABLE academico_test.TACTIVIDAD_RUBRICA_NIVEL DROP CONSTRAINT IF EXISTS UN_TAC_RUBRICA_NIVEL_1;
 
 -- ---------------------------------------------------------------------------
 -- Estados de resultado y momento del registro narrativo (Reglas 58, 61, 62)
@@ -361,8 +373,9 @@ $$;
 -- Definición de cada instrumento (Bloque 5, Reglas 40-42)
 -- ---------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION academico_test.fn_actividad_validar_rubrica_definicion(
-    p_criterios JSONB,
-    p_etiqueta  VARCHAR
+    p_criterios        JSONB,
+    p_etiqueta         VARCHAR,
+    p_requiere_puntaje BOOLEAN DEFAULT TRUE
 )
 RETURNS VOID
 LANGUAGE plpgsql
@@ -387,10 +400,19 @@ BEGIN
             RAISE EXCEPTION 'El criterio "%" de la rúbrica necesita al menos un nivel de desempeño', v_nombre
                 USING ERRCODE = '22023';
         END IF;
+        -- El puntaje de cada nivel solo es obligatorio si la unidad vinculada calcula
+        -- su definitiva por Ponderación o Sumatoria (p_requiere_puntaje, resuelto por
+        -- el llamador con fn_unidad_calculo_definitiva_modo); si la unidad Promedia o
+        -- la actividad no tiene unidad, el nivel sin puntaje pesa 1 (igual que cotejo).
+        IF p_requiere_puntaje AND EXISTS (SELECT 1 FROM jsonb_array_elements(v_niveles) n
+                                            WHERE NULLIF(n->>'ponderacion', '') IS NULL) THEN
+            RAISE EXCEPTION 'La unidad de % calcula la definitiva por ponderación o sumatoria: cada nivel del criterio "%" necesita su puntaje', p_etiqueta, v_nombre
+                USING ERRCODE = '22023';
+        END IF;
         IF EXISTS (SELECT 1 FROM jsonb_array_elements(v_niveles) n
-                    WHERE (n->>'ponderacion') IS NULL
-                       OR (n->>'ponderacion') !~ '^\d{1,3}(\.\d+)?$'
-                       OR (n->>'ponderacion')::NUMERIC > 100) THEN
+                    WHERE NULLIF(n->>'ponderacion', '') IS NOT NULL
+                       AND ((n->>'ponderacion') !~ '^\d{1,3}(\.\d+)?$'
+                            OR (n->>'ponderacion')::NUMERIC > 100)) THEN
             RAISE EXCEPTION 'Cada nivel del criterio "%" necesita un puntaje entre 0 y 100', v_nombre
                 USING ERRCODE = '22023';
         END IF;
@@ -398,21 +420,26 @@ BEGIN
             RAISE EXCEPTION 'Cada nivel del criterio "%" necesita su descripción o juicio de valor', v_nombre
                 USING ERRCODE = '22023';
         END IF;
-        IF (SELECT COUNT(*) <> COUNT(DISTINCT (n->>'ponderacion')::NUMERIC) FROM jsonb_array_elements(v_niveles) n) THEN
-            RAISE EXCEPTION 'El criterio "%" tiene dos niveles con el mismo puntaje', v_nombre USING ERRCODE = '22023';
-        END IF;
-        -- Con el máximo en 0 el criterio no aporta nada y la nota quedaría indefinida.
-        IF (SELECT MAX((n->>'ponderacion')::NUMERIC) FROM jsonb_array_elements(v_niveles) n) = 0 THEN
-            RAISE EXCEPTION 'El criterio "%" necesita al menos un nivel con puntaje mayor que 0', v_nombre
-                USING ERRCODE = '22023';
+        -- Duplicados y máximo en 0 solo se evalúan cuando el puntaje es obligatorio: si es
+        -- opcional, los niveles sin puntaje pesan 1 por igual y no se consideran "iguales".
+        IF p_requiere_puntaje THEN
+            IF (SELECT COUNT(*) <> COUNT(DISTINCT (n->>'ponderacion')::NUMERIC) FROM jsonb_array_elements(v_niveles) n) THEN
+                RAISE EXCEPTION 'El criterio "%" tiene dos niveles con el mismo puntaje', v_nombre USING ERRCODE = '22023';
+            END IF;
+            -- Con el máximo en 0 el criterio no aporta nada y la nota quedaría indefinida.
+            IF (SELECT MAX((n->>'ponderacion')::NUMERIC) FROM jsonb_array_elements(v_niveles) n) = 0 THEN
+                RAISE EXCEPTION 'El criterio "%" necesita al menos un nivel con puntaje mayor que 0', v_nombre
+                    USING ERRCODE = '22023';
+            END IF;
         END IF;
     END LOOP;
 END;
 $$;
 
 CREATE OR REPLACE FUNCTION academico_test.fn_actividad_validar_cotejo_definicion(
-    p_items    JSONB,
-    p_etiqueta VARCHAR
+    p_items            JSONB,
+    p_etiqueta         VARCHAR,
+    p_requiere_puntaje BOOLEAN DEFAULT FALSE
 )
 RETURNS VOID
 LANGUAGE plpgsql
@@ -425,6 +452,13 @@ BEGIN
     END IF;
     IF EXISTS (SELECT 1 FROM jsonb_array_elements(p_items) e WHERE NULLIF(TRIM(e->>'descripcion'), '') IS NULL) THEN
         RAISE EXCEPTION 'Cada elemento de la lista de cotejo de % necesita su descripción', p_etiqueta
+            USING ERRCODE = '22023';
+    END IF;
+    -- El puntaje de cada elemento solo es obligatorio si la unidad vinculada calcula su
+    -- definitiva por Ponderación o Sumatoria (ver fn_actividad_validar_rubrica_definicion).
+    IF p_requiere_puntaje AND EXISTS (SELECT 1 FROM jsonb_array_elements(p_items) e
+                                        WHERE NULLIF(e->>'ponderacion', '') IS NULL) THEN
+        RAISE EXCEPTION 'La unidad de % calcula la definitiva por ponderación o sumatoria: cada elemento de la lista de cotejo necesita su puntaje', p_etiqueta
             USING ERRCODE = '22023';
     END IF;
     IF EXISTS (SELECT 1 FROM jsonb_array_elements(p_items) e
@@ -567,6 +601,14 @@ DECLARE
     v_etiqueta VARCHAR := academico_test.fn_actividad_etiqueta(p_pk_tactividad);
     v_valor    VARCHAR;
     v_def      JSONB   := p_definicion;
+    -- Regla confirmada por negocio (fila 24 de la especificación, 2026-10): el puntaje de
+    -- nivel/elemento del Bloque 5 solo es obligatorio si la Unidad vinculada en el Bloque 1
+    -- calcula su definitiva por Ponderación o Sumatoria; si calcula por Promedio simple, o la
+    -- actividad no tiene unidad (FK_TUNIDAD NULL), el puntaje sigue opcional y pesa 1.
+    v_requiere_puntaje BOOLEAN := academico_test.fn_unidad_calculo_definitiva_modo(
+                                      (SELECT a.FK_TUNIDAD FROM academico_test.TACTIVIDAD a
+                                        WHERE a.PK_TACTIVIDAD = p_pk_tactividad)
+                                  ) IN ('PONDERAR', 'SUMATORIA');
 BEGIN
     SELECT lv.VALOR INTO v_valor
       FROM academico_test.TACTIVIDAD a
@@ -584,8 +626,8 @@ BEGIN
     END IF;
     PERFORM academico_test.fn_actividad_validar_instrumento_permitido(p_pk_tactividad, v_valor);
     CASE v_valor
-        WHEN 'RUBRICA'      THEN PERFORM academico_test.fn_actividad_validar_rubrica_definicion(v_def, v_etiqueta);
-        WHEN 'LISTA_COTEJO' THEN PERFORM academico_test.fn_actividad_validar_cotejo_definicion(v_def, v_etiqueta);
+        WHEN 'RUBRICA'      THEN PERFORM academico_test.fn_actividad_validar_rubrica_definicion(v_def, v_etiqueta, v_requiere_puntaje);
+        WHEN 'LISTA_COTEJO' THEN PERFORM academico_test.fn_actividad_validar_cotejo_definicion(v_def, v_etiqueta, v_requiere_puntaje);
         ELSE PERFORM academico_test.fn_actividad_validar_escala_definicion(
                  v_def, academico_test.fn_actividad_referente_tipo_evaluacion(p_pk_tactividad), v_etiqueta);
     END CASE;
@@ -1179,7 +1221,7 @@ COMMENT ON FUNCTION academico_test.fn_actividad_validar_instrumento(BIGINT, VARC
 COMMENT ON FUNCTION academico_test.fn_actividad_validar_instrumento_permitido(BIGINT, VARCHAR)
     IS 'Reglas 40/41: 22023 si el tipo de evaluación del referente de la actividad no admite el instrumento (fn_instrumento_permitido_por_tipo_evaluacion).';
 COMMENT ON FUNCTION academico_test.fn_actividad_validar_instrumento_definicion(BIGINT, JSONB)
-    IS 'Validador central de PUT /planeador/actividades/:ID/instrumento: instrumento configurable, permitido por el referente y definición válida según su tipo (en Otro, su propia configuración y la del método elegido). Lo usa fn_actividad_instrumento_definir_interno.';
+    IS 'Validador central de PUT /planeador/actividades/:ID/instrumento: instrumento configurable, permitido por el referente y definición válida según su tipo (en Otro, su propia configuración y la del método elegido). Resuelve p_requiere_puntaje con fn_unidad_calculo_definitiva_modo sobre TACTIVIDAD.FK_TUNIDAD (PONDERAR/SUMATORIA exigen puntaje de nivel/elemento en rúbrica y cotejo; PROMEDIAR o sin unidad lo dejan opcional) y lo propaga a fn_actividad_validar_rubrica_definicion/fn_actividad_validar_cotejo_definicion. Lo usa fn_actividad_instrumento_definir_interno.';
 COMMENT ON FUNCTION academico_test.fn_actividad_validar_calificable(BIGINT)
     IS 'Reglas 52 y 59: 22023 si la actividad está eliminada, su referente está inactivo, es formativa (se registra con observación) o no tiene instrumento.';
 COMMENT ON FUNCTION academico_test.fn_actividad_validar_calificacion(BIGINT, DATE)

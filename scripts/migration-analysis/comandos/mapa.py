@@ -3,76 +3,26 @@
 
 Son ~110k lineas de SQL repartidas en 330 migraciones; sin indice, localizar
 "donde toco esto" es un grep. Este mapa se deriva del modelo de
-scripts/migration-analysis/analyze_migrations.py, asi que no puede mentir: sale
+scripts/migration-analysis/analisis/construir.py, asi que no puede mentir: sale
 del mismo grafo que dice que escritura sigue viva.
 
-    python scripts/generar-mapa.py            # -> docs/MAPA.md
-    python scripts/generar-mapa.py --check    # falla si esta desactualizado (CI)
+    python scripts/migration-analysis mapa            # -> docs/MAPA.md
+    python scripts/migration-analysis mapa --check    # falla si esta desactualizado (CI)
 """
 from __future__ import annotations
 
 import argparse
 import collections
-import json
 import re
-import subprocess
-import sys
-import tempfile
 from datetime import date
 from pathlib import Path
 
-REPO = Path(__file__).resolve().parents[1]
-ANALYZER = REPO / "scripts" / "migration-analysis" / "analyze_migrations.py"
-MODEL_CACHE = Path(tempfile.gettempdir()) / "sso-migrations-model.json"
+from base import modelo
+from base.nucleo import REPO, consola_utf8
+
 OUT = REPO / "docs" / "MAPA.md"
 
-for _s in (sys.stdout, sys.stderr):
-    try:
-        _s.reconfigure(encoding="utf-8", errors="replace")
-    except (AttributeError, ValueError):
-        pass
-
-# Verbos que este repo antepone al objeto (fn_add_trol, fn_create_group): el
-# dominio es el segmento siguiente, no el verbo.
-VERBOS = {
-    "add", "create", "delete", "update", "associate", "dissociate", "get",
-    "set", "is", "has", "list", "listar", "crear", "actualizar", "borrar",
-    "upsert", "assert", "sync", "fix", "check",
-}
-# Capa transversal: no son un dominio de negocio.
-TRANSVERSAL = {"audit", "cdc", "menu", "permiso", "trigger"}
-
-
-def singular(s: str) -> str:
-    """'asistencias' y 'asistencia' son el mismo dominio."""
-    return s[:-1] if len(s) > 4 and s.endswith("s") and not s.endswith("ss") else s
-
-
-def vsort(v: str) -> tuple:
-    return tuple(int(p) for p in v.split(".") if p.isdigit())
-
-
-def load_model(refresh: bool) -> dict:
-    if refresh or not MODEL_CACHE.exists():
-        subprocess.run([sys.executable, str(ANALYZER), "--no-git", "--json", str(MODEL_CACHE)],
-                       cwd=REPO, check=True, stdout=subprocess.DEVNULL)
-    return json.loads(MODEL_CACHE.read_text(encoding="utf-8"))
-
-
-def domain_of_fn(short: str) -> str:
-    """fn_actividad_listar -> 'actividad'; fn_add_trol -> 'trol'."""
-    parts = [p for p in short.split("_") if p]
-    if parts and parts[0] == "fn":
-        parts = parts[1:]
-    for p in parts:
-        if p not in VERBOS:
-            return "(transversal)" if p in TRANSVERSAL else singular(p)
-    return "otros"
-
-
-def domain_of_route(path: str) -> str:
-    segs = [s for s in path.split("/") if s and not s.startswith(":")]
-    return singular(segs[0]) if segs else "otros"
+vsort = modelo.vkey
 
 
 def live_functions(model: dict) -> dict[str, dict]:
@@ -106,7 +56,7 @@ def live_routes(model: dict) -> list[dict]:
         live = [w for w in writes if w.get("status") in ("live", "patch-live")]
         if not live:
             continue
-        rows.append({"service": service, "path": path, "method": method,
+        rows.append({"key": key, "service": service, "path": path, "method": method,
                      "versions": sorted({w["version"] for w in live}, key=vsort)})
 
     # Dedupe por (ruta, verbo): el analizador emite una cadena aparte cuando no
@@ -156,18 +106,23 @@ def build(model: dict) -> str:
     serves = routes_to_functions(model, fns)
     meta = model["meta"]
 
+    # Una sola taxonomia: la de categories.py, la misma del informe HTML.
+    cat = model["categories"]
+    labels = {d["id"]: d["label"] for d in cat["defs"]}
+    order = [d["id"] for d in cat["defs"]]
     dom_fns: dict[str, list] = collections.defaultdict(list)
     for name, info in fns.items():
-        dom_fns[domain_of_fn(name.rsplit(".", 1)[-1])].append((name, info))
+        dom_fns[cat["object"].get("function:" + name, "sin-clasificar")].append((name, info))
     dom_routes: dict[str, list] = collections.defaultdict(list)
     for r in routes:
-        dom_routes[domain_of_route(r["path"])].append(r)
+        dom_routes[cat["object"].get(r["key"], "sin-clasificar")].append(r)
 
-    domains = sorted(set(dom_fns) | set(dom_routes))
+    domains = [c for c in order if c in dom_fns or c in dom_routes]
+    domains += sorted((set(dom_fns) | set(dom_routes)) - set(domains))
     L: list[str] = []
     L.append("# Mapa del dominio")
     L.append("")
-    L.append("**Generado** por `python scripts/generar-mapa.py` — no editar a mano.")
+    L.append("**Generado** por `python scripts/migration-analysis mapa` — no editar a mano.")
     L.append(f"Estado: {meta['count']} migraciones (V{meta['range'][0]}–V{meta['range'][1]}), "
              f"{len(fns)} funciones vivas, {len(routes)} endpoints vivos. "
              f"Ultima generacion: {date.today().isoformat()}.")
@@ -185,16 +140,21 @@ def build(model: dict) -> str:
              "`python .claude/skills/next-migration-number/deps.py <nombre|ruta>` y "
              "`deps.py --version <n>`.")
     L.append("")
+    L.append("Las secciones son las categorias funcionales de "
+             "`scripts/migration-analysis/analisis/categories.py`, las mismas del informe HTML.")
+    L.append("")
 
     L.append("## Indice")
     L.append("")
     for d in domains:
-        L.append(f"- [{d}](#{re.sub(r'[^a-z0-9]+', '-', d.lower()).strip('-')}) "
+        L.append(f"- [{labels.get(d, d)}](#{d}) "
                  f"— {len(dom_fns.get(d, []))} funcion(es), {len(dom_routes.get(d, []))} endpoint(s)")
     L.append("")
 
     for d in domains:
-        L.append(f"## {d}")
+        L.append(f'<a id="{d}"></a>')
+        L.append("")
+        L.append(f"## {labels.get(d, d)}")
         L.append("")
         rs = sorted(dom_routes.get(d, []), key=lambda r: (r["path"], r["method"]))
         if rs:
@@ -219,19 +179,20 @@ def build(model: dict) -> str:
     return "\n".join(L) + "\n"
 
 
-def main() -> int:
-    ap = argparse.ArgumentParser(description=__doc__)
+def main(argv: list[str] | None = None) -> int:
+    consola_utf8()
+    ap = argparse.ArgumentParser(prog="migration-analysis mapa", description=__doc__)
     ap.add_argument("--check", action="store_true", help="solo verifica que este al dia")
     ap.add_argument("--refresh", action="store_true", help="recalcula el modelo")
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
 
-    text = build(load_model(args.refresh or args.check))
+    text = build(modelo.cargar(refresh=args.refresh))
 
     if args.check:
         current = OUT.read_text(encoding="utf-8") if OUT.exists() else ""
         strip = lambda s: re.sub(r"Ultima generacion: \d{4}-\d{2}-\d{2}\.", "", s)
         if strip(current) != strip(text):
-            print("docs/MAPA.md esta desactualizado: corre python scripts/generar-mapa.py")
+            print("docs/MAPA.md esta desactualizado: corre python scripts/migration-analysis mapa")
             return 1
         print("docs/MAPA.md al dia.")
         return 0
@@ -241,6 +202,3 @@ def main() -> int:
     print(f"docs/MAPA.md -> {len(text.splitlines())} lineas")
     return 0
 
-
-if __name__ == "__main__":
-    sys.exit(main())

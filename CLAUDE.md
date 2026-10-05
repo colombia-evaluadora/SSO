@@ -17,55 +17,27 @@ Instrucciones para trabajar en este repo. Prevalecen sobre el comportamiento por
 - **Commits granulares:** cada commit agrupa cambios de archivos concretos y relacionados entre sí.
   No mezclar cambios sin relación en un mismo commit.
 
-## Skills
+## Flujo de trabajo
 
-Ante cualquier solicitud, consultar primero las skills disponibles que sean relevantes para
-mejorar la calidad del trabajo:
-
-| Tema | Skill |
-|------|-------|
-| Migraciones de base de datos | `flyway-migrations` |
-| Funciones / triggers / DDL PL/pgSQL | `plpgsql` |
-| SQL, índices, constraints, performance Postgres | `postgresql` |
-| Colecciones Postman | `postman-collection-generator` |
-| Servicios Java / Spring Boot | `java-spring-boot`, `java-springboot` |
-| Microservicios / gateway / discovery / config | `spring-cloud-basics` |
-| docker-compose, redes, volúmenes, orquestación | `docker-compose-orchestration` |
-| Probar un cambio en los contenedores locales | `probando-en-contenedores-locales` |
-| Editar una migración que un servidor ya aplicó | `reaplicando-migraciones` |
-| Qué quedó obsoleto / firmas / siguiente V<n> | `analizando-migraciones` |
-| Borrar o recortar código muerto de migraciones | `limpiando-migraciones` |
-| Colección Postman de un endpoint | `documentando-con-postman` |
-
-Propias del repo, invocables con `/`: las skills `/next-migration-number`
-(además se carga sola al tocar migraciones), `/new-query-endpoint`,
-`/server-status` y `/limpiando-migraciones`; y los comandos `/migration-lint`, `/migration-analysis`,
-`/pre-pr` y `/publicar-pr` (commit + rama en `origin` + PR a dev con la plantilla).
-
-## Reglas por sección
-
-Las convenciones de cada área viven en `.claude/rules/`, con `paths:` en el
-frontmatter: se cargan **solo** cuando se trabaja con ficheros que casan con su
-glob, así que no gastan contexto en las demás sesiones.
-
-| Área | Regla | Se carga al tocar |
-|---|---|---|
-| CI/CD y workflows | `.claude/rules/ci-cd.md` | `.github/workflows/**` |
-| Migraciones y PL/pgSQL | `.claude/rules/migraciones.md` | `postgres/**` |
-| Observabilidad | `.claude/rules/observabilidad.md` | `observability/**` |
-| Endpoints de query-service | `.claude/rules/query-service.md` | `query-service/**` |
-| Reportes PDF/Excel | `.claude/rules/reporting-service.md` | `reporting-service/**` |
-| Controllers de administración | `.claude/rules/sso-admin.md` | `sso-admin/**` |
-| Entidades compartidas | `.claude/rules/common.md` | `common/**` |
-| Suites SQL de verificación (locales) | `.claude/rules/tests-postgres.md` | `postgres/tests/**` |
-
-Una regla **sin** `paths:` se cargaría en todas las sesiones: si añades una,
-dale su glob.
+- **Funcionalidad nueva:** `/nueva-funcionalidad <descripción>` — entrevista →
+  escaneo de reutilización → plan aprobado → migraciones por capas →
+  verificación → revisión adversarial (`migration-reviewer`) → `/pre-pr`.
+- **Reutilizar antes de escribir.** Ninguna función nueva sin correr antes
+  `deps.py --reutilizable <dominio>` y justificar por qué nada existente sirve.
+- **Permisos y consultas con su skill:** `definiendo-permisos` (gate, alcance,
+  roles de `role_query`) y `optimizando-consultas` (índices y listados; antes de
+  indexar, `python scripts/migration-analysis tabla <t>`).
+- **Evidencia, no afirmaciones:** al cerrar, la salida de lint/orden/tests.
+- Skills propias invocables con `/`: `/next-migration-number`,
+  `/new-query-endpoint`, `/server-status`, `/limpiando-migraciones`,
+  `/migration-lint`, `/migration-analysis`, `/pre-pr`, `/publicar-pr`.
+- Las convenciones por área viven en `.claude/rules/*.md` y se cargan solas al
+  tocar ficheros de su `paths:`. Una regla nueva **siempre** lleva `paths:`.
 
 ## Invariantes del dominio
 
 Reglas que se violan en silencio: el SQL aplica sin error y el fallo aparece en
-producción. `scripts/migration-lint.py` verifica casi todas y corre solo como
+producción. `scripts/migration-analysis/comandos/lint.py` verifica casi todas y corre solo como
 hook al editar una migración; las que ya están incumplidas en el código viejo
 van a su baseline, así que solo habla de lo nuevo.
 
@@ -106,7 +78,7 @@ decide si el siguiente paso duplica trabajo o pisa una migración.
 Antes de buscar con grep:
 
 - `docs/MAPA.md` — índice dominio → función viva → migración dueña → endpoints.
-  Regenerar con `python scripts/generar-mapa.py`.
+  Regenerar con `python scripts/migration-analysis mapa`.
 - `python .claude/skills/next-migration-number/deps.py <fn|ruta>` — quién define
   hoy un objeto, su historial, si cambió de firma y quién lo usa.
 - `deps.py --version <n>` — de qué depende una migración y quién depende de ella.
