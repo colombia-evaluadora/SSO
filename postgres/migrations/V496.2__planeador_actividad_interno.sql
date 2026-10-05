@@ -181,7 +181,11 @@ BEGIN
         RETURN 0;
     END IF;
     PERFORM academico_test.fn_actividad_validar_existente(p_pk_tactividad);
-    PERFORM academico_test.fn_actividad_validar_materiales(p_materiales);
+    PERFORM academico_test.fn_actividad_validar_materiales(
+        p_materiales,
+        (SELECT FK_TGRUPO FROM academico_test.TACTIVIDAD WHERE PK_TACTIVIDAD = p_pk_tactividad),
+        (SELECT FK_TASIGNATURA FROM academico_test.TACTIVIDAD WHERE PK_TACTIVIDAD = p_pk_tactividad),
+        (SELECT FK_TUNIDAD FROM academico_test.TACTIVIDAD WHERE PK_TACTIVIDAD = p_pk_tactividad));
 
     UPDATE academico_test.TACTIVIDAD_MATERIAL
        SET ACTIVE = FALSE, MODIFIED_BY = v_por, MODIFIED_AT = CURRENT_TIMESTAMP
@@ -441,7 +445,11 @@ BEGIN
     END IF;
 
     PERFORM academico_test.fn_actividad_validar_activa(p_pk_tactividad);
-    PERFORM academico_test.fn_actividad_validar_recuperacion_config(p_config);
+    PERFORM academico_test.fn_actividad_validar_recuperacion_config(
+        p_config,
+        (SELECT FK_TGRUPO FROM academico_test.TACTIVIDAD WHERE PK_TACTIVIDAD = p_pk_tactividad),
+        (SELECT FK_TASIGNATURA FROM academico_test.TACTIVIDAD WHERE PK_TACTIVIDAD = p_pk_tactividad),
+        (SELECT FK_TUNIDAD FROM academico_test.TACTIVIDAD WHERE PK_TACTIVIDAD = p_pk_tactividad));
     v_recuperar := (p_config->>'fkActividadRecuperar')::BIGINT;
     IF v_recuperar IS NOT NULL THEN
         PERFORM academico_test.fn_actividad_validar_recuperable(
@@ -702,15 +710,18 @@ RETURNS BIGINT
 LANGUAGE plpgsql
 AS $$
 DECLARE
-    v_titulo VARCHAR;
-    v_unidad BIGINT;
-    v_pk     BIGINT;
+    v_titulo     VARCHAR;
+    v_unidad     BIGINT;
+    v_grupo      BIGINT;
+    v_asignatura BIGINT;
+    v_pk         BIGINT;
 BEGIN
     PERFORM academico_test.fn_actividad_validar_existente(p_pk_tactividad);
     PERFORM academico_test.fn_actividad_validar_activa(p_pk_tactividad);
-    SELECT academico_test.fn_actividad_etiqueta(p_pk_tactividad), FK_TUNIDAD INTO v_titulo, v_unidad
+    SELECT academico_test.fn_actividad_etiqueta(p_pk_tactividad), FK_TUNIDAD, FK_TGRUPO, FK_TASIGNATURA
+      INTO v_titulo, v_unidad, v_grupo, v_asignatura
       FROM academico_test.TACTIVIDAD WHERE PK_TACTIVIDAD = p_pk_tactividad;
-    PERFORM academico_test.fn_actividad_validar_evidencia(v_unidad, v_titulo, p_fk_referente_enunciado);
+    PERFORM academico_test.fn_actividad_validar_evidencia(v_unidad, v_titulo, p_fk_referente_enunciado, v_grupo, v_asignatura);
 
     SELECT PK_TACTIVIDAD_EVIDENCIA INTO v_pk
       FROM academico_test.TACTIVIDAD_EVIDENCIA
@@ -739,7 +750,11 @@ AS $$
 BEGIN
     IF NOT EXISTS (SELECT 1 FROM academico_test.TACTIVIDAD_EVIDENCIA
                     WHERE PK_TACTIVIDAD_EVIDENCIA = p_pk_tactividad_evidencia AND ACTIVE = TRUE) THEN
-        RAISE EXCEPTION 'La evidencia ya no está marcada en la actividad' USING ERRCODE = 'P0002';
+        RAISE EXCEPTION 'La evidencia ya no está marcada%',
+            COALESCE(' en ' || academico_test.fn_actividad_etiqueta(
+                (SELECT FK_TACTIVIDAD FROM academico_test.TACTIVIDAD_EVIDENCIA
+                  WHERE PK_TACTIVIDAD_EVIDENCIA = p_pk_tactividad_evidencia)), '')
+            USING ERRCODE = 'P0002';
     END IF;
     UPDATE academico_test.TACTIVIDAD_EVIDENCIA
        SET ACTIVE = FALSE, MODIFIED_BY = p_pk_usuario_solicitante::VARCHAR, MODIFIED_AT = CURRENT_TIMESTAMP
@@ -781,15 +796,18 @@ RETURNS BIGINT
 LANGUAGE plpgsql
 AS $$
 DECLARE
-    v_titulo VARCHAR;
-    v_unidad BIGINT;
-    v_pk     BIGINT;
+    v_titulo     VARCHAR;
+    v_unidad     BIGINT;
+    v_grupo      BIGINT;
+    v_asignatura BIGINT;
+    v_pk         BIGINT;
 BEGIN
     PERFORM academico_test.fn_actividad_validar_existente(p_pk_tactividad);
     PERFORM academico_test.fn_actividad_validar_activa(p_pk_tactividad);
-    SELECT academico_test.fn_actividad_etiqueta(p_pk_tactividad), FK_TUNIDAD INTO v_titulo, v_unidad
+    SELECT academico_test.fn_actividad_etiqueta(p_pk_tactividad), FK_TUNIDAD, FK_TGRUPO, FK_TASIGNATURA
+      INTO v_titulo, v_unidad, v_grupo, v_asignatura
       FROM academico_test.TACTIVIDAD WHERE PK_TACTIVIDAD = p_pk_tactividad;
-    PERFORM academico_test.fn_actividad_validar_criterio(v_unidad, v_titulo, p_fk_tcriterio_unidad);
+    PERFORM academico_test.fn_actividad_validar_criterio(v_unidad, v_titulo, p_fk_tcriterio_unidad, v_grupo, v_asignatura);
 
     SELECT PK_TACTIVIDAD_CRITERIO_UNIDAD INTO v_pk
       FROM academico_test.TACTIVIDAD_CRITERIO_UNIDAD
@@ -817,7 +835,11 @@ AS $$
 BEGIN
     IF NOT EXISTS (SELECT 1 FROM academico_test.TACTIVIDAD_CRITERIO_UNIDAD
                     WHERE PK_TACTIVIDAD_CRITERIO_UNIDAD = p_pk_tactividad_criterio_unidad AND ACTIVE = TRUE) THEN
-        RAISE EXCEPTION 'El criterio ya no está seleccionado en la actividad' USING ERRCODE = 'P0002';
+        RAISE EXCEPTION 'El criterio ya no está seleccionado%',
+            COALESCE(' en ' || academico_test.fn_actividad_etiqueta(
+                (SELECT FK_TACTIVIDAD FROM academico_test.TACTIVIDAD_CRITERIO_UNIDAD
+                  WHERE PK_TACTIVIDAD_CRITERIO_UNIDAD = p_pk_tactividad_criterio_unidad)), '')
+            USING ERRCODE = 'P0002';
     END IF;
     UPDATE academico_test.TACTIVIDAD_CRITERIO_UNIDAD
        SET ACTIVE = FALSE, MODIFIED_BY = p_pk_usuario_solicitante::VARCHAR, MODIFIED_AT = CURRENT_TIMESTAMP
@@ -987,7 +1009,8 @@ BEGIN
         TRUE, p_titulo, p_fk_tasignatura, p_fk_tlv_tipo_actividad, p_fk_tlv_jerarquia,
         p_descripcion, p_material_requerido, p_descripcion_instrumento, p_fk_tlv_modalidad,
         p_fk_tlv_instrumento_evaluacion, p_fk_tlv_tipo_evidencia, p_fk_tlv_metodo_valoracion,
-        p_fk_tlv_tipo_calculo, p_nota_maxima, p_materiales, p_adaptaciones, p_recuperacion);
+        p_fk_tlv_tipo_calculo, p_nota_maxima, p_materiales, p_adaptaciones, p_recuperacion,
+        p_fk_tgrupo, p_fk_tunidad);
 
     -- Sin valor enviado, "¿Es sumativa?" es la que le corresponde al referente.
     v_ctx_evaluativo := academico_test.fn_actividad_contexto_evaluativo(p_fk_tgrupo, p_fk_tasignatura, p_fk_tunidad);
@@ -999,7 +1022,7 @@ BEGIN
         p_fecha_inicio, p_fecha_cierre, p_duracion_estimada, p_semana_cronograma,
         p_evidencias, TRUE, p_exigir_minimos);
     PERFORM academico_test.fn_actividad_validar_titulo_unico(
-        v_titulo, p_fk_tunidad, p_fk_tgrupo, p_fk_tlv_jerarquia);
+        v_titulo, p_fk_tunidad, p_fk_tgrupo, p_fk_tlv_jerarquia, NULL, p_fk_tasignatura);
 
     -- La regla del 100% por (unidad, grupo) la impone tr_tactividad_ponderacion_unidad.
     INSERT INTO academico_test.TACTIVIDAD (
@@ -1122,8 +1145,12 @@ BEGIN
     SELECT * INTO v_actual FROM academico_test.TACTIVIDAD WHERE PK_TACTIVIDAD = p_pk_tactividad;
 
     IF p_desvincular_unidad AND (p_fk_tunidad IS NOT NULL OR p_ponderacion IS NOT NULL) THEN
-        RAISE EXCEPTION 'No se puede quitar % de su unidad y a la vez asignarle una unidad o un peso: elija una de las dos cosas',
-            academico_test.fn_actividad_etiqueta(p_pk_tactividad) USING ERRCODE = '22023';
+        RAISE EXCEPTION 'No se puede, en la misma operación, desvincular % de % y asignarle % o peso: elija una de las dos cosas',
+            academico_test.fn_actividad_etiqueta(p_pk_tactividad),
+            COALESCE(academico_test.fn_unidad_etiqueta(v_actual.FK_TUNIDAD), 'su ' || lower(academico_test.fn_unidad_rotulo(NULL))),
+            lower(academico_test.fn_unidad_rotulo(
+                (SELECT FK_REFERENTE_CURRICULAR FROM academico_test.TUNIDAD WHERE PK_TUNIDAD = COALESCE(p_fk_tunidad, v_actual.FK_TUNIDAD))))
+            USING ERRCODE = '22023';
     END IF;
     IF p_quitar_recuperacion AND p_recuperacion IS NOT NULL THEN
         RAISE EXCEPTION 'No se puede quitar y configurar la recuperación de % en la misma operación: elija una de las dos cosas',
@@ -1134,7 +1161,8 @@ BEGIN
         FALSE, p_titulo, p_fk_tasignatura, p_fk_tlv_tipo_actividad, NULL,
         p_descripcion, p_material_requerido, p_descripcion_instrumento, p_fk_tlv_modalidad,
         p_fk_tlv_instrumento_evaluacion, p_fk_tlv_tipo_evidencia, p_fk_tlv_metodo_valoracion,
-        p_fk_tlv_tipo_calculo, p_nota_maxima, p_materiales, p_adaptaciones, p_recuperacion);
+        p_fk_tlv_tipo_calculo, p_nota_maxima, p_materiales, p_adaptaciones, p_recuperacion,
+        COALESCE(p_fk_tgrupo, v_actual.FK_TGRUPO), COALESCE(p_fk_tunidad, v_actual.FK_TUNIDAD));
 
     v_titulo        := COALESCE(NULLIF(TRIM(p_titulo), ''), v_actual.TITULO);
     v_asignatura    := COALESCE(p_fk_tasignatura, v_actual.FK_TASIGNATURA);
@@ -1165,7 +1193,7 @@ BEGIN
     -- Contra la unidad RESULTANTE: con la vieja, mover de unidad comparaba
     -- contra el bucket equivocado.
     PERFORM academico_test.fn_actividad_validar_titulo_unico(
-        v_titulo, v_unidad, v_grupo, v_actual.FK_TLV_JERARQUIA, p_pk_tactividad);
+        v_titulo, v_unidad, v_grupo, v_actual.FK_TLV_JERARQUIA, p_pk_tactividad, v_asignatura);
 
     UPDATE academico_test.TACTIVIDAD
        SET TITULO                          = v_titulo,
