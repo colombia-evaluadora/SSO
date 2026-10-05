@@ -422,7 +422,6 @@
  "postgres/migrations/V42__rating_scale_module.sql|WRAPPER-GORDO|fn_escala_bulk_delete(): 4 escrituras despues del gate. Candidata a partirse en wrapper (permisos) + nucleo `fn_escala_bulk_delete_interno` (logica reutilizable)",
  "postgres/migrations/V42__rating_scale_module.sql|WRAPPER-GORDO|fn_escala_guardar_bulk(): 4 escrituras despues del gate. Candidata a partirse en wrapper (permisos) + nucleo `fn_escala_guardar_bulk_interno` (logica reutilizable)",
  "postgres/migrations/V42__rating_scale_module.sql|WRAPPER-GORDO|fn_escala_nivel_soft_delete(): 4 escrituras despues del gate. Candidata a partirse en wrapper (permisos) + nucleo `fn_escala_nivel_soft_delete_interno` (logica reutilizable)",
- "postgres/migrations/V439__final_como_periodo_en_el_arreglo.sql|AUTO-REFERENCIA|el cuerpo de la funcion menciona V439: la funcion sobrevive a su migracion, el numero deja de ser cierto en cuanto otra la reescriba",
  "postgres/migrations/V43__grade_module.sql|WRAPPER-GORDO|fn_grado_soft_delete(): 3 escrituras despues del gate. Candidata a partirse en wrapper (permisos) + nucleo `fn_grado_soft_delete_interno` (logica reutilizable)",
  "postgres/migrations/V44__study_plan_module.sql|WRAPPER-GORDO|fn_plan_soft_delete(): 3 escrituras despues del gate. Candidata a partirse en wrapper (permisos) + nucleo `fn_plan_soft_delete_interno` (logica reutilizable)",
  "postgres/migrations/V47__microservice_eval_col.sql|CABECERA",

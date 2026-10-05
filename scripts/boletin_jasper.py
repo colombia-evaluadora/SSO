@@ -119,7 +119,8 @@ FONDO = [img(0, 0, 613, 894, '$F{fondo_archivo}', scale='FillFrame', cache=True)
 # ScaleFont Jasper lo parte en las lineas que haga falta y reduce la letra
 # solo si no cabe, asi que un nombre corto sale en una linea a 18pt y uno muy
 # largo en dos o tres. Dane, Nit, ciudad y departamento van en la banda. El
-# escudo va en un circulo blanco que cruza las dos; sin escudo el texto
+# escudo va con su forma original (sin recortarlo ni enmarcarlo), escalado
+# sin deformar dentro de un hueco que cruza las dos; sin escudo el texto
 # arranca en el margen (Jasper no acepta x por expresion: son dos variantes
 # con printWhen).
 HAY_ESCUDO = '$F{escudo_archivo} != null'
@@ -139,8 +140,7 @@ def encabezado(x, w, when):
 
 
 CABECERA = (
-    [rect(X0, 8, 88, 88, BLANCO, radius=44, when=HAY_ESCUDO, borde='acento'),
-     img(X0 + 10, 18, 68, 68, '$F{escudo_archivo}', when=HAY_ESCUDO, cache=True)]
+    [img(X0, 4, 92, 100, '$F{escudo_archivo}', when=HAY_ESCUDO, cache=True)]
     + encabezado(X0 + 100, 345 - X0 - 100, HAY_ESCUDO)
     + encabezado(X0, 345 - X0, SIN_ESCUDO)
     + [
@@ -151,10 +151,6 @@ CABECERA = (
         txt(X0 + ANCHO - 180, 37, 180, 12,
             '$P{GENERADO}.replace(" a las ", " ").replaceFirst(" 0(\\\\d:)", " $1")',
             size=8.5, bold=True, align='Right', valign='Middle', rol='texto'),
-        # En las hojas de continuacion no se repite el bloque del estudiante,
-        # pero hay que poder saber de quien es la hoja suelta.
-        txt(X0, 105, 360, 9, '$F{estudiante} + " (continuacion)"', size=7, bold=True,
-            when='$V{PAGE_NUMBER} > 1', rol='gris'),
     ])
 # Pegado a la banda oscura del fondo, que llega a y=105.
 ALTO_CABECERA = 114
@@ -304,7 +300,22 @@ PIE = [
 ALTO_PIE = 60
 
 
-def seccion(nombre, alto, elementos):
-    return '\t<%s height="%d" splitType="Prevent">\n%s\t</%s>\n' % (
-        nombre, alto, ''.join(elementos).replace('\n\t', '\n'), nombre)
+def seccion(nombre, alto, elementos, when=None):
+    cuando = ('\t\t<printWhenExpression><![CDATA[%s]]></printWhenExpression>\n' % when
+              if when else '')
+    return '\t<%s height="%d" splitType="Prevent">\n%s%s\t</%s>\n' % (
+        nombre, alto, cuando, ''.join(elementos).replace('\n\t', '\n'), nombre)
+
+
+# En las hojas de continuacion no se repite el bloque del estudiante, pero
+# hay que poder saber de quien es la hoja suelta. Va en su propia banda
+# (columnHeader, solo desde la hoja 2) y no en la cabecera: ahi quedaba
+# pegado a la banda oscura del fondo. La banda le da aire arriba y abajo.
+CONTINUACION = [txt(X0, 8, 360, 11, '$F{estudiante} + " (continuacion)"', size=7.5, bold=True,
+                    valign='Middle', rol='gris')]
+ALTO_CONTINUACION = 26
+
+
+def continuacion():
+    return seccion('columnHeader', ALTO_CONTINUACION, CONTINUACION, when='$V{PAGE_NUMBER} > 1')
 

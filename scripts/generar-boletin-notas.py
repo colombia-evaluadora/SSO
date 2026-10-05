@@ -378,6 +378,7 @@ detalle = (fila_detalle('AREA') + fila_detalle('ASIGNATURA') + DOCENTES + LOGRO
 xml = (cabecera + decl + '\n'
        + seccion('background', 894, FONDO)
        + seccion('pageHeader', ALTO_CABECERA, CABECERA)
+       + continuacion()
        + '\t<detail>\n' + detalle + '\t</detail>\n'
        + seccion('pageFooter', ALTO_PIE, PIE)
        + '</jasperReport>\n')
