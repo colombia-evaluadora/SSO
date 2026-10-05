@@ -11,10 +11,12 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.nio.charset.StandardCharsets;
+import java.util.Map;
 
 /**
  * {@code POST /reportes/{clave}} — devuelve el archivo.
@@ -38,9 +40,12 @@ public class ReportController {
 
     @PostMapping("/{clave}")
     public ResponseEntity<byte[]> generar(@PathVariable String clave,
+                                          @RequestParam Map<String, String> query,
                                           @RequestBody(required = false) ReportRequest request) {
 
-        ReportService.Rendered r = service.generate(clave, request, currentToken(), currentUser());
+        // Los query params eligen la variante de un reporte que agrupa a
+        // otros: POST /reportes/boletin?nivel=preescolar.
+        ReportService.Rendered r = service.generate(clave, query, request, currentToken(), currentUser());
 
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(r.contentType());

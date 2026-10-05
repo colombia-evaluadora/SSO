@@ -1,6 +1,8 @@
 package com.co.eurekatic.reporting.render;
 
+
 import com.co.eurekatic.reporting.config.ReportingProperties;
+import net.sf.jasperreports.crosstabs.design.JRDesignCrosstab;
 import net.sf.jasperreports.engine.JRException;
 import net.sf.jasperreports.engine.JasperCompileManager;
 import net.sf.jasperreports.engine.JasperFillManager;
@@ -30,6 +32,7 @@ import net.sf.jasperreports.engine.type.StretchTypeEnum;
 import net.sf.jasperreports.engine.type.TextAdjustEnum;
 import net.sf.jasperreports.engine.type.VerticalTextAlignEnum;
 import net.sf.jasperreports.engine.type.WhenNoDataTypeEnum;
+import net.sf.jasperreports.engine.xml.JRXmlLoader;
 import net.sf.jasperreports.export.SimpleExporterInput;
 import net.sf.jasperreports.export.SimpleOutputStreamExporterOutput;
 // OJO: en JasperReports 7 el exportador PDF NO esta en
@@ -84,6 +87,9 @@ public class PdfRenderer {
 
     private final Map<String, JasperReport> compiladas = new ConcurrentHashMap<>();
 
+    /** Crosstabs elasticos de cada plantilla, solo para contar sus columnas. */
+    private final Map<String, List<JRDesignCrosstab>> elasticos = new ConcurrentHashMap<>();
+
     public byte[] render(String clave,
                          ReportingProperties.Report def,
                          List<Map<String, Object>> rows,
@@ -124,9 +130,13 @@ public class PdfRenderer {
             // etiquetas: dos reportes con la misma columna pero traducida
             // distinto no deberian generar entradas de cache separadas)
             // entran a la clave junto con el ancho.
-            String cacheKey = clave + "#" + columnas.keySet() + "#" + java.util.Arrays.toString(anchos);
+            // Una plantilla con crosstabs elasticos se compila por cantidad
+            // de columnas que traen los datos (ver CrosstabElastico).
+            List<Integer> conteos = conteosElasticos(clave, rows);
+            String cacheKey = clave + "#" + columnas.keySet() + "#" + java.util.Arrays.toString(anchos)
+                    + "#" + conteos;
             JasperReport report = compiladas.computeIfAbsent(
-                    cacheKey, k -> compilar(clave, columnas, anchos));
+                    cacheKey, k -> compilar(clave, columnas, anchos, conteos));
 
             Map<String, Object> params = new HashMap<>();
             params.put("TITULO", def.getTitle() == null ? clave : def.getTitle());
@@ -215,18 +225,51 @@ public class PdfRenderer {
         }
     }
 
-    private JasperReport compilar(String clave, Map<String, String> columnas, int[] anchos) {
+    /**
+     * Cuantas columnas traen los datos para cada crosstab elastico de la
+     * plantilla, en orden; vacia si el reporte no tiene plantilla o no los usa.
+     * El diseño se lee una vez por clave y solo para contar.
+     */
+    private List<Integer> conteosElasticos(String clave, List<Map<String, Object>> rows) {
+        List<JRDesignCrosstab> crosstabs = elasticos.computeIfAbsent(clave, k -> {
+            JasperDesign d = cargarPlantilla(k);
+            return d == null ? List.of() : CrosstabElastico.de(d);
+        });
+        List<Integer> conteos = new ArrayList<>(crosstabs.size());
+        for (JRDesignCrosstab c : crosstabs) {
+            conteos.add(CrosstabElastico.columnas(c, rows));
+        }
+        return conteos;
+    }
+
+    /** El diseño de reportes/{clave}.jrxml, o null si el reporte no tiene plantilla. */
+    private static JasperDesign cargarPlantilla(String clave) {
+        ClassPathResource plantilla = new ClassPathResource("reportes/" + clave + ".jrxml");
+        if (!plantilla.exists()) {
+            return null;
+        }
+        try (InputStream in = plantilla.getInputStream()) {
+            return JRXmlLoader.load(in);
+        } catch (JRException | IOException e) {
+            throw new IllegalStateException("No se pudo leer la plantilla del reporte '" + clave + "'", e);
+        }
+    }
+
+    private JasperReport compilar(String clave, Map<String, String> columnas, int[] anchos,
+                                  List<Integer> conteos) {
         try {
-            ClassPathResource plantilla = new ClassPathResource("reportes/" + clave + ".jrxml");
-            if (plantilla.exists()) {
-                try (InputStream in = plantilla.getInputStream()) {
-                    log.info("Reporte '{}': usando plantilla reportes/{}.jrxml", clave, clave);
-                    return JasperCompileManager.compileReport(in);
+            JasperDesign plantilla = cargarPlantilla(clave);
+            if (plantilla != null) {
+                log.info("Reporte '{}': usando plantilla reportes/{}.jrxml {}", clave, clave, conteos);
+                List<JRDesignCrosstab> crosstabs = CrosstabElastico.de(plantilla);
+                for (int i = 0; i < crosstabs.size() && i < conteos.size(); i++) {
+                    CrosstabElastico.ajustar(crosstabs.get(i), conteos.get(i));
                 }
+                return JasperCompileManager.compileReport(plantilla);
             }
             log.info("Reporte '{}': diseño estándar, {} columnas", clave, columnas.size());
             return JasperCompileManager.compileReport(disenoEstandar(columnas, anchos));
-        } catch (JRException | IOException e) {
+        } catch (JRException e) {
             throw new IllegalStateException(
                     "No se pudo compilar el reporte '" + clave + "'", e);
         }

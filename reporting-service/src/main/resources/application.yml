@@ -544,6 +544,21 @@ reporting:
         evidencias: Evidencias
 
     # -----------------------------------------------------------------
+    # Boletin: UN SOLO ENDPOINT para todos los niveles,
+    # POST /reportes/boletin?nivel=<nivel>. No tiene datos propios: el
+    # query param elige el reporte que lo atiende, porque preescolar y los
+    # demas niveles salen de funciones y plantillas distintas. Sin nivel, o
+    # con uno desconocido, responde 400 con los valores validos.
+    # -----------------------------------------------------------------
+    boletin:
+      title: Boletin
+      variant-param: nivel
+      variants:
+        preescolar: boletin-preescolar
+        primaria: boletin-notas
+        secundaria: boletin-notas
+        media: boletin-notas
+    # -----------------------------------------------------------------
     # Boletin de preescolar (V466). path = fila
     # 'eval-col-informes-boletin-preescolar-001':
     # fn_informe_boletin_preescolar, que delega gate y alcance en la
@@ -626,6 +641,77 @@ reporting:
         director_documento: Documento del director
         rector_nombre: Rector
         rector_documento: Documento del rector
+    # -----------------------------------------------------------------
+    # Boletin de notas (primaria, secundaria y media). path = fila
+    # 'eval-col-informes-boletin-notas-001': fn_informe_boletin_notas (V540).
+    # Plantilla propia: reportes/boletin-notas.jrxml, generada por
+    # scripts/generar-boletin-notas.py. Las filas traen SECCION y TIPO y la
+    # plantilla pinta cada una en su banda; `columns` dice que campos llegan.
+    # -----------------------------------------------------------------
+    boletin-notas:
+      path: /informes/boletin-notas
+      title: Boletin de notas
+      file-name: boletin-notas
+      formats:
+        - pdf
+      image-fields:
+        - fondo_archivo
+        - escudo_archivo
+        - foto_archivo
+      columns:
+        ee_nombre: Establecimiento
+        ee_dane: Dane
+        ee_nit: Nit
+        ciudad: Ciudad
+        sede_nombre: Sede
+        nivel_ensenanza: Nivel
+        grado_nombre: Grado
+        grupo_etiqueta: Grupo
+        periodo_nombre: Periodo
+        anio: Año
+        fondo_archivo: Fondo
+        matricula: Matricula
+        estudiante: Estudiante
+        documento: Documento
+        foto_archivo: Foto
+        promedio: Promedio del periodo
+        puesto: Puesto
+        total_estudiantes: Estudiantes del grupo
+        aprobadas: Areas aprobadas
+        reprobadas: Areas reprobadas
+        observacion: Observacion
+        area_nombre: Area
+        asignatura_nombre: Asignatura, codigo y nombre del comportamiento, o nivel de la escala
+        nota: Nota del periodo (o del logro)
+        nota_original: Nota antes de recuperar (C)
+        con_recuperacion: Con recuperacion
+        desempeno: Desempeño
+        aprobada: Aprobada
+        inasistencias: Inasistencias injustificadas
+        rector_nombre: Rector
+        rector_documento: Documento del rector
+        escudo_archivo: Escudo
+        departamento: Departamento
+        jornada: Jornada
+        tipo_documento: Tipo de documento
+        director_nombre: Director de grupo
+        director_documento: Documento del director
+        auxiliar_nombre: Auxiliar administrativo
+        auxiliar_documento: Documento del auxiliar
+        sin_calificar: Areas sin calificar
+        seccion: Seccion (1 consolidado, 2 detalle, 3 comportamientos, 4 escala)
+        tipo: Tipo de fila
+        intensidad: Intensidad horaria
+        influencia: Porcentaje de influencia en el area
+        inasistencias_justificadas: Inasistencias justificadas
+        docentes: Docentes
+        texto: Logro, observacion del comportamiento o rango de la escala
+        comportamiento_fecha: Fecha del comportamiento
+        comportamiento_tipo: Tipo de comportamiento
+        comportamiento_funcionario: Quien lo registro
+        orden: Posicion de la fila (o del nivel de la escala) en su seccion
+        periodo_orden: Columna del periodo en el consolidado
+        periodo_abreviacion: Titulo de la columna del periodo
 
 sso:
   jwt:
