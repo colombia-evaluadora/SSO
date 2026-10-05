@@ -1,7 +1,7 @@
 # Mapa del dominio
 
 **Generado** por `python scripts/migration-analysis mapa` — no editar a mano.
-Estado: 460 migraciones (V1–V546), 1015 funciones vivas, 58 endpoints vivos. Ultima generacion: 2026-10-05.
+Estado: 459 migraciones (V1–V546), 1015 funciones vivas, 58 endpoints vivos. Ultima generacion: 2026-10-05.
 
 Para una **funcion**, la migracion dueña es la que hay que editar: es su ultima escritura viva, no la que la creo.
 
@@ -530,7 +530,7 @@ Las secciones son las categorias funcionales de `scripts/migration-analysis/anal
 | `academico_test.fn_grado_escala_aplicable` | 1 | V428 | V474, V540 |
 | `academico_test.fn_instrumento_nombre` | 1 | V214.2 | V479, V496.3 |
 | `academico_test.fn_instrumento_permitido_por_tipo_evaluacion` | 2 | V458 | V214.2, V496.5 |
-| `academico_test.fn_nota_homologar` | 3 | V428 | V432, V439, V469.3, V490, V496.6, V496.24… |
+| `academico_test.fn_nota_homologar` | 3 | V428 | V439, V469.3, V490, V496.6, V496.24, V536… |
 | `academico_test.fn_nota_redondear` | 3 | V496.5 | — |
 | `academico_test.fn_tactividad_nota_estado_default` | 0 | V496.5 | — |
 | `academico_test.fn_tactividad_nota_finalizacion` | 0 | V224 | — |
@@ -1166,7 +1166,7 @@ Las secciones son las categorias funcionales de `scripts/migration-analysis/anal
 | `academico_test.fn_asignatura_plan_elemento_calculo` | 1 | V239 | V333, V492.1, V496.23 |
 | `academico_test.fn_asignatura_plan_vigente` | 2 | V239 | V333, V496.23 |
 | `academico_test.fn_asignatura_plan_vigente_por_grado` | 2 | V239 | V492.1 |
-| `academico_test.fn_asignatura_tipo_evaluacion` | 2 | V428 | V432, V536 |
+| `academico_test.fn_asignatura_tipo_evaluacion` | 2 | V428 | V536 |
 | `academico_test.fn_criterio_eval_actualizar` | 14 | V41 | V76 |
 | `academico_test.fn_criterio_eval_obtener` | 2 | V41 | V76 |
 | `academico_test.fn_criterio_evaluacion_formato` | 1 | V227 | V428, V455, V474, V496.1, V496.2, V496.5… |
