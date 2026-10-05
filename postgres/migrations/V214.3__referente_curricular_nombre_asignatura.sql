@@ -957,12 +957,14 @@ AS $$
                ELSE rc.NOMBRE
            END
        END DESC
-     LIMIT GREATEST(p_limite, 1)
+     -- p_limite NULL = sin paginar (reporte PDF/Excel). GREATEST(NULL, 1) vale 1
+     -- en PostgreSQL: con el GREATEST a secas el reporte exportaba una fila.
+     LIMIT CASE WHEN p_limite IS NULL THEN NULL ELSE GREATEST(p_limite, 1) END
     OFFSET GREATEST(p_offset, 0);
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_refcurr_listar_interno(VARCHAR, BIGINT, BIGINT, BIGINT, VARCHAR, BOOLEAN, VARCHAR, BOOLEAN, INT, INT)
-    IS 'INTERNO: pagina de la Vista Maestra de referentes -- niveles, los tres rotulos (instrumento = secuencia, rotulo_ejecucion, nombre_asignatura = area), grados_vinculados ([] = Todos), ultima modificacion (usuario legible + fecha) y total_count. Filtros: search, nivel, enfoque, tipo, estado. Lo usa fn_refcurr_listar.';
+    IS 'INTERNO: pagina de la Vista Maestra de referentes -- niveles, los tres rotulos (instrumento = secuencia, rotulo_ejecucion, nombre_asignatura = area), grados_vinculados ([] = Todos), ultima modificacion (usuario legible + fecha) y total_count. Filtros: search, nivel, enfoque, tipo, estado. p_limite NULL = todas las filas. Lo usa fn_refcurr_listar (pantalla y reporte PDF/Excel).';
 
 CREATE OR REPLACE FUNCTION academico_test.fn_refcurr_listar(
     p_pk_usuario_solicitante      BIGINT,

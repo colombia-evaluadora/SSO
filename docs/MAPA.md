@@ -1,7 +1,7 @@
 # Mapa del dominio
 
 **Generado** por `python scripts/migration-analysis mapa` — no editar a mano.
-Estado: 470 migraciones (V1–V542), 1006 funciones vivas, 58 endpoints vivos. Ultima generacion: 2026-10-03.
+Estado: 471 migraciones (V1–V546), 1006 funciones vivas, 58 endpoints vivos. Ultima generacion: 2026-10-04.
 
 Para una **funcion**, la migracion dueña es la que hay que editar: es su ultima escritura viva, no la que la creo.
 
@@ -565,7 +565,7 @@ Las secciones son las categorias funcionales de `scripts/migration-analysis/anal
 | `academico_test.fn_refcurr_grados_vinculados_interno` | 1 | V214.3 | V492.1 |
 | `academico_test.fn_refcurr_impacto` | 2 | V214.3 | — |
 | `academico_test.fn_refcurr_impacto_interno` | 1 | V214.3 | — |
-| `academico_test.fn_refcurr_listar` | 11 | V214.3 | V214 |
+| `academico_test.fn_refcurr_listar` | 11 | V214.3 | V214, V546 |
 | `academico_test.fn_refcurr_listar_interno` | 10 | V214.3 | — |
 | `academico_test.fn_refcurr_niveles_listar` | 2 | V213 | V214 |
 | `academico_test.fn_refcurr_nombre_asignatura` | 2 | V214.3 | — |
