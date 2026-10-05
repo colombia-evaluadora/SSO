@@ -211,7 +211,7 @@ DECLARE
     v_fk_usuario_rector      BIGINT;
     v_fk_usuario_secretaria  BIGINT;
     c_fk_trol_rector         CONSTANT BIGINT := 7;
-    c_fk_trol_secretaria     CONSTANT BIGINT := 9;
+    c_fk_trol_secretaria     CONSTANT BIGINT := 8;
     c_fk_tlv_jornada_defecto CONSTANT BIGINT := 51900;
     -- REV3 -- se quita el fallback "resolver el unico EE" (via
     -- fn_resolver_establecimiento_unico): el select de EE del front ahora
@@ -726,7 +726,7 @@ DECLARE
     v_fk_tlv_zona_sede       BIGINT;
     c_fk_tlv_jornada_defecto CONSTANT BIGINT := 51900;
     c_fk_trol_rector         CONSTANT BIGINT := 7;
-    c_fk_trol_secretaria     CONSTANT BIGINT := 9;
+    c_fk_trol_secretaria     CONSTANT BIGINT := 8;
     v_pk_sede_creada         BIGINT;
     v_perm_result            RECORD;
 BEGIN
@@ -1042,7 +1042,7 @@ BEGIN
 
     -- -----------------------------------------------------------------
     -- 5. REV5 -- El permiso por defecto del rector (rol 7) y de la
-    --    secretaria (rol 9, Auxiliar administrativo) en la sede recien
+    --    secretaria (rol 8, Jefe de sistema) en la sede recien
     --    creada YA NO se hace aca: fn_sed_crear (llamado en el paso 4) lo
     --    hace solo, leyendo el rector/secretaria directo de TESTABLECIMIENTO
     --    (que ya quedo con esos valores en el INSERT del paso 3, antes de
