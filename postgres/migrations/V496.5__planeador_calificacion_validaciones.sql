@@ -387,7 +387,7 @@ DECLARE
     v_niveles JSONB;
 BEGIN
     IF p_criterios IS NULL OR jsonb_typeof(p_criterios) <> 'array' OR jsonb_array_length(p_criterios) = 0 THEN
-        RAISE EXCEPTION 'La rúbrica de % necesita al menos un criterio', p_etiqueta USING ERRCODE = '22023';
+        RAISE EXCEPTION 'La rúbrica debe tener al menos un criterio con un nivel y su puntaje.' USING ERRCODE = '22023';
     END IF;
     FOR v_c IN SELECT e AS j, ord FROM jsonb_array_elements(p_criterios) WITH ORDINALITY AS t(e, ord) LOOP
         v_nombre := NULLIF(TRIM(v_c.j->>'nombre'), '');
@@ -397,7 +397,7 @@ BEGIN
         END IF;
         v_niveles := v_c.j->'niveles';
         IF v_niveles IS NULL OR jsonb_typeof(v_niveles) <> 'array' OR jsonb_array_length(v_niveles) = 0 THEN
-            RAISE EXCEPTION 'El criterio "%" de la rúbrica necesita al menos un nivel de desempeño', v_nombre
+            RAISE EXCEPTION 'La rúbrica debe tener al menos un criterio con un nivel y su puntaje.'
                 USING ERRCODE = '22023';
         END IF;
         -- El puntaje de cada nivel solo es obligatorio si la unidad vinculada calcula
@@ -406,7 +406,7 @@ BEGIN
         -- la actividad no tiene unidad, el nivel sin puntaje pesa 1 (igual que cotejo).
         IF p_requiere_puntaje AND EXISTS (SELECT 1 FROM jsonb_array_elements(v_niveles) n
                                             WHERE NULLIF(n->>'ponderacion', '') IS NULL) THEN
-            RAISE EXCEPTION 'La unidad de % calcula la definitiva por ponderación o sumatoria: cada nivel del criterio "%" necesita su puntaje', p_etiqueta, v_nombre
+            RAISE EXCEPTION 'La rúbrica debe tener al menos un criterio con un nivel y su puntaje.'
                 USING ERRCODE = '22023';
         END IF;
         IF EXISTS (SELECT 1 FROM jsonb_array_elements(v_niveles) n
@@ -458,7 +458,7 @@ BEGIN
     -- definitiva por Ponderación o Sumatoria (ver fn_actividad_validar_rubrica_definicion).
     IF p_requiere_puntaje AND EXISTS (SELECT 1 FROM jsonb_array_elements(p_items) e
                                         WHERE NULLIF(e->>'ponderacion', '') IS NULL) THEN
-        RAISE EXCEPTION 'La unidad de % calcula la definitiva por ponderación o sumatoria: cada elemento de la lista de cotejo necesita su puntaje', p_etiqueta
+        RAISE EXCEPTION 'Cada elemento de la lista de cotejo necesita un puntaje.'
             USING ERRCODE = '22023';
     END IF;
     IF EXISTS (SELECT 1 FROM jsonb_array_elements(p_items) e

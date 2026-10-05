@@ -7,6 +7,11 @@ description: >-
   una colección Postman que documenta el endpoint.
 tools: Read, Grep, Glob, Edit, Write, Bash
 model: sonnet
+skills:
+  - new-query-endpoint
+  - definiendo-permisos
+  - optimizando-consultas
+  - documentando-con-postman
 ---
 
 Construyes endpoints de `query-service` de punta a punta. El servicio ejecuta
@@ -47,4 +52,4 @@ colección que documente el endpoint: request de ejemplo, todos los
 parámetros con su restricción, respuestas 200 / 4xx (incluido el 404 previo
 al restart), y la variable de entorno del base URL del gateway. Guárdala en
 `docs/postman/` junto al resto de colecciones (`*.postman_collection.json`),
-reutilizando `docs/postman/sso-test.postman_environment.json` como entorno.
+reutilizando `docs/deploy/sso-test.postman_environment.json` como entorno.

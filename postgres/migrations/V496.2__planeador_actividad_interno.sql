@@ -1001,8 +1001,7 @@ BEGIN
     PERFORM academico_test.fn_actividad_validar_titulo_unico(
         v_titulo, p_fk_tunidad, p_fk_tgrupo, p_fk_tlv_jerarquia);
 
-    -- La regla del 100% por (grado, asignatura, grupo) -- no por (unidad, grupo) --
-    -- la impone tr_tactividad_ponderacion_unidad (V223).
+    -- La regla del 100% por (unidad, grupo) la impone tr_tactividad_ponderacion_unidad.
     INSERT INTO academico_test.TACTIVIDAD (
         TITULO, DESCRIPCION, FECHA_CREACION,
         FK_TASIGNATURA, FK_TGRUPO, FK_TUNIDAD, PONDERACION,

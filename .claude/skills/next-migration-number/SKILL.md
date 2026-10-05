@@ -26,9 +26,17 @@ python .claude/skills/next-migration-number/deps.py /planeador/actividades
 python .claude/skills/next-migration-number/deps.py --version 224
 ```
 
-Lee el modelo de `scripts/migration-analysis/analyze_migrations.py` (cacheado
-en temp; `--refresh` lo recalcula tras editar migraciones). Por cada objeto
-imprime:
+Y antes de escribir cualquier función, el inventario de lo reutilizable del
+dominio (validaciones, gates, núcleos `_interno`, wrappers, con dueña y
+parámetros):
+
+```bash
+python .claude/skills/next-migration-number/deps.py --reutilizable planeador
+```
+
+Lee el modelo de `scripts/migration-analysis/analisis/construir.py` vía
+`modelo.cargar()`: se cachea con la huella de las migraciones y se recalcula
+solo cuando cambia un `.sql`. Por cada objeto imprime su categoría funcional y:
 
 - **DEFINIDO HOY POR V\<n\>** — la última escritura viva. Ese es el archivo a
   editar si el cambio pertenece a ese objeto.
@@ -73,6 +81,28 @@ cómo se usan. `precision.py` relee los `.sql` y corrige eso:
 | Necesitas colarte ANTES de una migración existente | Out-of-order sobre un hueco, y solo confirmando con `/server-status` que ese número no está en `flyway_schema_history`. |
 
 ## Paso 3 — el número
+
+Para una migración **nueva**, el número se elige junto a su categoría, no al
+final de todo:
+
+```bash
+python scripts/migration-analysis hueco --categoria planeador
+python scripts/migration-analysis hueco --objeto fn_actividad_listar --objeto fn_unidad_crear
+```
+
+- **Piso:** cada `--objeto` que la migración redefine o usa fija un mínimo, la
+  migración que lo define hoy. Por debajo, la pisa la posterior (`orden`).
+- **Recomendado:** el primer decimal libre detrás de la última migración de la
+  categoría que supera el piso (`V531.1`). Así la funcionalidad queda contigua y
+  dos PRs casi nunca chocan en el mismo número.
+- **Libre de verdad:** se mira el árbol local, todas las ramas de `origin` y
+  las PRs abiertas, **decimales incluidos**.
+- Los huecos enteros cercanos salen aparte: solo out-of-order deliberado.
+- Sin categoría clara o sin hueco junto a ella: el siguiente al techo.
+
+`scan.sh` da el panorama: máximo por rama (decimales incluidos), huecos,
+decimales de otras ramas que el árbol local no tiene, versiones que dos ramas
+usan con ficheros distintos (colisión al fusionar) y migraciones de PRs abiertas:
 
 ```bash
 bash .claude/skills/next-migration-number/scan.sh
@@ -167,7 +197,7 @@ busca la historia.
 
 ## Al cerrar
 
-1. `python scripts/migration-analysis/analyze_migrations.py` (o
+1. `python scripts/migration-analysis informe` (o
    `/migration-analysis`) para confirmar que no dejaste llamadores con la firma
    vieja ni colisión de número.
 2. Si el usuario pide probarla, contra el Postgres **local**

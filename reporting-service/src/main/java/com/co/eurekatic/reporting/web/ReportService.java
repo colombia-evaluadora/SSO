@@ -48,11 +48,35 @@ public class ReportService {
         this.excel = excel;
     }
 
+    /**
+     * La clave del reporte que atiende la variante pedida. Aqui si se listan
+     * los valores validos: el reporte ya se sabe que existe y el front
+     * necesita saber que mandar.
+     */
+    private static String variante(String clave, ReportingProperties.Report def,
+                                   Map<String, String> query) {
+        String param = def.getVariantParam();
+        String valor = query == null || param == null ? null : query.get(param);
+        String destino = valor == null ? null : def.getVariants().get(valor.trim().toLowerCase(Locale.ROOT));
+        if (destino == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "El reporte '" + clave + "' necesita el parametro '" + param + "' con uno de: "
+                    + String.join(", ", def.getVariants().keySet()) + ".");
+        }
+        return destino;
+    }
+
     /** Archivo generado, listo para responder. */
     public record Rendered(byte[] content, MediaType contentType, String fileName, int rows) {}
 
     public Rendered generate(String clave, ReportRequest request, String bearer,
                              String usuario) {
+        return generate(clave, Map.of(), request, bearer, usuario);
+    }
+
+    /** @param query los query params de la peticion; eligen la variante del reporte. */
+    public Rendered generate(String clave, Map<String, String> query, ReportRequest request,
+                             String bearer, String usuario) {
 
         ReportingProperties.Report def = props.getReports().get(clave);
         if (def == null) {
@@ -61,6 +85,13 @@ public class ReportService {
             // reportes existen.
             throw new ResponseStatusException(HttpStatus.NOT_FOUND,
                     "No existe el reporte '" + clave + "'.");
+        }
+        if (def.getVariants() != null && !def.getVariants().isEmpty()) {
+            clave = variante(clave, def, query);
+            def = props.getReports().get(clave);
+            if (def == null) {
+                throw new IllegalStateException("La variante '" + clave + "' no esta configurada.");
+            }
         }
 
         Formato formato = Formato.parse(request == null ? null : request.format());

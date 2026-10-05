@@ -36,7 +36,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[3]
 MIG = REPO / "postgres" / "migrations"
 sys.path.insert(0, str(REPO / "scripts" / "migration-analysis"))
-from sqlscan import split_statements  # noqa: E402
+from base.sqlscan import split_statements  # noqa: E402
 
 
 def fichero(v: str) -> Path:

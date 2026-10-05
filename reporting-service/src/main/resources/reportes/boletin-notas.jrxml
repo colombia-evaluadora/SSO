@@ -1,0 +1,975 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Boletin de notas (primaria, secundaria y media): UN BOLETIN POR ESTUDIANTE.
+
+  Grupo por estudiante (datos y resumen del periodo arriba; observacion,
+  escala y firmas abajo) y, dentro, un grupo por seccion: consolidado por
+  periodos, detalle con logros y comportamientos. Cada fila del datasource
+  pinta la banda de su SECCION y TIPO.
+
+  JasperReports 7: sin xmlns, elementos como element kind, y nunca dos
+  guiones seguidos en un comentario. La fuente se nombra en cada elemento.
+
+  Generada por scripts/generar-boletin-notas.py: editar el script, no este
+  archivo.
+-->
+<jasperReport name="boletin-notas"
+              pageWidth="613" pageHeight="894" columnWidth="613"
+              leftMargin="0" rightMargin="0" topMargin="0" bottomMargin="0"
+              whenNoDataType="NoPages">
+
+	<parameter name="TITULO" class="java.lang.String"/>
+	<parameter name="GENERADO" class="java.lang.String"/>
+	<parameter name="TOTAL" class="java.lang.Integer"/>
+	<parameter name="USUARIO" class="java.lang.String"/>
+	<parameter name="FILTROS" class="java.lang.String"/>
+
+	<field name="ee_nombre" class="java.lang.String"/>
+	<field name="ee_dane" class="java.lang.String"/>
+	<field name="ee_nit" class="java.lang.String"/>
+	<field name="ciudad" class="java.lang.String"/>
+	<field name="sede_nombre" class="java.lang.String"/>
+	<field name="nivel_ensenanza" class="java.lang.String"/>
+	<field name="grado_nombre" class="java.lang.String"/>
+	<field name="grupo_etiqueta" class="java.lang.String"/>
+	<field name="periodo_nombre" class="java.lang.String"/>
+	<field name="anio" class="java.lang.String"/>
+	<field name="matricula" class="java.lang.String"/>
+	<field name="estudiante" class="java.lang.String"/>
+	<field name="documento" class="java.lang.String"/>
+	<field name="promedio" class="java.lang.String"/>
+	<field name="puesto" class="java.lang.String"/>
+	<field name="total_estudiantes" class="java.lang.String"/>
+	<field name="aprobadas" class="java.lang.String"/>
+	<field name="reprobadas" class="java.lang.String"/>
+	<field name="observacion" class="java.lang.String"/>
+	<field name="area_nombre" class="java.lang.String"/>
+	<field name="asignatura_nombre" class="java.lang.String"/>
+	<field name="nota" class="java.lang.String"/>
+	<field name="nota_original" class="java.lang.String"/>
+	<field name="con_recuperacion" class="java.lang.String"/>
+	<field name="desempeno" class="java.lang.String"/>
+	<field name="aprobada" class="java.lang.String"/>
+	<field name="inasistencias" class="java.lang.String"/>
+	<field name="rector_nombre" class="java.lang.String"/>
+	<field name="rector_documento" class="java.lang.String"/>
+	<field name="departamento" class="java.lang.String"/>
+	<field name="jornada" class="java.lang.String"/>
+	<field name="tipo_documento" class="java.lang.String"/>
+	<field name="director_nombre" class="java.lang.String"/>
+	<field name="director_documento" class="java.lang.String"/>
+	<field name="auxiliar_nombre" class="java.lang.String"/>
+	<field name="auxiliar_documento" class="java.lang.String"/>
+	<field name="sin_calificar" class="java.lang.String"/>
+	<field name="seccion" class="java.lang.String"/>
+	<field name="tipo" class="java.lang.String"/>
+	<field name="intensidad" class="java.lang.String"/>
+	<field name="influencia" class="java.lang.String"/>
+	<field name="inasistencias_justificadas" class="java.lang.String"/>
+	<field name="docentes" class="java.lang.String"/>
+	<field name="texto" class="java.lang.String"/>
+	<field name="comportamiento_fecha" class="java.lang.String"/>
+	<field name="comportamiento_tipo" class="java.lang.String"/>
+	<field name="comportamiento_funcionario" class="java.lang.String"/>
+	<field name="orden" class="java.lang.String"/>
+	<field name="periodo_orden" class="java.lang.String"/>
+	<field name="periodo_abreviacion" class="java.lang.String"/>
+	<field name="fondo_archivo" class="java.io.InputStream"/>
+	<field name="escudo_archivo" class="java.io.InputStream"/>
+	<field name="foto_archivo" class="java.io.InputStream"/>
+	<group name="boletin" startNewPage="true" resetPageNumber="true">
+		<expression><![CDATA[$F{matricula}]]></expression>
+		<groupHeader>
+			<band height="104" splitType="Prevent">
+				<element kind="rectangle" x="24" y="2" width="80" height="96" backcolor="#E8EEF7" mode="Opaque" radius="6">
+					<propertyExpression name="net.sf.jasperreports.style.backcolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "panel")]]></propertyExpression>
+					<pen lineWidth="0.0"/>
+				</element>
+				<element kind="image" x="27" y="5" width="74" height="90" scaleImage="RetainShape" hImageAlign="Center" vImageAlign="Middle" onErrorType="Blank">
+					<expression><![CDATA[$F{foto_archivo}]]></expression>
+				</element>
+				<element kind="textField" x="116" y="0" width="473" height="22" fontName="DejaVu Sans" fontSize="15" forecolor="#16305C" hTextAlign="Left" vTextAlign="Middle" bold="true" blankWhenNull="true" textAdjust="ScaleFont">
+					<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "titulo")]]></propertyExpression>
+					<expression><![CDATA[$F{estudiante}]]></expression>
+				</element>
+				<element kind="textField" x="116" y="22" width="473" height="13" fontName="DejaVu Sans" fontSize="9" forecolor="#16305C" hTextAlign="Left" vTextAlign="Top" bold="true" blankWhenNull="true">
+					<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "acento")]]></propertyExpression>
+					<expression><![CDATA[("".equals($F{tipo_documento}) ? "Documento" : $F{tipo_documento}) + ": " + $F{documento}]]></expression>
+				</element>
+				<element kind="rectangle" x="116" y="38" width="473" height="34" backcolor="#E8EEF7" mode="Opaque" radius="6">
+					<propertyExpression name="net.sf.jasperreports.style.backcolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "panel")]]></propertyExpression>
+					<pen lineWidth="0.0"/>
+				</element>
+				<element kind="staticText" x="122" y="45" width="20" height="20" fontName="Material Icons" fontSize="18" forecolor="#16305C" hTextAlign="Center" vTextAlign="Middle">
+					<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "acento")]]></propertyExpression>
+					<text><![CDATA[]]></text>
+				</element>
+				<element kind="staticText" x="146" y="41" width="112" height="12" fontName="DejaVu Sans" fontSize="8" forecolor="#16305C" hTextAlign="Left" vTextAlign="Middle" bold="true">
+					<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "acento")]]></propertyExpression>
+					<text><![CDATA[Sede:]]></text>
+				</element>
+				<element kind="textField" x="146" y="53" width="112" height="16" fontName="DejaVu Sans" fontSize="9" forecolor="#16305C" hTextAlign="Left" vTextAlign="Top" blankWhenNull="true" textAdjust="ScaleFont">
+					<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "texto")]]></propertyExpression>
+					<expression><![CDATA[$F{sede_nombre}]]></expression>
+				</element>
+				<element kind="line" x="257" y="44" width="1" height="22" forecolor="#9FB3D1">
+					<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "borde")]]></propertyExpression>
+				</element>
+				<element kind="staticText" x="262" y="45" width="20" height="20" fontName="Material Icons" fontSize="18" forecolor="#16305C" hTextAlign="Center" vTextAlign="Middle">
+					<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "acento")]]></propertyExpression>
+					<text><![CDATA[]]></text>
+				</element>
+				<element kind="staticText" x="286" y="41" width="84" height="12" fontName="DejaVu Sans" fontSize="8" forecolor="#16305C" hTextAlign="Left" vTextAlign="Middle" bold="true">
+					<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "acento")]]></propertyExpression>
+					<text><![CDATA[Nivel:]]></text>
+				</element>
+				<element kind="textField" x="286" y="53" width="84" height="16" fontName="DejaVu Sans" fontSize="9" forecolor="#16305C" hTextAlign="Left" vTextAlign="Top" blankWhenNull="true" textAdjust="ScaleFont">
+					<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "texto")]]></propertyExpression>
+					<expression><![CDATA[$F{nivel_ensenanza}]]></expression>
+				</element>
+				<element kind="line" x="369" y="44" width="1" height="22" forecolor="#9FB3D1">
+					<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "borde")]]></propertyExpression>
+				</element>
+				<element kind="staticText" x="374" y="45" width="20" height="20" fontName="Material Icons" fontSize="18" forecolor="#16305C" hTextAlign="Center" vTextAlign="Middle">
+					<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "acento")]]></propertyExpression>
+					<text><![CDATA[]]></text>
+				</element>
+				<element kind="staticText" x="398" y="41" width="84" height="12" fontName="DejaVu Sans" fontSize="8" forecolor="#16305C" hTextAlign="Left" vTextAlign="Middle" bold="true">
+					<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "acento")]]></propertyExpression>
+					<text><![CDATA[Grado:]]></text>
+				</element>
+				<element kind="textField" x="398" y="53" width="84" height="16" fontName="DejaVu Sans" fontSize="9" forecolor="#16305C" hTextAlign="Left" vTextAlign="Top" blankWhenNull="true" textAdjust="ScaleFont">
+					<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "texto")]]></propertyExpression>
+					<expression><![CDATA[$F{grado_nombre}]]></expression>
+				</element>
+				<element kind="line" x="481" y="44" width="1" height="22" forecolor="#9FB3D1">
+					<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "borde")]]></propertyExpression>
+				</element>
+				<element kind="staticText" x="486" y="45" width="20" height="20" fontName="Material Icons" fontSize="18" forecolor="#16305C" hTextAlign="Center" vTextAlign="Middle">
+					<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "acento")]]></propertyExpression>
+					<text><![CDATA[]]></text>
+				</element>
+				<element kind="staticText" x="510" y="41" width="77" height="12" fontName="DejaVu Sans" fontSize="8" forecolor="#16305C" hTextAlign="Left" vTextAlign="Middle" bold="true">
+					<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "acento")]]></propertyExpression>
+					<text><![CDATA[Grupo:]]></text>
+				</element>
+				<element kind="textField" x="510" y="53" width="77" height="16" fontName="DejaVu Sans" fontSize="9" forecolor="#16305C" hTextAlign="Left" vTextAlign="Top" blankWhenNull="true" textAdjust="ScaleFont">
+					<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "texto")]]></propertyExpression>
+					<expression><![CDATA[$F{grupo_etiqueta} + ("".equals($F{jornada}) ? "" : " " + $F{jornada}.substring(0, 1).toUpperCase() + $F{jornada}.substring(1).toLowerCase())]]></expression>
+				</element>
+				<element kind="rectangle" x="116" y="78" width="473" height="20" backcolor="#E8EEF7" mode="Opaque" radius="6">
+					<propertyExpression name="net.sf.jasperreports.style.backcolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "panel")]]></propertyExpression>
+					<pen lineWidth="0.0"/>
+				</element>
+				<element kind="staticText" x="122" y="80" width="16" height="16" fontName="Material Icons" fontSize="14" forecolor="#16305C" hTextAlign="Center" vTextAlign="Middle">
+					<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "acento")]]></propertyExpression>
+					<text><![CDATA[]]></text>
+				</element>
+				<element kind="staticText" x="144" y="78" width="50" height="20" fontName="DejaVu Sans" fontSize="9" forecolor="#16305C" hTextAlign="Left" vTextAlign="Middle" bold="true">
+					<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "acento")]]></propertyExpression>
+					<text><![CDATA[Periodo:]]></text>
+				</element>
+				<element kind="textField" x="194" y="78" width="387" height="20" fontName="DejaVu Sans" fontSize="9" forecolor="#16305C" hTextAlign="Left" vTextAlign="Middle" blankWhenNull="true">
+					<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "texto")]]></propertyExpression>
+					<expression><![CDATA[$F{anio} + " - " + $F{periodo_nombre}]]></expression>
+				</element>
+			</band>
+			<band height="60" splitType="Prevent">
+				<element kind="rectangle" x="24" y="2" width="565" height="30" backcolor="#E8EEF7" mode="Opaque" radius="6">
+					<propertyExpression name="net.sf.jasperreports.style.backcolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "panel")]]></propertyExpression>
+					<pen lineWidth="0.0"/>
+				</element>
+				<element kind="staticText" x="30" y="7" width="20" height="20" fontName="Material Icons" fontSize="18" forecolor="#16305C" hTextAlign="Center" vTextAlign="Middle">
+					<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "acento")]]></propertyExpression>
+					<text><![CDATA[]]></text>
+				</element>
+				<element kind="staticText" x="54" y="4" width="79" height="12" fontName="DejaVu Sans" fontSize="7" forecolor="#16305C" hTextAlign="Left" vTextAlign="Middle" bold="true">
+					<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "acento")]]></propertyExpression>
+					<text><![CDATA[Puesto:]]></text>
+				</element>
+				<element kind="textField" x="54" y="16" width="79" height="14" fontName="DejaVu Sans" fontSize="9.5" forecolor="#16305C" hTextAlign="Left" vTextAlign="Top" bold="true" blankWhenNull="true" textAdjust="ScaleFont">
+					<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "texto")]]></propertyExpression>
+					<expression><![CDATA[$F{puesto} + ("".equals($F{total_estudiantes}) ? "" : " de " + $F{total_estudiantes})]]></expression>
+				</element>
+				<element kind="line" x="137" y="7" width="1" height="20" forecolor="#9FB3D1">
+					<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "borde")]]></propertyExpression>
+				</element>
+				<element kind="staticText" x="143" y="7" width="20" height="20" fontName="Material Icons" fontSize="18" forecolor="#16305C" hTextAlign="Center" vTextAlign="Middle">
+					<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "acento")]]></propertyExpression>
+					<text><![CDATA[]]></text>
+				</element>
+				<element kind="staticText" x="167" y="4" width="79" height="12" fontName="DejaVu Sans" fontSize="7" forecolor="#16305C" hTextAlign="Left" vTextAlign="Middle" bold="true">
+					<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "acento")]]></propertyExpression>
+					<text><![CDATA[Promedio:]]></text>
+				</element>
+				<element kind="textField" x="167" y="16" width="79" height="14" fontName="DejaVu Sans" fontSize="9.5" forecolor="#16305C" hTextAlign="Left" vTextAlign="Top" bold="true" blankWhenNull="true" textAdjust="ScaleFont">
+					<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "texto")]]></propertyExpression>
+					<expression><![CDATA[$F{promedio}]]></expression>
+				</element>
+				<element kind="line" x="250" y="7" width="1" height="20" forecolor="#9FB3D1">
+					<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "borde")]]></propertyExpression>
+				</element>
+				<element kind="staticText" x="256" y="7" width="20" height="20" fontName="Material Icons" fontSize="18" forecolor="#16305C" hTextAlign="Center" vTextAlign="Middle">
+					<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "acento")]]></propertyExpression>
+					<text><![CDATA[]]></text>
+				</element>
+				<element kind="staticText" x="280" y="4" width="79" height="12" fontName="DejaVu Sans" fontSize="7" forecolor="#16305C" hTextAlign="Left" vTextAlign="Middle" bold="true">
+					<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "acento")]]></propertyExpression>
+					<text><![CDATA[Areas aprobadas:]]></text>
+				</element>
+				<element kind="textField" x="280" y="16" width="79" height="14" fontName="DejaVu Sans" fontSize="9.5" forecolor="#16305C" hTextAlign="Left" vTextAlign="Top" bold="true" blankWhenNull="true" textAdjust="ScaleFont">
+					<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "texto")]]></propertyExpression>
+					<expression><![CDATA[$F{aprobadas}]]></expression>
+				</element>
+				<element kind="line" x="363" y="7" width="1" height="20" forecolor="#9FB3D1">
+					<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "borde")]]></propertyExpression>
+				</element>
+				<element kind="staticText" x="369" y="7" width="20" height="20" fontName="Material Icons" fontSize="18" forecolor="#16305C" hTextAlign="Center" vTextAlign="Middle">
+					<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "acento")]]></propertyExpression>
+					<text><![CDATA[]]></text>
+				</element>
+				<element kind="staticText" x="393" y="4" width="79" height="12" fontName="DejaVu Sans" fontSize="7" forecolor="#16305C" hTextAlign="Left" vTextAlign="Middle" bold="true">
+					<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "acento")]]></propertyExpression>
+					<text><![CDATA[Areas reprobadas:]]></text>
+				</element>
+				<element kind="textField" x="393" y="16" width="79" height="14" fontName="DejaVu Sans" fontSize="9.5" forecolor="#16305C" hTextAlign="Left" vTextAlign="Top" bold="true" blankWhenNull="true" textAdjust="ScaleFont">
+					<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "texto")]]></propertyExpression>
+					<expression><![CDATA[$F{reprobadas}]]></expression>
+				</element>
+				<element kind="line" x="476" y="7" width="1" height="20" forecolor="#9FB3D1">
+					<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "borde")]]></propertyExpression>
+				</element>
+				<element kind="staticText" x="482" y="7" width="20" height="20" fontName="Material Icons" fontSize="18" forecolor="#16305C" hTextAlign="Center" vTextAlign="Middle">
+					<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "acento")]]></propertyExpression>
+					<text><![CDATA[]]></text>
+				</element>
+				<element kind="staticText" x="506" y="4" width="79" height="12" fontName="DejaVu Sans" fontSize="7" forecolor="#16305C" hTextAlign="Left" vTextAlign="Middle" bold="true">
+					<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "acento")]]></propertyExpression>
+					<text><![CDATA[Sin calificar:]]></text>
+				</element>
+				<element kind="textField" x="506" y="16" width="79" height="14" fontName="DejaVu Sans" fontSize="9.5" forecolor="#16305C" hTextAlign="Left" vTextAlign="Top" bold="true" blankWhenNull="true" textAdjust="ScaleFont">
+					<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "texto")]]></propertyExpression>
+					<expression><![CDATA[$F{sin_calificar}]]></expression>
+				</element>
+				<element kind="staticText" x="24" y="36" width="565" height="20" fontName="DejaVu Sans" fontSize="6" forecolor="#5A6B85" hTextAlign="Left" vTextAlign="Middle">
+					<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "gris")]]></propertyExpression>
+					<text><![CDATA[C: Calificacion obtenida, R: Refuerzo / Recuperacion (Nivelacion), I.H.: Intensidad Horaria, PIA: Porcentaje de Influencia en el Area, I.I.: Inasistencias Injustificadas, I.J.: Inasistencias Justificadas.]]></text>
+				</element>
+			</band>
+		</groupHeader>
+		<groupFooter>
+			<band height="8" splitType="Prevent">
+			</band>
+			<band height="56" splitType="Stretch">
+				<printWhenExpression><![CDATA[!"".equals($F{observacion})]]></printWhenExpression>
+				<element kind="rectangle" x="16" y="11" width="581" height="43" mode="Transparent" radius="12" stretchType="ContainerBottom" forecolor="#16305C">
+					<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "acento")]]></propertyExpression>
+					<pen lineWidth="1.25"/>
+				</element>
+				<element kind="frame" x="24" y="0" width="330" height="22">
+					<element kind="rectangle" x="0" y="0" width="330" height="22" backcolor="#16305C" mode="Opaque" radius="11" stretchType="ContainerHeight">
+						<propertyExpression name="net.sf.jasperreports.style.backcolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "acento")]]></propertyExpression>
+						<pen lineWidth="0.0"/>
+					</element>
+					<element kind="staticText" x="7" y="2" width="18" height="18" fontName="Material Icons" fontSize="16" forecolor="#FFFFFF" hTextAlign="Center" vTextAlign="Middle">
+						<text><![CDATA[]]></text>
+					</element>
+					<element kind="staticText" x="30" y="0" width="290" height="22" fontName="DejaVu Sans" fontSize="10" forecolor="#FFFFFF" hTextAlign="Left" vTextAlign="Middle" bold="true">
+						<text><![CDATA[OBSERVACIONES]]></text>
+					</element>
+				</element>
+				<element kind="textField" x="28" y="30" width="557" height="16" fontName="DejaVu Sans" fontSize="9" forecolor="#16305C" hTextAlign="Justified" vTextAlign="Top" textAdjust="StretchHeight">
+					<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "texto")]]></propertyExpression>
+					<expression><![CDATA[$F{observacion}]]></expression>
+				</element>
+			</band>
+			<band height="26" splitType="Prevent">
+				<element kind="crosstab" x="24" y="0" width="565" height="26">
+<property name="sso.columnas.campo" value="orden"/>
+<property name="sso.columnas.filtro" value="seccion=4"/>
+<property name="sso.columnas.max" value="140"/>
+<dataset resetType="Group" resetGroup="boletin">
+<incrementWhenExpression><![CDATA["4".equals($F{seccion})]]></incrementWhenExpression>
+</dataset>
+<parameter name="fondo" class="java.io.InputStream"><expression><![CDATA[$F{fondo_archivo}]]></expression></parameter>
+<headerCell>
+				<element kind="staticText" x="0" y="0" width="90" height="13" fontName="DejaVu Sans" fontSize="7" forecolor="#16305C" hTextAlign="Left" vTextAlign="Middle" bold="true">
+					<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($P{fondo}, "acento")]]></propertyExpression>
+					<text><![CDATA[Escala de valoracion]]></text>
+				</element>
+</headerCell>
+<rowGroup name="escala" width="90">
+<bucket class="java.lang.String"><expression><![CDATA["Escala"]]></expression></bucket>
+<header>
+</header>
+<totalHeader/>
+</rowGroup>
+<columnGroup name="nivel" height="0">
+<bucket class="java.lang.Integer"><expression><![CDATA[("".equals($F{orden}) ? Integer.valueOf(0) : Integer.valueOf($F{orden}))]]></expression></bucket>
+<header>
+</header>
+<totalHeader/>
+</columnGroup>
+<columnGroup name="valoracion" height="13">
+<bucket class="java.lang.String"><expression><![CDATA[$F{asignatura_nombre}]]></expression></bucket>
+<header>
+				<element kind="textField" x="0" y="0" width="84" height="13" fontName="DejaVu Sans" fontSize="7" forecolor="#16305C" hTextAlign="Center" vTextAlign="Middle" bold="true" blankWhenNull="true" textAdjust="ScaleFont">
+					<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($P{fondo}, "titulo")]]></propertyExpression>
+					<expression><![CDATA[$V{valoracion}]]></expression>
+				</element>
+</header>
+<totalHeader/>
+</columnGroup>
+<measure name="rango" calculation="First" class="java.lang.String">
+<expression><![CDATA[$F{texto}]]></expression>
+</measure>
+<cell width="84" height="13">
+<contents>
+				<element kind="textField" x="0" y="0" width="84" height="13" fontName="DejaVu Sans" fontSize="7" forecolor="#16305C" hTextAlign="Center" vTextAlign="Middle" blankWhenNull="true">
+					<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($P{fondo}, "texto")]]></propertyExpression>
+					<expression><![CDATA[$V{rango}]]></expression>
+				</element>
+</contents>
+</cell>
+				</element>
+			</band>
+			<band height="74" splitType="Prevent">
+				<element kind="line" x="206" y="32" width="200" height="1" forecolor="#16305C">
+					<printWhenExpression><![CDATA[!"".equals($F{rector_nombre}) && "".equals($F{auxiliar_nombre}) && "".equals($F{director_nombre})]]></printWhenExpression>
+					<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "acento")]]></propertyExpression>
+				</element>
+				<element kind="textField" x="156" y="35" width="300" height="12" fontName="DejaVu Sans" fontSize="9" forecolor="#16305C" hTextAlign="Center" vTextAlign="Top" bold="true" blankWhenNull="true">
+					<printWhenExpression><![CDATA[!"".equals($F{rector_nombre}) && "".equals($F{auxiliar_nombre}) && "".equals($F{director_nombre})]]></printWhenExpression>
+					<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "titulo")]]></propertyExpression>
+					<expression><![CDATA[$F{rector_nombre}]]></expression>
+				</element>
+				<element kind="staticText" x="156" y="47" width="300" height="11" fontName="DejaVu Sans" fontSize="7" forecolor="#5A6B85" hTextAlign="Center" vTextAlign="Middle">
+					<printWhenExpression><![CDATA[!"".equals($F{rector_nombre}) && "".equals($F{auxiliar_nombre}) && "".equals($F{director_nombre})]]></printWhenExpression>
+					<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "gris")]]></propertyExpression>
+					<text><![CDATA[Rector(a)]]></text>
+				</element>
+				<element kind="textField" x="156" y="58" width="300" height="11" fontName="DejaVu Sans" fontSize="7" forecolor="#5A6B85" hTextAlign="Center" vTextAlign="Top" blankWhenNull="true">
+					<printWhenExpression><![CDATA[(!"".equals($F{rector_nombre}) && "".equals($F{auxiliar_nombre}) && "".equals($F{director_nombre})) && !"".equals($F{rector_documento})]]></printWhenExpression>
+					<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "gris")]]></propertyExpression>
+					<expression><![CDATA[$F{rector_documento}]]></expression>
+				</element>
+				<element kind="line" x="206" y="32" width="200" height="1" forecolor="#16305C">
+					<printWhenExpression><![CDATA["".equals($F{rector_nombre}) && !"".equals($F{auxiliar_nombre}) && "".equals($F{director_nombre})]]></printWhenExpression>
+					<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "acento")]]></propertyExpression>
+				</element>
+				<element kind="textField" x="156" y="35" width="300" height="12" fontName="DejaVu Sans" fontSize="9" forecolor="#16305C" hTextAlign="Center" vTextAlign="Top" bold="true" blankWhenNull="true">
+					<printWhenExpression><![CDATA["".equals($F{rector_nombre}) && !"".equals($F{auxiliar_nombre}) && "".equals($F{director_nombre})]]></printWhenExpression>
+					<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "titulo")]]></propertyExpression>
+					<expression><![CDATA[$F{auxiliar_nombre}]]></expression>
+				</element>
+				<element kind="staticText" x="156" y="47" width="300" height="11" fontName="DejaVu Sans" fontSize="7" forecolor="#5A6B85" hTextAlign="Center" vTextAlign="Middle">
+					<printWhenExpression><![CDATA["".equals($F{rector_nombre}) && !"".equals($F{auxiliar_nombre}) && "".equals($F{director_nombre})]]></printWhenExpression>
+					<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "gris")]]></propertyExpression>
+					<text><![CDATA[Auxiliar administrativo(a)]]></text>
+				</element>
+				<element kind="textField" x="156" y="58" width="300" height="11" fontName="DejaVu Sans" fontSize="7" forecolor="#5A6B85" hTextAlign="Center" vTextAlign="Top" blankWhenNull="true">
+					<printWhenExpression><![CDATA[("".equals($F{rector_nombre}) && !"".equals($F{auxiliar_nombre}) && "".equals($F{director_nombre})) && !"".equals($F{auxiliar_documento})]]></printWhenExpression>
+					<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "gris")]]></propertyExpression>
+					<expression><![CDATA[$F{auxiliar_documento}]]></expression>
+				</element>
+				<element kind="line" x="65" y="32" width="200" height="1" forecolor="#16305C">
+					<printWhenExpression><![CDATA[!"".equals($F{rector_nombre}) && !"".equals($F{auxiliar_nombre}) && "".equals($F{director_nombre})]]></printWhenExpression>
+					<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "acento")]]></propertyExpression>
+				</element>
+				<element kind="textField" x="28" y="35" width="274" height="12" fontName="DejaVu Sans" fontSize="9" forecolor="#16305C" hTextAlign="Center" vTextAlign="Top" bold="true" blankWhenNull="true">
+					<printWhenExpression><![CDATA[!"".equals($F{rector_nombre}) && !"".equals($F{auxiliar_nombre}) && "".equals($F{director_nombre})]]></printWhenExpression>
+					<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "titulo")]]></propertyExpression>
+					<expression><![CDATA[$F{rector_nombre}]]></expression>
+				</element>
+				<element kind="staticText" x="28" y="47" width="274" height="11" fontName="DejaVu Sans" fontSize="7" forecolor="#5A6B85" hTextAlign="Center" vTextAlign="Middle">
+					<printWhenExpression><![CDATA[!"".equals($F{rector_nombre}) && !"".equals($F{auxiliar_nombre}) && "".equals($F{director_nombre})]]></printWhenExpression>
+					<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "gris")]]></propertyExpression>
+					<text><![CDATA[Rector(a)]]></text>
+				</element>
+				<element kind="textField" x="28" y="58" width="274" height="11" fontName="DejaVu Sans" fontSize="7" forecolor="#5A6B85" hTextAlign="Center" vTextAlign="Top" blankWhenNull="true">
+					<printWhenExpression><![CDATA[(!"".equals($F{rector_nombre}) && !"".equals($F{auxiliar_nombre}) && "".equals($F{director_nombre})) && !"".equals($F{rector_documento})]]></printWhenExpression>
+					<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "gris")]]></propertyExpression>
+					<expression><![CDATA[$F{rector_documento}]]></expression>
+				</element>
+				<element kind="line" x="347" y="32" width="200" height="1" forecolor="#16305C">
+					<printWhenExpression><![CDATA[!"".equals($F{rector_nombre}) && !"".equals($F{auxiliar_nombre}) && "".equals($F{director_nombre})]]></printWhenExpression>
+					<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "acento")]]></propertyExpression>
+				</element>
+				<element kind="textField" x="310" y="35" width="274" height="12" fontName="DejaVu Sans" fontSize="9" forecolor="#16305C" hTextAlign="Center" vTextAlign="Top" bold="true" blankWhenNull="true">
+					<printWhenExpression><![CDATA[!"".equals($F{rector_nombre}) && !"".equals($F{auxiliar_nombre}) && "".equals($F{director_nombre})]]></printWhenExpression>
+					<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "titulo")]]></propertyExpression>
+					<expression><![CDATA[$F{auxiliar_nombre}]]></expression>
+				</element>
+				<element kind="staticText" x="310" y="47" width="274" height="11" fontName="DejaVu Sans" fontSize="7" forecolor="#5A6B85" hTextAlign="Center" vTextAlign="Middle">
+					<printWhenExpression><![CDATA[!"".equals($F{rector_nombre}) && !"".equals($F{auxiliar_nombre}) && "".equals($F{director_nombre})]]></printWhenExpression>
+					<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "gris")]]></propertyExpression>
+					<text><![CDATA[Auxiliar administrativo(a)]]></text>
+				</element>
+				<element kind="textField" x="310" y="58" width="274" height="11" fontName="DejaVu Sans" fontSize="7" forecolor="#5A6B85" hTextAlign="Center" vTextAlign="Top" blankWhenNull="true">
+					<printWhenExpression><![CDATA[(!"".equals($F{rector_nombre}) && !"".equals($F{auxiliar_nombre}) && "".equals($F{director_nombre})) && !"".equals($F{auxiliar_documento})]]></printWhenExpression>
+					<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "gris")]]></propertyExpression>
+					<expression><![CDATA[$F{auxiliar_documento}]]></expression>
+				</element>
+				<element kind="line" x="206" y="32" width="200" height="1" forecolor="#16305C">
+					<printWhenExpression><![CDATA["".equals($F{rector_nombre}) && "".equals($F{auxiliar_nombre}) && !"".equals($F{director_nombre})]]></printWhenExpression>
+					<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "acento")]]></propertyExpression>
+				</element>
+				<element kind="textField" x="156" y="35" width="300" height="12" fontName="DejaVu Sans" fontSize="9" forecolor="#16305C" hTextAlign="Center" vTextAlign="Top" bold="true" blankWhenNull="true">
+					<printWhenExpression><![CDATA["".equals($F{rector_nombre}) && "".equals($F{auxiliar_nombre}) && !"".equals($F{director_nombre})]]></printWhenExpression>
+					<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "titulo")]]></propertyExpression>
+					<expression><![CDATA[$F{director_nombre}]]></expression>
+				</element>
+				<element kind="staticText" x="156" y="47" width="300" height="11" fontName="DejaVu Sans" fontSize="7" forecolor="#5A6B85" hTextAlign="Center" vTextAlign="Middle">
+					<printWhenExpression><![CDATA["".equals($F{rector_nombre}) && "".equals($F{auxiliar_nombre}) && !"".equals($F{director_nombre})]]></printWhenExpression>
+					<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "gris")]]></propertyExpression>
+					<text><![CDATA[Director(a) de grupo]]></text>
+				</element>
+				<element kind="textField" x="156" y="58" width="300" height="11" fontName="DejaVu Sans" fontSize="7" forecolor="#5A6B85" hTextAlign="Center" vTextAlign="Top" blankWhenNull="true">
+					<printWhenExpression><![CDATA[("".equals($F{rector_nombre}) && "".equals($F{auxiliar_nombre}) && !"".equals($F{director_nombre})) && !"".equals($F{director_documento})]]></printWhenExpression>
+					<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "gris")]]></propertyExpression>
+					<expression><![CDATA[$F{director_documento}]]></expression>
+				</element>
+				<element kind="line" x="65" y="32" width="200" height="1" forecolor="#16305C">
+					<printWhenExpression><![CDATA[!"".equals($F{rector_nombre}) && "".equals($F{auxiliar_nombre}) && !"".equals($F{director_nombre})]]></printWhenExpression>
+					<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "acento")]]></propertyExpression>
+				</element>
+				<element kind="textField" x="28" y="35" width="274" height="12" fontName="DejaVu Sans" fontSize="9" forecolor="#16305C" hTextAlign="Center" vTextAlign="Top" bold="true" blankWhenNull="true">
+					<printWhenExpression><![CDATA[!"".equals($F{rector_nombre}) && "".equals($F{auxiliar_nombre}) && !"".equals($F{director_nombre})]]></printWhenExpression>
+					<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "titulo")]]></propertyExpression>
+					<expression><![CDATA[$F{rector_nombre}]]></expression>
+				</element>
+				<element kind="staticText" x="28" y="47" width="274" height="11" fontName="DejaVu Sans" fontSize="7" forecolor="#5A6B85" hTextAlign="Center" vTextAlign="Middle">
+					<printWhenExpression><![CDATA[!"".equals($F{rector_nombre}) && "".equals($F{auxiliar_nombre}) && !"".equals($F{director_nombre})]]></printWhenExpression>
+					<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "gris")]]></propertyExpression>
+					<text><![CDATA[Rector(a)]]></text>
+				</element>
+				<element kind="textField" x="28" y="58" width="274" height="11" fontName="DejaVu Sans" fontSize="7" forecolor="#5A6B85" hTextAlign="Center" vTextAlign="Top" blankWhenNull="true">
+					<printWhenExpression><![CDATA[(!"".equals($F{rector_nombre}) && "".equals($F{auxiliar_nombre}) && !"".equals($F{director_nombre})) && !"".equals($F{rector_documento})]]></printWhenExpression>
+					<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "gris")]]></propertyExpression>
+					<expression><![CDATA[$F{rector_documento}]]></expression>
+				</element>
+				<element kind="line" x="347" y="32" width="200" height="1" forecolor="#16305C">
+					<printWhenExpression><![CDATA[!"".equals($F{rector_nombre}) && "".equals($F{auxiliar_nombre}) && !"".equals($F{director_nombre})]]></printWhenExpression>
+					<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "acento")]]></propertyExpression>
+				</element>
+				<element kind="textField" x="310" y="35" width="274" height="12" fontName="DejaVu Sans" fontSize="9" forecolor="#16305C" hTextAlign="Center" vTextAlign="Top" bold="true" blankWhenNull="true">
+					<printWhenExpression><![CDATA[!"".equals($F{rector_nombre}) && "".equals($F{auxiliar_nombre}) && !"".equals($F{director_nombre})]]></printWhenExpression>
+					<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "titulo")]]></propertyExpression>
+					<expression><![CDATA[$F{director_nombre}]]></expression>
+				</element>
+				<element kind="staticText" x="310" y="47" width="274" height="11" fontName="DejaVu Sans" fontSize="7" forecolor="#5A6B85" hTextAlign="Center" vTextAlign="Middle">
+					<printWhenExpression><![CDATA[!"".equals($F{rector_nombre}) && "".equals($F{auxiliar_nombre}) && !"".equals($F{director_nombre})]]></printWhenExpression>
+					<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "gris")]]></propertyExpression>
+					<text><![CDATA[Director(a) de grupo]]></text>
+				</element>
+				<element kind="textField" x="310" y="58" width="274" height="11" fontName="DejaVu Sans" fontSize="7" forecolor="#5A6B85" hTextAlign="Center" vTextAlign="Top" blankWhenNull="true">
+					<printWhenExpression><![CDATA[(!"".equals($F{rector_nombre}) && "".equals($F{auxiliar_nombre}) && !"".equals($F{director_nombre})) && !"".equals($F{director_documento})]]></printWhenExpression>
+					<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "gris")]]></propertyExpression>
+					<expression><![CDATA[$F{director_documento}]]></expression>
+				</element>
+				<element kind="line" x="65" y="32" width="200" height="1" forecolor="#16305C">
+					<printWhenExpression><![CDATA["".equals($F{rector_nombre}) && !"".equals($F{auxiliar_nombre}) && !"".equals($F{director_nombre})]]></printWhenExpression>
+					<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "acento")]]></propertyExpression>
+				</element>
+				<element kind="textField" x="28" y="35" width="274" height="12" fontName="DejaVu Sans" fontSize="9" forecolor="#16305C" hTextAlign="Center" vTextAlign="Top" bold="true" blankWhenNull="true">
+					<printWhenExpression><![CDATA["".equals($F{rector_nombre}) && !"".equals($F{auxiliar_nombre}) && !"".equals($F{director_nombre})]]></printWhenExpression>
+					<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "titulo")]]></propertyExpression>
+					<expression><![CDATA[$F{auxiliar_nombre}]]></expression>
+				</element>
+				<element kind="staticText" x="28" y="47" width="274" height="11" fontName="DejaVu Sans" fontSize="7" forecolor="#5A6B85" hTextAlign="Center" vTextAlign="Middle">
+					<printWhenExpression><![CDATA["".equals($F{rector_nombre}) && !"".equals($F{auxiliar_nombre}) && !"".equals($F{director_nombre})]]></printWhenExpression>
+					<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "gris")]]></propertyExpression>
+					<text><![CDATA[Auxiliar administrativo(a)]]></text>
+				</element>
+				<element kind="textField" x="28" y="58" width="274" height="11" fontName="DejaVu Sans" fontSize="7" forecolor="#5A6B85" hTextAlign="Center" vTextAlign="Top" blankWhenNull="true">
+					<printWhenExpression><![CDATA[("".equals($F{rector_nombre}) && !"".equals($F{auxiliar_nombre}) && !"".equals($F{director_nombre})) && !"".equals($F{auxiliar_documento})]]></printWhenExpression>
+					<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "gris")]]></propertyExpression>
+					<expression><![CDATA[$F{auxiliar_documento}]]></expression>
+				</element>
+				<element kind="line" x="347" y="32" width="200" height="1" forecolor="#16305C">
+					<printWhenExpression><![CDATA["".equals($F{rector_nombre}) && !"".equals($F{auxiliar_nombre}) && !"".equals($F{director_nombre})]]></printWhenExpression>
+					<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "acento")]]></propertyExpression>
+				</element>
+				<element kind="textField" x="310" y="35" width="274" height="12" fontName="DejaVu Sans" fontSize="9" forecolor="#16305C" hTextAlign="Center" vTextAlign="Top" bold="true" blankWhenNull="true">
+					<printWhenExpression><![CDATA["".equals($F{rector_nombre}) && !"".equals($F{auxiliar_nombre}) && !"".equals($F{director_nombre})]]></printWhenExpression>
+					<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "titulo")]]></propertyExpression>
+					<expression><![CDATA[$F{director_nombre}]]></expression>
+				</element>
+				<element kind="staticText" x="310" y="47" width="274" height="11" fontName="DejaVu Sans" fontSize="7" forecolor="#5A6B85" hTextAlign="Center" vTextAlign="Middle">
+					<printWhenExpression><![CDATA["".equals($F{rector_nombre}) && !"".equals($F{auxiliar_nombre}) && !"".equals($F{director_nombre})]]></printWhenExpression>
+					<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "gris")]]></propertyExpression>
+					<text><![CDATA[Director(a) de grupo]]></text>
+				</element>
+				<element kind="textField" x="310" y="58" width="274" height="11" fontName="DejaVu Sans" fontSize="7" forecolor="#5A6B85" hTextAlign="Center" vTextAlign="Top" blankWhenNull="true">
+					<printWhenExpression><![CDATA[("".equals($F{rector_nombre}) && !"".equals($F{auxiliar_nombre}) && !"".equals($F{director_nombre})) && !"".equals($F{director_documento})]]></printWhenExpression>
+					<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "gris")]]></propertyExpression>
+					<expression><![CDATA[$F{director_documento}]]></expression>
+				</element>
+				<element kind="line" x="36" y="32" width="164" height="1" forecolor="#16305C">
+					<printWhenExpression><![CDATA[!"".equals($F{rector_nombre}) && !"".equals($F{auxiliar_nombre}) && !"".equals($F{director_nombre})]]></printWhenExpression>
+					<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "acento")]]></propertyExpression>
+				</element>
+				<element kind="textField" x="28" y="35" width="180" height="12" fontName="DejaVu Sans" fontSize="9" forecolor="#16305C" hTextAlign="Center" vTextAlign="Top" bold="true" blankWhenNull="true">
+					<printWhenExpression><![CDATA[!"".equals($F{rector_nombre}) && !"".equals($F{auxiliar_nombre}) && !"".equals($F{director_nombre})]]></printWhenExpression>
+					<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "titulo")]]></propertyExpression>
+					<expression><![CDATA[$F{rector_nombre}]]></expression>
+				</element>
+				<element kind="staticText" x="28" y="47" width="180" height="11" fontName="DejaVu Sans" fontSize="7" forecolor="#5A6B85" hTextAlign="Center" vTextAlign="Middle">
+					<printWhenExpression><![CDATA[!"".equals($F{rector_nombre}) && !"".equals($F{auxiliar_nombre}) && !"".equals($F{director_nombre})]]></printWhenExpression>
+					<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "gris")]]></propertyExpression>
+					<text><![CDATA[Rector(a)]]></text>
+				</element>
+				<element kind="textField" x="28" y="58" width="180" height="11" fontName="DejaVu Sans" fontSize="7" forecolor="#5A6B85" hTextAlign="Center" vTextAlign="Top" blankWhenNull="true">
+					<printWhenExpression><![CDATA[(!"".equals($F{rector_nombre}) && !"".equals($F{auxiliar_nombre}) && !"".equals($F{director_nombre})) && !"".equals($F{rector_documento})]]></printWhenExpression>
+					<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "gris")]]></propertyExpression>
+					<expression><![CDATA[$F{rector_documento}]]></expression>
+				</element>
+				<element kind="line" x="224" y="32" width="164" height="1" forecolor="#16305C">
+					<printWhenExpression><![CDATA[!"".equals($F{rector_nombre}) && !"".equals($F{auxiliar_nombre}) && !"".equals($F{director_nombre})]]></printWhenExpression>
+					<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "acento")]]></propertyExpression>
+				</element>
+				<element kind="textField" x="216" y="35" width="180" height="12" fontName="DejaVu Sans" fontSize="9" forecolor="#16305C" hTextAlign="Center" vTextAlign="Top" bold="true" blankWhenNull="true">
+					<printWhenExpression><![CDATA[!"".equals($F{rector_nombre}) && !"".equals($F{auxiliar_nombre}) && !"".equals($F{director_nombre})]]></printWhenExpression>
+					<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "titulo")]]></propertyExpression>
+					<expression><![CDATA[$F{auxiliar_nombre}]]></expression>
+				</element>
+				<element kind="staticText" x="216" y="47" width="180" height="11" fontName="DejaVu Sans" fontSize="7" forecolor="#5A6B85" hTextAlign="Center" vTextAlign="Middle">
+					<printWhenExpression><![CDATA[!"".equals($F{rector_nombre}) && !"".equals($F{auxiliar_nombre}) && !"".equals($F{director_nombre})]]></printWhenExpression>
+					<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "gris")]]></propertyExpression>
+					<text><![CDATA[Auxiliar administrativo(a)]]></text>
+				</element>
+				<element kind="textField" x="216" y="58" width="180" height="11" fontName="DejaVu Sans" fontSize="7" forecolor="#5A6B85" hTextAlign="Center" vTextAlign="Top" blankWhenNull="true">
+					<printWhenExpression><![CDATA[(!"".equals($F{rector_nombre}) && !"".equals($F{auxiliar_nombre}) && !"".equals($F{director_nombre})) && !"".equals($F{auxiliar_documento})]]></printWhenExpression>
+					<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "gris")]]></propertyExpression>
+					<expression><![CDATA[$F{auxiliar_documento}]]></expression>
+				</element>
+				<element kind="line" x="412" y="32" width="164" height="1" forecolor="#16305C">
+					<printWhenExpression><![CDATA[!"".equals($F{rector_nombre}) && !"".equals($F{auxiliar_nombre}) && !"".equals($F{director_nombre})]]></printWhenExpression>
+					<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "acento")]]></propertyExpression>
+				</element>
+				<element kind="textField" x="404" y="35" width="180" height="12" fontName="DejaVu Sans" fontSize="9" forecolor="#16305C" hTextAlign="Center" vTextAlign="Top" bold="true" blankWhenNull="true">
+					<printWhenExpression><![CDATA[!"".equals($F{rector_nombre}) && !"".equals($F{auxiliar_nombre}) && !"".equals($F{director_nombre})]]></printWhenExpression>
+					<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "titulo")]]></propertyExpression>
+					<expression><![CDATA[$F{director_nombre}]]></expression>
+				</element>
+				<element kind="staticText" x="404" y="47" width="180" height="11" fontName="DejaVu Sans" fontSize="7" forecolor="#5A6B85" hTextAlign="Center" vTextAlign="Middle">
+					<printWhenExpression><![CDATA[!"".equals($F{rector_nombre}) && !"".equals($F{auxiliar_nombre}) && !"".equals($F{director_nombre})]]></printWhenExpression>
+					<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "gris")]]></propertyExpression>
+					<text><![CDATA[Director(a) de grupo]]></text>
+				</element>
+				<element kind="textField" x="404" y="58" width="180" height="11" fontName="DejaVu Sans" fontSize="7" forecolor="#5A6B85" hTextAlign="Center" vTextAlign="Top" blankWhenNull="true">
+					<printWhenExpression><![CDATA[(!"".equals($F{rector_nombre}) && !"".equals($F{auxiliar_nombre}) && !"".equals($F{director_nombre})) && !"".equals($F{director_documento})]]></printWhenExpression>
+					<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "gris")]]></propertyExpression>
+					<expression><![CDATA[$F{director_documento}]]></expression>
+				</element>
+			</band>
+		</groupFooter>
+	</group>
+	<group name="seccion" minHeightToStartNewPage="90">
+		<expression><![CDATA[$F{seccion}]]></expression>
+		<groupHeader>
+			<band height="26" splitType="Prevent">
+				<printWhenExpression><![CDATA["1".equals($F{seccion})]]></printWhenExpression>
+				<element kind="frame" x="24" y="0" width="330" height="22">
+					<element kind="rectangle" x="0" y="0" width="330" height="22" backcolor="#16305C" mode="Opaque" radius="11" stretchType="ContainerHeight">
+						<propertyExpression name="net.sf.jasperreports.style.backcolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "acento")]]></propertyExpression>
+						<pen lineWidth="0.0"/>
+					</element>
+					<element kind="staticText" x="7" y="2" width="18" height="18" fontName="Material Icons" fontSize="16" forecolor="#FFFFFF" hTextAlign="Center" vTextAlign="Middle">
+						<text><![CDATA[]]></text>
+					</element>
+					<element kind="staticText" x="30" y="0" width="290" height="22" fontName="DejaVu Sans" fontSize="10" forecolor="#FFFFFF" hTextAlign="Left" vTextAlign="Middle" bold="true">
+						<text><![CDATA[CONSOLIDADO DE CALIFICACIONES]]></text>
+					</element>
+				</element>
+			</band>
+			<band height="48" splitType="Prevent">
+				<printWhenExpression><![CDATA["2".equals($F{seccion})]]></printWhenExpression>
+				<element kind="frame" x="24" y="0" width="330" height="22">
+					<element kind="rectangle" x="0" y="0" width="330" height="22" backcolor="#16305C" mode="Opaque" radius="11" stretchType="ContainerHeight">
+						<propertyExpression name="net.sf.jasperreports.style.backcolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "acento")]]></propertyExpression>
+						<pen lineWidth="0.0"/>
+					</element>
+					<element kind="staticText" x="7" y="2" width="18" height="18" fontName="Material Icons" fontSize="16" forecolor="#FFFFFF" hTextAlign="Center" vTextAlign="Middle">
+						<text><![CDATA[]]></text>
+					</element>
+					<element kind="staticText" x="30" y="0" width="290" height="22" fontName="DejaVu Sans" fontSize="10" forecolor="#FFFFFF" hTextAlign="Left" vTextAlign="Middle" bold="true">
+						<text><![CDATA[DETALLE DE CALIFICACIONES]]></text>
+					</element>
+				</element>
+				<element kind="rectangle" x="24" y="28" width="565" height="18" backcolor="#E8EEF7" mode="Opaque">
+					<printWhenExpression><![CDATA["2".equals($F{seccion})]]></printWhenExpression>
+					<propertyExpression name="net.sf.jasperreports.style.backcolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "acento")]]></propertyExpression>
+					<pen lineWidth="0.0"/>
+				</element>
+				<element kind="staticText" x="30" y="28" width="249" height="18" fontName="DejaVu Sans" fontSize="8" forecolor="#FFFFFF" hTextAlign="Left" vTextAlign="Middle" bold="true">
+					<printWhenExpression><![CDATA["2".equals($F{seccion})]]></printWhenExpression>
+					<text><![CDATA[Area / Asignatura]]></text>
+				</element>
+				<element kind="staticText" x="283" y="28" width="64" height="18" fontName="DejaVu Sans" fontSize="8" forecolor="#FFFFFF" hTextAlign="Center" vTextAlign="Middle" bold="true">
+					<printWhenExpression><![CDATA["2".equals($F{seccion})]]></printWhenExpression>
+					<text><![CDATA[Nota]]></text>
+				</element>
+				<element kind="staticText" x="347" y="28" width="112" height="18" fontName="DejaVu Sans" fontSize="8" forecolor="#FFFFFF" hTextAlign="Center" vTextAlign="Middle" bold="true">
+					<printWhenExpression><![CDATA["2".equals($F{seccion})]]></printWhenExpression>
+					<text><![CDATA[Desempeño]]></text>
+				</element>
+				<element kind="staticText" x="459" y="28" width="34" height="18" fontName="DejaVu Sans" fontSize="8" forecolor="#FFFFFF" hTextAlign="Center" vTextAlign="Middle" bold="true">
+					<printWhenExpression><![CDATA["2".equals($F{seccion})]]></printWhenExpression>
+					<text><![CDATA[PIA]]></text>
+				</element>
+				<element kind="staticText" x="493" y="28" width="32" height="18" fontName="DejaVu Sans" fontSize="8" forecolor="#FFFFFF" hTextAlign="Center" vTextAlign="Middle" bold="true">
+					<printWhenExpression><![CDATA["2".equals($F{seccion})]]></printWhenExpression>
+					<text><![CDATA[I.H.]]></text>
+				</element>
+				<element kind="staticText" x="525" y="28" width="30" height="18" fontName="DejaVu Sans" fontSize="8" forecolor="#FFFFFF" hTextAlign="Center" vTextAlign="Middle" bold="true">
+					<printWhenExpression><![CDATA["2".equals($F{seccion})]]></printWhenExpression>
+					<text><![CDATA[I.I.]]></text>
+				</element>
+				<element kind="staticText" x="555" y="28" width="30" height="18" fontName="DejaVu Sans" fontSize="8" forecolor="#FFFFFF" hTextAlign="Center" vTextAlign="Middle" bold="true">
+					<printWhenExpression><![CDATA["2".equals($F{seccion})]]></printWhenExpression>
+					<text><![CDATA[I.J.]]></text>
+				</element>
+			</band>
+			<band height="26" splitType="Prevent">
+				<printWhenExpression><![CDATA["3".equals($F{seccion})]]></printWhenExpression>
+				<element kind="frame" x="24" y="0" width="330" height="22">
+					<element kind="rectangle" x="0" y="0" width="330" height="22" backcolor="#16305C" mode="Opaque" radius="11" stretchType="ContainerHeight">
+						<propertyExpression name="net.sf.jasperreports.style.backcolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "acento")]]></propertyExpression>
+						<pen lineWidth="0.0"/>
+					</element>
+					<element kind="staticText" x="7" y="2" width="18" height="18" fontName="Material Icons" fontSize="16" forecolor="#FFFFFF" hTextAlign="Center" vTextAlign="Middle">
+						<text><![CDATA[]]></text>
+					</element>
+					<element kind="staticText" x="30" y="0" width="290" height="22" fontName="DejaVu Sans" fontSize="10" forecolor="#FFFFFF" hTextAlign="Left" vTextAlign="Middle" bold="true">
+						<text><![CDATA[LISTADO DE COMPORTAMIENTOS]]></text>
+					</element>
+				</element>
+			</band>
+		</groupHeader>
+		<groupFooter>
+			<band height="44" splitType="Prevent">
+				<printWhenExpression><![CDATA["1".equals($F{seccion})]]></printWhenExpression>
+				<element kind="crosstab" x="24" y="0" width="565" height="34">
+<property name="sso.columnas.campo" value="periodo_orden"/>
+<property name="sso.columnas.filtro" value="seccion=1"/>
+<property name="sso.columnas.max" value="60"/>
+<property name="sso.fila.elastica" value="nombre"/>
+<property name="sso.fila.minimo" value="200"/>
+<dataset resetType="Group" resetGroup="seccion">
+<incrementWhenExpression><![CDATA["1".equals($F{seccion})]]></incrementWhenExpression>
+</dataset>
+<parameter name="fondo" class="java.io.InputStream"><expression><![CDATA[$F{fondo_archivo}]]></expression></parameter>
+<headerCell>
+				<element kind="rectangle" x="0" y="0" width="299" height="18" backcolor="#E8EEF7" mode="Opaque">
+					<propertyExpression name="net.sf.jasperreports.style.backcolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($P{fondo}, "acento")]]></propertyExpression>
+					<pen lineWidth="0.0"/>
+				</element>
+				<element kind="staticText" x="6" y="0" width="259" height="18" fontName="DejaVu Sans" fontSize="8" forecolor="#FFFFFF" hTextAlign="Left" vTextAlign="Middle" bold="true">
+					<text><![CDATA[Area / Asignatura]]></text>
+				</element>
+				<element kind="staticText" x="265" y="0" width="34" height="18" fontName="DejaVu Sans" fontSize="8" forecolor="#FFFFFF" hTextAlign="Center" vTextAlign="Middle" bold="true">
+					<text><![CDATA[I.H.]]></text>
+				</element>
+</headerCell>
+<rowGroup name="fila" width="0">
+<bucket class="java.lang.Integer"><expression><![CDATA[("".equals($F{orden}) ? Integer.valueOf(0) : Integer.valueOf($F{orden}))]]></expression></bucket>
+<header>
+</header>
+<totalHeader/>
+</rowGroup>
+<rowGroup name="tipo" width="0">
+<bucket class="java.lang.String"><expression><![CDATA[$F{tipo}]]></expression></bucket>
+<header>
+</header>
+<totalHeader/>
+</rowGroup>
+<rowGroup name="nombre" width="265">
+<bucket class="java.lang.String"><expression><![CDATA["AREA".equals($F{tipo}) ? $F{area_nombre} : $F{asignatura_nombre}]]></expression></bucket>
+<header>
+				<element kind="rectangle" x="0" y="0" width="265" height="16" backcolor="#E8EEF7" mode="Opaque">
+					<printWhenExpression><![CDATA["AREA".equals($V{tipo})]]></printWhenExpression>
+					<propertyExpression name="net.sf.jasperreports.style.backcolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($P{fondo}, "panel")]]></propertyExpression>
+					<pen lineWidth="0.0"/>
+				</element>
+				<element kind="line" x="0" y="15" width="265" height="1" forecolor="#9FB3D1">
+					<printWhenExpression><![CDATA[!"AREA".equals($V{tipo})]]></printWhenExpression>
+					<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($P{fondo}, "borde")]]></propertyExpression>
+				</element>
+				<element kind="textField" x="6" y="0" width="257" height="16" fontName="DejaVu Sans" fontSize="8.5" forecolor="#16305C" hTextAlign="Left" vTextAlign="Middle" bold="true" blankWhenNull="true" textAdjust="ScaleFont">
+					<printWhenExpression><![CDATA["AREA".equals($V{tipo})]]></printWhenExpression>
+					<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($P{fondo}, "texto")]]></propertyExpression>
+					<expression><![CDATA[$V{nombre}]]></expression>
+				</element>
+				<element kind="textField" x="16" y="0" width="247" height="16" fontName="DejaVu Sans" fontSize="8.5" forecolor="#16305C" hTextAlign="Left" vTextAlign="Middle" blankWhenNull="true" textAdjust="ScaleFont">
+					<printWhenExpression><![CDATA[!"AREA".equals($V{tipo})]]></printWhenExpression>
+					<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($P{fondo}, "texto")]]></propertyExpression>
+					<expression><![CDATA[$V{nombre}]]></expression>
+				</element>
+</header>
+<totalHeader/>
+</rowGroup>
+<rowGroup name="ih" width="34">
+<bucket class="java.lang.String"><expression><![CDATA[$F{intensidad}]]></expression></bucket>
+<header>
+				<element kind="rectangle" x="0" y="0" width="34" height="16" backcolor="#E8EEF7" mode="Opaque">
+					<printWhenExpression><![CDATA["AREA".equals($V{tipo})]]></printWhenExpression>
+					<propertyExpression name="net.sf.jasperreports.style.backcolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($P{fondo}, "panel")]]></propertyExpression>
+					<pen lineWidth="0.0"/>
+				</element>
+				<element kind="line" x="0" y="15" width="34" height="1" forecolor="#9FB3D1">
+					<printWhenExpression><![CDATA[!"AREA".equals($V{tipo})]]></printWhenExpression>
+					<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($P{fondo}, "borde")]]></propertyExpression>
+				</element>
+				<element kind="textField" x="0" y="0" width="34" height="16" fontName="DejaVu Sans" fontSize="8.5" forecolor="#16305C" hTextAlign="Center" vTextAlign="Middle" blankWhenNull="true">
+					<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($P{fondo}, "texto")]]></propertyExpression>
+					<expression><![CDATA[$V{ih}]]></expression>
+				</element>
+</header>
+<totalHeader/>
+</rowGroup>
+<columnGroup name="periodo" height="0">
+<bucket class="java.lang.Integer"><expression><![CDATA[("".equals($F{periodo_orden}) ? Integer.valueOf(0) : Integer.valueOf($F{periodo_orden}))]]></expression></bucket>
+<header>
+</header>
+<totalHeader/>
+</columnGroup>
+<columnGroup name="abreviacion" height="18">
+<bucket class="java.lang.String"><expression><![CDATA[$F{periodo_abreviacion}]]></expression></bucket>
+<header>
+				<element kind="rectangle" x="0" y="0" width="38" height="18" backcolor="#E8EEF7" mode="Opaque">
+					<propertyExpression name="net.sf.jasperreports.style.backcolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($P{fondo}, "acento")]]></propertyExpression>
+					<pen lineWidth="0.0"/>
+				</element>
+				<element kind="textField" x="0" y="0" width="38" height="18" fontName="DejaVu Sans" fontSize="8.5" forecolor="#FFFFFF" hTextAlign="Center" vTextAlign="Middle" bold="true" blankWhenNull="true">
+					<expression><![CDATA[$V{abreviacion}]]></expression>
+				</element>
+</header>
+<totalHeader/>
+</columnGroup>
+<measure name="nota" calculation="First" class="java.lang.String">
+<expression><![CDATA[$F{nota}]]></expression>
+</measure>
+<measure name="original" calculation="First" class="java.lang.String">
+<expression><![CDATA[$F{nota_original}]]></expression>
+</measure>
+<cell width="38" height="16">
+<contents>
+				<element kind="rectangle" x="0" y="0" width="38" height="16" backcolor="#E8EEF7" mode="Opaque">
+					<printWhenExpression><![CDATA["AREA".equals($V{tipo})]]></printWhenExpression>
+					<propertyExpression name="net.sf.jasperreports.style.backcolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($P{fondo}, "panel")]]></propertyExpression>
+					<pen lineWidth="0.0"/>
+				</element>
+				<element kind="line" x="0" y="15" width="38" height="1" forecolor="#9FB3D1">
+					<printWhenExpression><![CDATA[!"AREA".equals($V{tipo})]]></printWhenExpression>
+					<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($P{fondo}, "borde")]]></propertyExpression>
+				</element>
+				<element kind="textField" x="0" y="0" width="38" height="16" fontName="DejaVu Sans" fontSize="8.5" forecolor="#16305C" hTextAlign="Center" vTextAlign="Middle" bold="true" blankWhenNull="true">
+					<printWhenExpression><![CDATA["".equals($V{original}) && "AREA".equals($V{tipo})]]></printWhenExpression>
+					<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($P{fondo}, "texto")]]></propertyExpression>
+					<expression><![CDATA[$V{nota}]]></expression>
+				</element>
+				<element kind="textField" x="0" y="0" width="38" height="16" fontName="DejaVu Sans" fontSize="8.5" forecolor="#16305C" hTextAlign="Center" vTextAlign="Middle" blankWhenNull="true">
+					<printWhenExpression><![CDATA["".equals($V{original}) && !"AREA".equals($V{tipo})]]></printWhenExpression>
+					<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($P{fondo}, "texto")]]></propertyExpression>
+					<expression><![CDATA[$V{nota}]]></expression>
+				</element>
+				<element kind="textField" x="0" y="0" width="38" height="8" fontName="DejaVu Sans" fontSize="6.5" forecolor="#16305C" hTextAlign="Center" vTextAlign="Top" blankWhenNull="true">
+					<printWhenExpression><![CDATA[!"".equals($V{original})]]></printWhenExpression>
+					<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($P{fondo}, "texto")]]></propertyExpression>
+					<expression><![CDATA["R " + $V{nota}]]></expression>
+				</element>
+				<element kind="textField" x="0" y="8" width="38" height="8" fontName="DejaVu Sans" fontSize="6.5" forecolor="#16305C" hTextAlign="Center" vTextAlign="Top" blankWhenNull="true">
+					<printWhenExpression><![CDATA[!"".equals($V{original})]]></printWhenExpression>
+					<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($P{fondo}, "gris")]]></propertyExpression>
+					<expression><![CDATA["C " + $V{original}]]></expression>
+				</element>
+</contents>
+</cell>
+				</element>
+			</band>
+			<band height="10" splitType="Prevent">
+				<printWhenExpression><![CDATA[!"4".equals($F{seccion})]]></printWhenExpression>
+			</band>
+		</groupFooter>
+	</group>
+
+	<background height="894" splitType="Prevent">
+			<element kind="image" x="0" y="0" width="613" height="894" scaleImage="FillFrame" hImageAlign="Center" vImageAlign="Middle" onErrorType="Blank" usingCache="true">
+			<expression><![CDATA[$F{fondo_archivo}]]></expression>
+		</element>
+	</background>
+	<pageHeader height="114" splitType="Prevent">
+			<element kind="rectangle" x="24" y="8" width="88" height="88" backcolor="#FFFFFF" mode="Opaque" radius="44">
+			<printWhenExpression><![CDATA[$F{escudo_archivo} != null]]></printWhenExpression>
+			<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "acento")]]></propertyExpression>
+			<pen lineWidth="1.5"/>
+		</element>
+		<element kind="image" x="34" y="18" width="68" height="68" scaleImage="RetainShape" hImageAlign="Center" vImageAlign="Middle" onErrorType="Blank" usingCache="true">
+			<printWhenExpression><![CDATA[$F{escudo_archivo} != null]]></printWhenExpression>
+			<expression><![CDATA[$F{escudo_archivo}]]></expression>
+		</element>
+		<element kind="textField" x="124" y="4" width="221" height="54" fontName="DejaVu Sans" fontSize="18" forecolor="#16305C" hTextAlign="Left" vTextAlign="Middle" bold="true" blankWhenNull="true" textAdjust="ScaleFont">
+			<printWhenExpression><![CDATA[$F{escudo_archivo} != null]]></printWhenExpression>
+			<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "franja")]]></propertyExpression>
+			<expression><![CDATA[$F{ee_nombre}]]></expression>
+		</element>
+		<element kind="textField" x="124" y="77" width="221" height="13" fontName="DejaVu Sans" fontSize="8.5" forecolor="#16305C" hTextAlign="Left" vTextAlign="Middle" blankWhenNull="true">
+			<printWhenExpression><![CDATA[$F{escudo_archivo} != null]]></printWhenExpression>
+			<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "banda")]]></propertyExpression>
+			<expression><![CDATA["DANE: " + $F{ee_dane} + ("".equals($F{ee_nit}) ? "" : "   \u00b7   NIT: " + $F{ee_nit})]]></expression>
+		</element>
+		<element kind="textField" x="124" y="90" width="221" height="13" fontName="DejaVu Sans" fontSize="8.5" forecolor="#16305C" hTextAlign="Left" vTextAlign="Middle" bold="true" blankWhenNull="true">
+			<printWhenExpression><![CDATA[$F{escudo_archivo} != null]]></printWhenExpression>
+			<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "banda")]]></propertyExpression>
+			<expression><![CDATA[($F{ciudad} + ("".equals($F{departamento}) ? "" : " - " + $F{departamento})).toUpperCase()]]></expression>
+		</element>
+		<element kind="textField" x="24" y="4" width="321" height="54" fontName="DejaVu Sans" fontSize="18" forecolor="#16305C" hTextAlign="Left" vTextAlign="Middle" bold="true" blankWhenNull="true" textAdjust="ScaleFont">
+			<printWhenExpression><![CDATA[$F{escudo_archivo} == null]]></printWhenExpression>
+			<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "franja")]]></propertyExpression>
+			<expression><![CDATA[$F{ee_nombre}]]></expression>
+		</element>
+		<element kind="textField" x="24" y="77" width="321" height="13" fontName="DejaVu Sans" fontSize="8.5" forecolor="#16305C" hTextAlign="Left" vTextAlign="Middle" blankWhenNull="true">
+			<printWhenExpression><![CDATA[$F{escudo_archivo} == null]]></printWhenExpression>
+			<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "banda")]]></propertyExpression>
+			<expression><![CDATA["DANE: " + $F{ee_dane} + ("".equals($F{ee_nit}) ? "" : "   \u00b7   NIT: " + $F{ee_nit})]]></expression>
+		</element>
+		<element kind="textField" x="24" y="90" width="321" height="13" fontName="DejaVu Sans" fontSize="8.5" forecolor="#16305C" hTextAlign="Left" vTextAlign="Middle" bold="true" blankWhenNull="true">
+			<printWhenExpression><![CDATA[$F{escudo_archivo} == null]]></printWhenExpression>
+			<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "banda")]]></propertyExpression>
+			<expression><![CDATA[($F{ciudad} + ("".equals($F{departamento}) ? "" : " - " + $F{departamento})).toUpperCase()]]></expression>
+		</element>
+		<element kind="textField" x="409" y="37" width="180" height="12" fontName="DejaVu Sans" fontSize="8.5" forecolor="#16305C" hTextAlign="Right" vTextAlign="Middle" bold="true" blankWhenNull="true">
+			<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "texto")]]></propertyExpression>
+			<expression><![CDATA[$P{GENERADO}.replace(" a las ", " ").replaceFirst(" 0(\\d:)", " $1")]]></expression>
+		</element>
+		<element kind="textField" x="24" y="105" width="360" height="9" fontName="DejaVu Sans" fontSize="7" forecolor="#16305C" hTextAlign="Left" vTextAlign="Top" bold="true" blankWhenNull="true">
+			<printWhenExpression><![CDATA[$V{PAGE_NUMBER} > 1]]></printWhenExpression>
+			<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "gris")]]></propertyExpression>
+			<expression><![CDATA[$F{estudiante} + " (continuacion)"]]></expression>
+		</element>
+	</pageHeader>
+	<detail>
+		<band height="15" splitType="Prevent">
+			<printWhenExpression><![CDATA["2".equals($F{seccion}) && "AREA".equals($F{tipo})]]></printWhenExpression>
+			<element kind="rectangle" x="24" y="0" width="565" height="15" backcolor="#E8EEF7" mode="Opaque" stretchType="ContainerHeight">
+				<propertyExpression name="net.sf.jasperreports.style.backcolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "panel")]]></propertyExpression>
+				<pen lineWidth="0.0"/>
+			</element>
+			<element kind="textField" x="30" y="0" width="249" height="15" fontName="DejaVu Sans" fontSize="8.5" forecolor="#16305C" hTextAlign="Left" vTextAlign="Middle" bold="true" blankWhenNull="true" textAdjust="ScaleFont">
+				<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "texto")]]></propertyExpression>
+				<expression><![CDATA[$F{area_nombre}]]></expression>
+			</element>
+			<element kind="textField" x="283" y="0" width="64" height="15" fontName="DejaVu Sans" fontSize="8.5" forecolor="#16305C" hTextAlign="Center" vTextAlign="Middle" bold="true" blankWhenNull="true" textAdjust="ScaleFont">
+				<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "texto")]]></propertyExpression>
+				<expression><![CDATA[$F{nota}]]></expression>
+			</element>
+			<element kind="textField" x="347" y="0" width="112" height="15" fontName="DejaVu Sans" fontSize="7.5" forecolor="#16305C" hTextAlign="Center" vTextAlign="Middle" bold="true" blankWhenNull="true" textAdjust="ScaleFont">
+				<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "texto")]]></propertyExpression>
+				<expression><![CDATA[$F{desempeno}]]></expression>
+			</element>
+			<element kind="textField" x="459" y="0" width="34" height="15" fontName="DejaVu Sans" fontSize="8.5" forecolor="#16305C" hTextAlign="Center" vTextAlign="Middle" bold="true" blankWhenNull="true" textAdjust="ScaleFont">
+				<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "texto")]]></propertyExpression>
+				<expression><![CDATA[$F{influencia}]]></expression>
+			</element>
+			<element kind="textField" x="493" y="0" width="32" height="15" fontName="DejaVu Sans" fontSize="8.5" forecolor="#16305C" hTextAlign="Center" vTextAlign="Middle" bold="true" blankWhenNull="true" textAdjust="ScaleFont">
+				<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "texto")]]></propertyExpression>
+				<expression><![CDATA[$F{intensidad}]]></expression>
+			</element>
+			<element kind="textField" x="525" y="0" width="30" height="15" fontName="DejaVu Sans" fontSize="8.5" forecolor="#16305C" hTextAlign="Center" vTextAlign="Middle" bold="true" blankWhenNull="true" textAdjust="ScaleFont">
+				<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "texto")]]></propertyExpression>
+				<expression><![CDATA[$F{inasistencias}]]></expression>
+			</element>
+			<element kind="textField" x="555" y="0" width="30" height="15" fontName="DejaVu Sans" fontSize="8.5" forecolor="#16305C" hTextAlign="Center" vTextAlign="Middle" bold="true" blankWhenNull="true" textAdjust="ScaleFont">
+				<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "texto")]]></propertyExpression>
+				<expression><![CDATA[$F{inasistencias_justificadas}]]></expression>
+			</element>
+		</band>
+		<band height="15" splitType="Prevent">
+			<printWhenExpression><![CDATA["2".equals($F{seccion}) && "ASIGNATURA".equals($F{tipo})]]></printWhenExpression>
+			<element kind="line" x="24" y="14" width="565" height="1" forecolor="#9FB3D1">
+				<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "borde")]]></propertyExpression>
+			</element>
+			<element kind="textField" x="40" y="0" width="239" height="15" fontName="DejaVu Sans" fontSize="8.5" forecolor="#16305C" hTextAlign="Left" vTextAlign="Middle" blankWhenNull="true" textAdjust="ScaleFont">
+				<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "texto")]]></propertyExpression>
+				<expression><![CDATA[$F{asignatura_nombre}]]></expression>
+			</element>
+			<element kind="textField" x="283" y="0" width="64" height="15" fontName="DejaVu Sans" fontSize="8.5" forecolor="#16305C" hTextAlign="Center" vTextAlign="Middle" bold="true" blankWhenNull="true" textAdjust="ScaleFont">
+				<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "texto")]]></propertyExpression>
+				<expression><![CDATA[("Si".equals($F{con_recuperacion}) && !"".equals($F{nota_original}) ? "C " + $F{nota_original} + "  R " + $F{nota} : $F{nota})]]></expression>
+			</element>
+			<element kind="textField" x="347" y="0" width="112" height="15" fontName="DejaVu Sans" fontSize="7.5" forecolor="#16305C" hTextAlign="Center" vTextAlign="Middle" blankWhenNull="true" textAdjust="ScaleFont">
+				<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "texto")]]></propertyExpression>
+				<expression><![CDATA[$F{desempeno}]]></expression>
+			</element>
+			<element kind="textField" x="459" y="0" width="34" height="15" fontName="DejaVu Sans" fontSize="8.5" forecolor="#16305C" hTextAlign="Center" vTextAlign="Middle" blankWhenNull="true" textAdjust="ScaleFont">
+				<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "texto")]]></propertyExpression>
+				<expression><![CDATA[$F{influencia}]]></expression>
+			</element>
+			<element kind="textField" x="493" y="0" width="32" height="15" fontName="DejaVu Sans" fontSize="8.5" forecolor="#16305C" hTextAlign="Center" vTextAlign="Middle" blankWhenNull="true" textAdjust="ScaleFont">
+				<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "texto")]]></propertyExpression>
+				<expression><![CDATA[$F{intensidad}]]></expression>
+			</element>
+			<element kind="textField" x="525" y="0" width="30" height="15" fontName="DejaVu Sans" fontSize="8.5" forecolor="#16305C" hTextAlign="Center" vTextAlign="Middle" blankWhenNull="true" textAdjust="ScaleFont">
+				<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "texto")]]></propertyExpression>
+				<expression><![CDATA[$F{inasistencias}]]></expression>
+			</element>
+			<element kind="textField" x="555" y="0" width="30" height="15" fontName="DejaVu Sans" fontSize="8.5" forecolor="#16305C" hTextAlign="Center" vTextAlign="Middle" blankWhenNull="true" textAdjust="ScaleFont">
+				<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "texto")]]></propertyExpression>
+				<expression><![CDATA[$F{inasistencias_justificadas}]]></expression>
+			</element>
+		</band>
+		<band height="13" splitType="Stretch">
+			<printWhenExpression><![CDATA["2".equals($F{seccion}) && "ASIGNATURA".equals($F{tipo}) && !"".equals($F{docentes})]]></printWhenExpression>
+			<element kind="textField" x="40" y="0" width="545" height="13" fontName="DejaVu Sans" fontSize="7.5" forecolor="#16305C" hTextAlign="Left" vTextAlign="Middle" blankWhenNull="true" textAdjust="StretchHeight">
+				<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "gris")]]></propertyExpression>
+				<expression><![CDATA["Docente: " + $F{docentes}]]></expression>
+			</element>
+		</band>
+		<band height="13" splitType="Stretch">
+			<printWhenExpression><![CDATA["2".equals($F{seccion}) && "LOGRO".equals($F{tipo})]]></printWhenExpression>
+			<element kind="textField" x="42" y="0" width="30" height="13" fontName="DejaVu Sans" fontSize="8" forecolor="#16305C" hTextAlign="Right" vTextAlign="Top" bold="true" blankWhenNull="true">
+				<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "acento")]]></propertyExpression>
+				<expression><![CDATA[$F{nota}]]></expression>
+			</element>
+			<element kind="textField" x="78" y="0" width="507" height="13" fontName="DejaVu Sans" fontSize="8" forecolor="#16305C" hTextAlign="Justified" vTextAlign="Top" blankWhenNull="true" textAdjust="StretchHeight">
+				<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "texto")]]></propertyExpression>
+				<expression><![CDATA[$F{texto}]]></expression>
+			</element>
+		</band>
+		<band height="40" splitType="Stretch">
+			<printWhenExpression><![CDATA["3".equals($F{seccion}) && "COMPORTAMIENTO".equals($F{tipo})]]></printWhenExpression>
+			<element kind="textField" x="28" y="2" width="70" height="12" fontName="DejaVu Sans" fontSize="8" forecolor="#16305C" hTextAlign="Left" vTextAlign="Top" bold="true" blankWhenNull="true">
+				<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "texto")]]></propertyExpression>
+				<expression><![CDATA[$F{comportamiento_fecha}]]></expression>
+			</element>
+			<element kind="textField" x="102" y="2" width="483" height="12" fontName="DejaVu Sans" fontSize="8.5" forecolor="#16305C" hTextAlign="Left" vTextAlign="Top" bold="true" blankWhenNull="true">
+				<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "acento")]]></propertyExpression>
+				<expression><![CDATA[$F{comportamiento_tipo}]]></expression>
+			</element>
+			<element kind="textField" x="102" y="14" width="483" height="12" fontName="DejaVu Sans" fontSize="8.5" forecolor="#16305C" hTextAlign="Left" vTextAlign="Top" bold="true" blankWhenNull="true" textAdjust="StretchHeight">
+				<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "titulo")]]></propertyExpression>
+				<expression><![CDATA[$F{asignatura_nombre}]]></expression>
+			</element>
+			<element kind="textField" x="102" y="26" width="483" height="12" fontName="DejaVu Sans" fontSize="8" forecolor="#16305C" hTextAlign="Justified" vTextAlign="Top" blankWhenNull="true" textAdjust="StretchHeight" positionType="Float">
+				<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "texto")]]></propertyExpression>
+				<expression><![CDATA[$F{texto}]]></expression>
+			</element>
+		</band>
+		<band height="13" splitType="Prevent">
+			<printWhenExpression><![CDATA["3".equals($F{seccion}) && "COMPORTAMIENTO".equals($F{tipo}) && !"".equals($F{comportamiento_funcionario})]]></printWhenExpression>
+			<element kind="textField" x="102" y="0" width="483" height="12" fontName="DejaVu Sans" fontSize="7.5" forecolor="#16305C" hTextAlign="Left" vTextAlign="Top" blankWhenNull="true">
+				<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "gris")]]></propertyExpression>
+				<expression><![CDATA[$F{comportamiento_funcionario}]]></expression>
+			</element>
+		</band>
+	</detail>
+	<pageFooter height="60" splitType="Prevent">
+			<element kind="textField" x="557" y="38" width="16" height="12" fontName="DejaVu Sans" fontSize="7.5" forecolor="#FFFFFF" hTextAlign="Right" vTextAlign="Middle" bold="true" blankWhenNull="true">
+			<expression><![CDATA["" + $V{PAGE_NUMBER}]]></expression>
+		</element>
+		<element kind="textField" x="573" y="38" width="30" height="12" fontName="DejaVu Sans" fontSize="7.5" forecolor="#FFFFFF" hTextAlign="Left" vTextAlign="Middle" bold="true" blankWhenNull="true" evaluationTime="Group" evaluationGroup="boletin">
+			<expression><![CDATA[" de " + $V{PAGE_NUMBER}]]></expression>
+		</element>
+	</pageFooter>
+</jasperReport>
