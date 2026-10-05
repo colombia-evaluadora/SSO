@@ -544,6 +544,21 @@ reporting:
         evidencias: Evidencias
 
     # -----------------------------------------------------------------
+    # Boletin: UN SOLO ENDPOINT para todos los niveles,
+    # POST /reportes/boletin?nivel=<nivel>. No tiene datos propios: el
+    # query param elige el reporte que lo atiende, porque preescolar y los
+    # demas niveles salen de funciones y plantillas distintas. Sin nivel, o
+    # con uno desconocido, responde 400 con los valores validos.
+    # -----------------------------------------------------------------
+    boletin:
+      title: Boletin
+      variant-param: nivel
+      variants:
+        preescolar: boletin-preescolar
+        primaria: boletin-notas
+        secundaria: boletin-notas
+        media: boletin-notas
+    # -----------------------------------------------------------------
     # Boletin de preescolar (V466). path = fila
     # 'eval-col-informes-boletin-preescolar-001':
     # fn_informe_boletin_preescolar, que delega gate y alcance en la
