@@ -1,7 +1,7 @@
 # Mapa del dominio
 
 **Generado** por `python scripts/migration-analysis mapa` — no editar a mano.
-Estado: 466 migraciones (V1–V546), 1007 funciones vivas, 58 endpoints vivos. Ultima generacion: 2026-10-05.
+Estado: 463 migraciones (V1–V546), 1007 funciones vivas, 58 endpoints vivos. Ultima generacion: 2026-10-05.
 
 Para una **funcion**, la migracion dueña es la que hay que editar: es su ultima escritura viva, no la que la creo.
 
@@ -419,7 +419,7 @@ Las secciones son las categorias funcionales de `scripts/migration-analysis/anal
 | `academico_test.fn_actividad_validar_sin_recuperaciones` | 1 | V482 | — |
 | `academico_test.fn_asignatura_definitiva_anual_calcular_interno` | 2 | V496.24 | — |
 | `academico_test.fn_asignatura_definitiva_anual_interno` | 2 | V496.24 | V536 |
-| `academico_test.fn_asignatura_definitiva_proyectada_periodo` | 3 | V496.23 | V346, V408, V410, V428, V469.3, V490… |
+| `academico_test.fn_asignatura_definitiva_proyectada_periodo` | 3 | V496.23 | V346, V408, V428, V469.3, V490, V496.24… |
 | `academico_test.fn_asignatura_plan_calculo_definitiva_modo` | 1 | V239 | V333, V492.1, V496.23 |
 | `academico_test.fn_criterio_evaluacion_porcentaje_maximo_recuperacion` | 1 | V239 | V227, V496.18, V496.19 |
 | `academico_test.fn_planilla_actividades_universo` | 6 | V469.3 | — |
@@ -678,7 +678,7 @@ Las secciones son las categorias funcionales de `scripts/migration-analysis/anal
 | `academico_test.fn_actividad_disponibles_listar` | 5 | V223 | V492.4 |
 | `academico_test.fn_actividad_eliminar` | 2 | V496.3 | V246, V496.4 |
 | `academico_test.fn_actividad_eliminar_interno` | 2 | V482 | V496.3 |
-| `academico_test.fn_actividad_en_periodo_eval` | 2 | V332 | V333, V335, V428, V433, V439, V469.3… |
+| `academico_test.fn_actividad_en_periodo_eval` | 2 | V332 | V333, V428, V433, V439, V469.3, V486… |
 | `academico_test.fn_actividad_estado` | 5 | V462 | V251, V452, V481, V526, V528, V530 |
 | `academico_test.fn_actividad_estado_resultado` | 1 | V496.5 | V496.6 |
 | `academico_test.fn_actividad_estudiante_actividad` | 1 | V227 | V461, V463, V496.5, V496.6, V496.7 |
@@ -1153,7 +1153,7 @@ Las secciones son las categorias funcionales de `scripts/migration-analysis/anal
 | `academico_test.fn_area_listar` | 7 | V40 | V77 |
 | `academico_test.fn_area_soft_delete` | 2 | V40 | V77 |
 | `academico_test.fn_area_subject_reporte_listar` | 8 | V188 | V135 |
-| `academico_test.fn_asignatura_criterio_evaluacion_vigente` | 2 | V239 | V227, V408, V410, V428, V455, V496.1… |
+| `academico_test.fn_asignatura_criterio_evaluacion_vigente` | 2 | V239 | V227, V408, V428, V455, V496.1, V496.2… |
 | `academico_test.fn_asignatura_grado_ponderacion_disponible` | 3 | V239 | V248 |
 | `academico_test.fn_asignatura_plan_elemento_calculo` | 1 | V239 | V333, V492.1, V496.23 |
 | `academico_test.fn_asignatura_plan_vigente` | 2 | V239 | V333, V496.23 |
@@ -1174,7 +1174,7 @@ Las secciones son las categorias funcionales de `scripts/migration-analysis/anal
 | `academico_test.fn_grado_actualizar` | 6 | V43 | V79 |
 | `academico_test.fn_grado_bulk_delete` | 2 | V43 | V79 |
 | `academico_test.fn_grado_crear` | 5 | V43 | V79 |
-| `academico_test.fn_grado_desempeno_minimo` | 1 | V334 | V346, V410, V428, V439, V490, V496.2… |
+| `academico_test.fn_grado_desempeno_minimo` | 1 | V334 | V346, V428, V439, V490, V496.2, V496.24… |
 | `academico_test.fn_grado_es_preescolar` | 1 | V285 | V286, V287, V437 |
 | `academico_test.fn_grado_grupo_reporte_listar` | 5 | V187 | V135 |
 | `academico_test.fn_grado_listar` | 7 | V43 | V79 |
