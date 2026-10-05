@@ -1,0 +1,341 @@
+{
+  "info": {
+    "_postman_id": "fd1277e6-0f17-4236-a338-50bc5f06fa97",
+    "name": "SSO - Aprobaciones en lote (Regla 75)",
+    "description": {
+      "content": "`POST /aprobaciones/aprobar-masivo` y `POST /aprobaciones/rechazar-masivo` (V496.20 `fn_solicitud_aprobacion_resolver_masivo`, V496.21 endpoints).\n\nResuelven `BODY.IDS` (hasta 500) en una llamada: cada solicitud con su wrapper de una (`fn_solicitud_aprobacion_aprobar` / `_rechazar`), en su subtransacción. Devuelven `resultado = {resueltas: [pk], fallidas: [{id, codigo, error}]}`.\n\nCorrer en orden 0 → 5 con un entorno que tenga `baseUrl`, `email` y `password`.",
+      "type": "text/markdown"
+    },
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "0 - Login",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/auth/login",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "auth",
+            "login"
+          ]
+        },
+        "body": {
+          "mode": "raw",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          },
+          "raw": "{\n  \"email\": \"{{email}}\",\n  \"password\": \"{{password}}\"\n}"
+        },
+        "description": {
+          "content": "Guarda el `token`. Usar un **Coordinador académico** de la sede del grupo (o `CEVAL-SUPER_ADMINISTRADOR`): son los roles con `role_query` en los endpoints de aprobaciones.",
+          "type": "text/markdown"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200', () => pm.response.to.have.status(200));",
+              "const d = pm.response.json();",
+              "if (d.token) { pm.environment.set('token', d.token); }"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "1 - Pendientes de asistencia",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/eval-col/aprobaciones/pendientes?tipo=CORRECCION_ASISTENCIA",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "eval-col",
+            "aprobaciones",
+            "pendientes"
+          ],
+          "query": [
+            {
+              "key": "tipo",
+              "value": "CORRECCION_ASISTENCIA"
+            }
+          ]
+        },
+        "description": {
+          "content": "Solicitudes `CORRECCION_ASISTENCIA` que este usuario puede resolver. Guarda las dos primeras en `solicitudId1`/`solicitudId2`.\n\nHace falta al menos una: créala corrigiendo (o tomando por primera vez) la asistencia de una fecha de un periodo de evaluación no Calificable o ya terminado (Regla 75).",
+          "type": "text/markdown"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200', () => pm.response.to.have.status(200));",
+              "const d = pm.response.json();",
+              "const rows = Array.isArray(d) ? d : (d.rows || []);",
+              "pm.test('hay solicitudes pendientes', () => pm.expect(rows.length).to.be.above(0));",
+              "if (rows[0]) pm.collectionVariables.set('solicitudId1', rows[0].pk_tsolicitud_aprobacion);",
+              "pm.collectionVariables.set('solicitudId2', rows[1] ? rows[1].pk_tsolicitud_aprobacion : rows[0] && rows[0].pk_tsolicitud_aprobacion);"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "2 - Lote vacío (400)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/eval-col/aprobaciones/aprobar-masivo",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "eval-col",
+            "aprobaciones",
+            "aprobar-masivo"
+          ]
+        },
+        "description": {
+          "content": "`BODY.IDS` vacío: 400 (22023) sin tocar nada (`fn_solicitud_aprobacion_validar_lote`). Lo mismo con más de 500.",
+          "type": "text/markdown"
+        },
+        "body": {
+          "mode": "raw",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          },
+          "raw": "{\n  \"IDS\": []\n}"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('400', () => pm.response.to.have.status(400));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "3 - Rechazar sin motivo (400)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/eval-col/aprobaciones/rechazar-masivo",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "eval-col",
+            "aprobaciones",
+            "rechazar-masivo"
+          ]
+        },
+        "description": {
+          "content": "Al rechazar el motivo es del lote: si falta no se intenta ninguna (400, 22023).",
+          "type": "text/markdown"
+        },
+        "body": {
+          "mode": "raw",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          },
+          "raw": "{\n  \"IDS\": [\n    \"{{solicitudId1}}\"\n  ]\n}"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('400', () => pm.response.to.have.status(400));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "4 - Aprobar en lote (una falla)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/eval-col/aprobaciones/aprobar-masivo",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "eval-col",
+            "aprobaciones",
+            "aprobar-masivo"
+          ]
+        },
+        "description": {
+          "content": "Aprueba `solicitudId1` y `solicitudId2` en una llamada; `999999999` no existe y queda en `fallidas` sin frenar a las demás. Cada solicitud corre en su subtransacción con el mismo gate que `POST /aprobaciones/:ID/aprobar`.\n\n**Consume las solicitudes**: aprobar no se deshace. Para repetir la corrida hay que volver a crear solicitudes (paso 1). Con `MANUAL` en el entorno se salta.",
+          "type": "text/markdown"
+        },
+        "body": {
+          "mode": "raw",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          },
+          "raw": "{\n  \"IDS\": [\n    \"{{solicitudId1}}\",\n    \"{{solicitudId2}}\",\n    999999999\n  ],\n  \"MOTIVO\": \"Corrección verificada con el docente.\"\n}"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const fila = (d) => (Array.isArray(d) ? d[0] : d.rows ? d.rows[0] : d).resultado;",
+              "if (pm.environment.get('MANUAL')) { return; }",
+              "pm.test('200', () => pm.response.to.have.status(200));",
+              "const r = fila(pm.response.json());",
+              "pm.test('resolvió las existentes', () => pm.expect(r.resueltas).to.include(Number(pm.collectionVariables.get('solicitudId1'))));",
+              "pm.test('la inexistente queda en fallidas', () => pm.expect(r.fallidas.map(f => f.id)).to.include(999999999));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "5 - Repetir el lote (todas fallan)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/eval-col/aprobaciones/rechazar-masivo",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "eval-col",
+            "aprobaciones",
+            "rechazar-masivo"
+          ]
+        },
+        "description": {
+          "content": "Las mismas solicitudes ya están resueltas: responde 200 con `resueltas` vacío y cada una en `fallidas` con su motivo (22023). El front lo muestra como error cuando no resolvió ninguna.",
+          "type": "text/markdown"
+        },
+        "body": {
+          "mode": "raw",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          },
+          "raw": "{\n  \"IDS\": [\n    \"{{solicitudId1}}\",\n    \"{{solicitudId2}}\"\n  ],\n  \"MOTIVO\": \"Prueba de lote ya resuelto.\"\n}"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const fila = (d) => (Array.isArray(d) ? d[0] : d.rows ? d.rows[0] : d).resultado;",
+              "pm.test('200', () => pm.response.to.have.status(200));",
+              "const r = fila(pm.response.json());",
+              "pm.test('ninguna resuelta', () => pm.expect(r.resueltas).to.have.length(0));",
+              "pm.test('todas en fallidas', () => pm.expect(r.fallidas.length).to.be.above(0));"
+            ]
+          }
+        }
+      ]
+    }
+  ],
+  "variable": [
+    {
+      "key": "solicitudId1",
+      "value": "1",
+      "type": "string"
+    },
+    {
+      "key": "solicitudId2",
+      "value": "2",
+      "type": "string"
+    }
+  ]
+}

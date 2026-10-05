@@ -75,6 +75,33 @@ _GENERIC = {"plataforma"}
 _INHERIT = {"bind", "data", "comment", "scratch", "dynamic", "query_bulk"}
 
 
+# Estados del mapa de lineas (grafo.line_budget + poda.apply_precision):
+# l vigente, d recortable, n sin efecto pero se conserva, c comentario,
+# b en blanco, o sin encadenar. Todo numero de lineas por categoria sale de
+# aqui, igual que el mapa de cada archivo: no hay una segunda cuenta que
+# actualizar cuando cambia la precision.
+ESTADOS = "ldncbo"
+
+
+def celdas(linemap: str) -> Counter:
+    out: Counter = Counter()
+    for n, c in re.findall(r"(\d+)(\D)", linemap or ""):
+        out[c] += int(n)
+    return out
+
+
+def lineas(mapa: Counter) -> dict:
+    """Los campos de lineas que publica cada categoria, derivados del mapa."""
+    return {
+        "mapa": {c: mapa.get(c, 0) for c in ESTADOS},
+        "lines": sum(mapa.values()),
+        "live_lines": mapa.get("l", 0),
+        "cut_lines": mapa.get("d", 0),
+        "keep_lines": mapa.get("n", 0),
+        "dead_lines": mapa.get("d", 0) + mapa.get("n", 0),
+    }
+
+
 def _norm(s: str) -> str:
     return s.lower().replace("academico_test.", "").replace("public.", "")
 
@@ -177,8 +204,7 @@ def categorize(model: dict) -> dict:
     def S(c: str) -> dict:
         return summ.setdefault(c, {
             "id": c, "label": labels[c][0], "color": labels[c][1],
-            "migs": [], "touch": [], "lines": 0, "live_lines": 0, "dead_lines": 0,
-            "cut_lines": 0, "comment_lines": 0, "statements": 0,
+            "migs": [], "touch": [], "mapa": Counter(), "comment_lines": 0, "statements": 0,
             "verdicts": Counter(), "objects": defaultdict(lambda: [0, 0]),
             "people": defaultdict(lambda: {"created": 0, "touches": 0, "added": 0,
                                            "deleted": 0, "migs": set()}),
@@ -191,10 +217,7 @@ def categorize(model: dict) -> dict:
         c = mig_cat[v]
         s = S(c)
         s["migs"].append(v)
-        s["lines"] += m["lines"]
-        s["live_lines"] += m["live_lines"]
-        s["dead_lines"] += m["dead_lines"]
-        s["cut_lines"] += m.get("cut_lines", m["dead_lines"])
+        s["mapa"].update(celdas(m["linemap"]))
         s["comment_lines"] += m["comment_lines"]
         s["statements"] += m["total_statements"]
         s["unparsed"] += m["unparsed"]
@@ -249,8 +272,8 @@ def categorize(model: dict) -> dict:
             continue
         s = summ[c]
         out.append({
-            **{k: s[k] for k in ("id", "label", "color", "migs", "touch", "lines",
-                                 "live_lines", "dead_lines", "cut_lines", "comment_lines",
+            **lineas(s["mapa"]),
+            **{k: s[k] for k in ("id", "label", "color", "migs", "touch", "comment_lines",
                                  "statements", "first", "last", "sig_changes",
                                  "callsite_issues", "orphans", "unparsed")},
             "verdicts": dict(s["verdicts"]),

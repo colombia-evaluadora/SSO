@@ -46,9 +46,14 @@ BEGIN
         INSERT INTO academico_test.TACTIVIDAD_RUBRICA_CRITERIO (FK_TACTIVIDAD, ORDEN, NOMBRE, DESCRIPCION, CREATED_BY, CREATED_AT, ACTIVE)
         VALUES (p_pk_tactividad, v_c.ord, TRIM(v_c.j->>'nombre'), NULLIF(TRIM(v_c.j->>'descripcion'), ''), v_por, CURRENT_TIMESTAMP, TRUE)
         RETURNING PK_TACTIVIDAD_RUBRICA_CRITERIO INTO v_pk;
+        -- TACTIVIDAD_RUBRICA_NIVEL.PONDERACION es NOT NULL (V22): a diferencia del item de
+        -- cotejo (que guarda NULL y resuelve el peso 1 al calcular), acá el default "pesa 1"
+        -- se escribe tal cual al definir, porque fn_actividad_validar_rubrica_definicion ya
+        -- dejó pasar niveles sin puntaje explícito cuando la unidad no lo exige.
         INSERT INTO academico_test.TACTIVIDAD_RUBRICA_NIVEL (
             FK_TACTIVIDAD_RUBRICA_CRITERIO, ETIQUETA, DESCRIPCION, PONDERACION, CREATED_BY, CREATED_AT, ACTIVE)
-        SELECT v_pk, NULLIF(TRIM(n->>'etiqueta'), ''), TRIM(n->>'descripcion'), (n->>'ponderacion')::NUMERIC,
+        SELECT v_pk, NULLIF(TRIM(n->>'etiqueta'), ''), TRIM(n->>'descripcion'),
+               COALESCE(NULLIF(n->>'ponderacion', '')::NUMERIC, 1),
                v_por, CURRENT_TIMESTAMP, TRUE
           FROM jsonb_array_elements(v_c.j->'niveles') n;
     END LOOP;

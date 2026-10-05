@@ -3,7 +3,8 @@
 -- administrador, nivel 0); el listado de pendientes es su aviso (Regla 70).
 -- La edición de asistencia (fn_asistencia_editar, V138) abre la solicitud de
 -- la Regla 75 con fn_asistencia_correccion_solicitar_interno. La marca de
--- informe desactualizado (Regla 71) se lee con el gate de Informes.
+-- informe desactualizado (Regla 71) se lee con el gate de Informes. El lote
+-- (aprobar/rechazar masivo) resuelve cada solicitud con su wrapper.
 -- Depende de: V496.19, V277, V489, V136.
 
 SET search_path TO academico_test, public;
@@ -218,6 +219,64 @@ $$;
 
 COMMENT ON FUNCTION academico_test.fn_solicitud_aprobacion_rechazar(BIGINT, BIGINT, VARCHAR)
     IS 'POST /aprobaciones/:ID/rechazar: el Coordinador rechaza la solicitud con motivo obligatorio; el valor vigente no cambia (Regla 70). Orden: P0002 → 22023 (ya resuelta) → 42501 → 22023 (motivo).';
+
+CREATE OR REPLACE FUNCTION academico_test.fn_solicitud_aprobacion_validar_lote(p_ids BIGINT[])
+RETURNS VOID
+LANGUAGE plpgsql
+IMMUTABLE
+AS $$
+BEGIN
+    IF COALESCE(cardinality(p_ids), 0) = 0 THEN
+        RAISE EXCEPTION 'Indique al menos una solicitud' USING ERRCODE = '22023';
+    END IF;
+    IF cardinality(p_ids) > 500 THEN
+        RAISE EXCEPTION 'Se pueden resolver hasta 500 solicitudes a la vez (llegaron %)', cardinality(p_ids)
+            USING ERRCODE = '22023';
+    END IF;
+END;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_solicitud_aprobacion_validar_lote(BIGINT[])
+    IS '22023 si el lote de solicitudes viene vacío o trae más de 500. La usa fn_solicitud_aprobacion_resolver_masivo.';
+
+CREATE OR REPLACE FUNCTION academico_test.fn_solicitud_aprobacion_resolver_masivo(
+    p_pk_usuario_solicitante BIGINT,
+    p_aprobar                BOOLEAN,
+    p_ids                    BIGINT[],
+    p_motivo                 VARCHAR DEFAULT NULL
+)
+RETURNS JSONB
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_id        BIGINT;
+    v_resueltas BIGINT[] := '{}';
+    v_fallidas  JSONB    := '[]'::jsonb;
+BEGIN
+    PERFORM academico_test.fn_solicitud_aprobacion_validar_lote(p_ids);
+    -- El motivo es del lote: si falta al rechazar, no se intenta ninguna.
+    PERFORM academico_test.fn_solicitud_aprobacion_validar_motivo(p_motivo, NOT p_aprobar);
+
+    FOR v_id IN SELECT x FROM unnest(p_ids) WITH ORDINALITY AS t(x, n)
+                 WHERE x IS NOT NULL GROUP BY x ORDER BY min(n) LOOP
+        BEGIN
+            IF p_aprobar THEN
+                PERFORM academico_test.fn_solicitud_aprobacion_aprobar(p_pk_usuario_solicitante, v_id, p_motivo);
+            ELSE
+                PERFORM academico_test.fn_solicitud_aprobacion_rechazar(p_pk_usuario_solicitante, v_id, p_motivo);
+            END IF;
+            v_resueltas := v_resueltas || v_id;
+        EXCEPTION WHEN OTHERS THEN
+            v_fallidas := v_fallidas || jsonb_build_object('id', v_id, 'codigo', SQLSTATE, 'error', SQLERRM);
+        END;
+    END LOOP;
+
+    RETURN jsonb_build_object('resueltas', to_jsonb(v_resueltas), 'fallidas', v_fallidas);
+END;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_solicitud_aprobacion_resolver_masivo(BIGINT, BOOLEAN, BIGINT[], VARCHAR)
+    IS 'POST /aprobaciones/aprobar-masivo y /aprobaciones/rechazar-masivo: resuelve cada PK de p_ids con fn_solicitud_aprobacion_aprobar o _rechazar (su gate y validaciones), en orden y sin repetidos; la que falla se deshace sola y queda en fallidas. Devuelve {resueltas: [pk], fallidas: [{id, codigo, error}]}. 22023 si el lote está vacío, pasa de 500 o falta el motivo al rechazar.';
 
 -- ---------------------------------------------------------------------------
 -- Regla 71: lectura de la marca con el gate de Informes

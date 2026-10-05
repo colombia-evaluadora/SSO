@@ -10,13 +10,16 @@
 -- Depende de: V535, V536 (fn_informe_grupo_listar_interno), V466 (catálogos).
 
 -- ============================================================ núcleos
-CREATE OR REPLACE FUNCTION academico_test.fn_informe_boletin_cabecera_interno(
+-- Cambia el tipo de retorno (escudo, departamento, jornada): CREATE OR REPLACE no basta.
+DROP FUNCTION IF EXISTS academico_test.fn_informe_boletin_cabecera_interno(BIGINT);
+CREATE FUNCTION academico_test.fn_informe_boletin_cabecera_interno(
     p_fk_tgrupo BIGINT
 )
 RETURNS TABLE(ee_nombre character varying, ee_dane character varying, ee_nit character varying,
               ciudad character varying, sede_nombre character varying, nivel_ensenanza character varying,
               grado_nombre character varying, grupo_etiqueta character varying, anio integer,
-              fondo_archivo bigint, pk_ee bigint, pk_sede bigint)
+              fondo_archivo bigint, pk_ee bigint, pk_sede bigint,
+              escudo_archivo bigint, departamento character varying, jornada character varying)
 LANGUAGE sql
 STABLE
 AS $function$
@@ -26,7 +29,10 @@ AS $function$
            academico_test.fn_anio_lectivo_numero(al.NOMBRE),
            ee.FK_TARCHIVO_FONDO_BOLETIN::BIGINT,
            ee.PK_ESTABLECIMIENTO::BIGINT,
-           s.PK_TSEDE::BIGINT
+           s.PK_TSEDE::BIGINT,
+           ee.FK_TARCHIVO::BIGINT,
+           dep.NOMBRE::VARCHAR,
+           jor.VALOR::VARCHAR
       FROM academico_test.TGRUPO gr
       JOIN academico_test.TGRADO gd  ON gd.PK_TGRADO = gr.FK_TGRADO
       LEFT JOIN academico_test.TNIVEL_ENSENANZA niv
@@ -39,11 +45,15 @@ AS $function$
         ON ee.PK_ESTABLECIMIENTO = s.FK_TESTABLECIMIENTO
       LEFT JOIN academico_test.TMUNICIPIO mun
              ON mun.PK_TMUNICIPIO = ee.FK_TMUNICIPIO
+      LEFT JOIN academico_test.TDEPARTAMENTO dep
+             ON dep.PK_DEPARTAMENTO = mun.PK_TDEPARTAMENTO
+      LEFT JOIN academico_test.TLISTA_VALOR jor
+             ON jor.PK_LISTA_VALOR = gr.FK_TLV_JORNADA
      WHERE gr.PK_TGRUPO = p_fk_tgrupo;
 $function$;
 
 COMMENT ON FUNCTION academico_test.fn_informe_boletin_cabecera_interno(BIGINT)
-    IS 'INTERNO: encabezado institucional de un boletin para un grupo -- establecimiento (nombre, DANE, NIT, ciudad), sede, nivel, grado, etiqueta del grupo, año y el fondo del boletin (PK_TARCHIVO) -- mas los pk de establecimiento y sede para resolver la firma. Sin gate. La usan fn_informe_boletin_notas_interno y fn_informe_boletin_preescolar_interno.';
+    IS 'INTERNO: encabezado institucional de un boletin para un grupo -- establecimiento (nombre, DANE, NIT, ciudad), sede, nivel, grado, etiqueta del grupo, año y el fondo del boletin (PK_TARCHIVO) -- mas los pk de establecimiento y sede para resolver la firma, y el escudo (TESTABLECIMIENTO.FK_TARCHIVO), el departamento del municipio y la jornada del grupo. Sin gate. La usan fn_informe_boletin_notas_interno y fn_informe_boletin_preescolar_interno.';
 
 CREATE OR REPLACE FUNCTION academico_test.fn_informe_boletin_rector_interno(
     p_pk_ee   BIGINT,
@@ -77,6 +87,30 @@ $function$;
 
 COMMENT ON FUNCTION academico_test.fn_informe_boletin_rector_interno(BIGINT, BIGINT)
     IS 'INTERNO: nombre y documento ("CC: ...") de quien firma un boletin: el usuario con rol RECTOR en una sede del establecimiento, la sede del grupo primero. Sin gate. La usan los dos boletines.';
+
+CREATE OR REPLACE FUNCTION academico_test.fn_informe_boletin_director_interno(
+    p_fk_tgrupo BIGINT
+)
+RETURNS TABLE(nombre character varying, documento character varying)
+LANGUAGE sql
+STABLE
+AS $function$
+    SELECT NULLIF(TRIM(CONCAT_WS(' ', u.PRIMER_APELLIDO, u.SEGUNDO_APELLIDO,
+                                      u.PRIMER_NOMBRE,   u.SEGUNDO_NOMBRE)), '')::VARCHAR,
+           CASE WHEN NULLIF(TRIM(u.IDENTIFICACION), '') IS NOT NULL
+                THEN CONCAT_WS(' ', td.VALOR || ':', TRIM(u.IDENTIFICACION))
+           END::VARCHAR
+      FROM academico_test.TGRUPO gr
+      JOIN academico_test.TFUNCIONARIO f ON f.PK_TFUNCIONARIO = gr.FK_TFUNCIONARIO
+      JOIN academico_test.TUSUARIO u
+        ON u.PK_TUSUARIO = f.FK_TUSUARIO AND u.ACTIVE = TRUE
+      LEFT JOIN academico_test.TLISTA_VALOR td
+             ON td.PK_LISTA_VALOR = u.FK_TLV_TIPO_DOCUMENTO
+     WHERE gr.PK_TGRUPO = p_fk_tgrupo;
+$function$;
+
+COMMENT ON FUNCTION academico_test.fn_informe_boletin_director_interno(BIGINT)
+    IS 'INTERNO: nombre y documento ("CC: ...") del director del grupo (TGRUPO.FK_TFUNCIONARIO), que firma el boletin junto al rector. Sin fila si el grupo no tiene director. Sin gate.';
 
 CREATE OR REPLACE FUNCTION academico_test.fn_informe_boletin_foto_interno(
     p_fk_tmatricula BIGINT

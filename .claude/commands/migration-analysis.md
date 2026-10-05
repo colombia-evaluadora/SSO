@@ -1,7 +1,7 @@
 ---
 description: Regenera docs/auditoria/migraciones-analisis.html con scripts/migration-analysis
 argument-hint: '[--from N --to M] [--open] [--json modelo.json]'
-allowed-tools: 'Bash(git fetch:*), Bash(python scripts/migration-analysis/analyze_migrations.py:*), Read'
+allowed-tools: 'Bash(git fetch:*), Bash(python scripts/migration-analysis informe:*), Read'
 ---
 
 Regenera el informe HTML del análisis de migraciones Flyway
@@ -12,7 +12,7 @@ Pasos:
 
 1. `git fetch --all --quiet` — el techo de versión se calcula contra TODAS las
    ramas de `origin` (regla de CLAUDE.md).
-2. `python scripts/migration-analysis/analyze_migrations.py $ARGUMENTS`
+2. `python scripts/migration-analysis informe $ARGUMENTS`
    (stdlib, Python 3.10+; sin argumentos genera el informe completo en la ruta
    por defecto).
 3. Confirmar que el HTML se escribió (ruta, tamaño, fecha) y resumir el stdout

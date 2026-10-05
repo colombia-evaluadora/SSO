@@ -22,4 +22,15 @@
     <pdfEncoding>Identity-H</pdfEncoding>
     <pdfEmbedded>true</pdfEmbedded>
   </fontFamily>
+  <!--
+    Iconos del boletin (sede, nivel, grado, grupo, periodo). Material Icons de
+    Google, licencia Apache 2.0. Un icono es un caracter (U+E84F...) en un
+    textField: escala sin pixelarse y toma el forecolor, asi que sigue la
+    paleta del fondo igual que el texto. Solo viajan al PDF los glifos usados.
+  -->
+  <fontFamily name="Material Icons">
+    <normal>fonts/MaterialIcons-Regular.ttf</normal>
+    <pdfEncoding>Identity-H</pdfEncoding>
+    <pdfEmbedded>true</pdfEmbedded>
+  </fontFamily>
 </fontFamilies>
