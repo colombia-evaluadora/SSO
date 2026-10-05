@@ -795,12 +795,10 @@
 		</band>
 	</detail>
 	<pageFooter height="60" splitType="Prevent">
-			<element kind="textField" x="206" y="14" width="100" height="10" fontName="DejaVu Sans" fontSize="7" forecolor="#5A6B85" hTextAlign="Right" vTextAlign="Top" blankWhenNull="true">
-			<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "gris")]]></propertyExpression>
-			<expression><![CDATA["Pagina " + $V{PAGE_NUMBER}]]></expression>
+			<element kind="textField" x="557" y="38" width="16" height="12" fontName="DejaVu Sans" fontSize="7.5" forecolor="#FFFFFF" hTextAlign="Right" vTextAlign="Middle" bold="true" blankWhenNull="true">
+			<expression><![CDATA["" + $V{PAGE_NUMBER}]]></expression>
 		</element>
-		<element kind="textField" x="306" y="14" width="100" height="10" fontName="DejaVu Sans" fontSize="7" forecolor="#5A6B85" hTextAlign="Left" vTextAlign="Top" blankWhenNull="true" evaluationTime="Group" evaluationGroup="boletin">
-			<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "gris")]]></propertyExpression>
+		<element kind="textField" x="573" y="38" width="30" height="12" fontName="DejaVu Sans" fontSize="7.5" forecolor="#FFFFFF" hTextAlign="Left" vTextAlign="Middle" bold="true" blankWhenNull="true" evaluationTime="Group" evaluationGroup="boletin">
 			<expression><![CDATA[" de " + $V{PAGE_NUMBER}]]></expression>
 		</element>
 	</pageFooter>
