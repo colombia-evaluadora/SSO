@@ -9,6 +9,8 @@ tools: Read, Grep, Glob, Edit, Write, Bash
 model: inherit
 skills:
   - next-migration-number
+  - definiendo-permisos
+  - optimizando-consultas
   - plpgsql
 ---
 
@@ -42,6 +44,10 @@ por qué**. Si una existente sirve a medias, se extiende su dueña in-place.
   (`scripts/migration-analysis/comandos/orden.py`).
 
 ## 3. Escribir
+
+Antes de un índice o un listado: `python scripts/migration-analysis tabla <t>`
+(índices vivos, FKs sin índice, quién la usa). Gate y roles según
+`definiendo-permisos`; consultas según `optimizando-consultas`.
 
 Checklist de "Qué define una migración" en la skill `next-migration-number`:
 firma, gate + alcance en el wrapper, núcleo `_interno` sin gate, validaciones

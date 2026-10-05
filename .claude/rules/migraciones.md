@@ -58,15 +58,33 @@ decimales de todas las ramas y PRs). Re-escanear antes de fusionar.
 
 | Trabajo | Usar |
 |---|---|
-| Crear/editar/revisar una migración | agente `flyway-migration-author` |
+| Funcionalidad nueva de punta a punta | `/nueva-funcionalidad` |
+| Crear/editar una migración | agente `flyway-migration-author` |
+| Revisar migraciones escritas (contexto limpio) | agente `migration-reviewer` |
+| Qué archivo tocar, dependencias, número | skill `next-migration-number` (`deps.py`, `hueco`) |
+| Gate, alcance, roles de `role_query` | skill `definiendo-permisos` |
+| Índices, listados, consultas lentas | skill `optimizando-consultas` (`migration-analysis tabla`) |
 | Funciones, triggers, PL/pgSQL | skill `plpgsql` |
-| SQL, índices, constraints, performance | skill `postgresql` |
-| Versionado y patrones Flyway | skill `flyway-migrations` |
+| SQL genérico de Postgres | skill `postgresql` |
+| Versionado y patrones Flyway | skill `flyway-migrations` (ver precedencia abajo) |
 | SQL portado desde Oracle | skill `reviewing-oracle-to-postgres-migration` |
 | Endpoint de `query-service` | `/new-query-endpoint` + agente `query-service-endpoint-builder` |
 | Qué quedó obsoleto, firmas y llamadores | skill `analizando-migraciones` |
 | Regenerar el informe HTML y resumirlo | agente `migration-analysis-reporter` |
 | El servidor no se comporta como el repo | agente `server-drift-detector` |
+
+### Precedencia sobre las skills genéricas
+
+`flyway-migrations`, `postgresql` y `plpgsql` vienen de fuera (`skills-lock.json`)
+y no conocen este repo. Donde chocan, manda esta regla:
+
+- **"Never modify applied migrations"**: aquí la regla es la contraria, se
+  edita la dueña in-place y el deploy re-aplica (`reaplicando-migraciones`).
+- **`CREATE INDEX CONCURRENTLY`**: falla dentro de la transacción de Flyway.
+  `CREATE INDEX IF NOT EXISTS`, parcial `WHERE active = true` si aplica.
+- **Undo (`U<n>__`)**: es de Flyway Teams; aquí no existe.
+- **`SERIAL` / `ON CONFLICT (cols)` de los ejemplos**: los UNIQUE de este
+  esquema son índices parciales; el `ON CONFLICT` repite su `WHERE`.
 
 ## Anatomía de una función de endpoint
 

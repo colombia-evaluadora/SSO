@@ -18,6 +18,11 @@ Sigue las fases en orden. No escribas SQL antes de la fase 4.
 `git branch --show-current` y `git status`. Si estás en `dev` o `main`, para y
 pide la rama (memoria: un commit acabó en `origin/dev`).
 
+Skills que guían cada fase: `next-migration-number` (dueña, dependencias,
+número con `migration-analysis hueco`), `definiendo-permisos` (gate, alcance,
+roles), `optimizando-consultas` (índices y listados, `migration-analysis
+tabla`), `new-query-endpoint` y `documentando-con-postman`.
+
 ## 2. Entrevista (AskUserQuestion)
 
 Pregunta solo lo que el código no responde: roles y alcance (nivel

@@ -43,6 +43,14 @@ Por cada función creada o redefinida:
 7. **Despliegue.** Migración editada que el servidor ya aplicó: ¿el set de
    `scripts/migration-reapply-set.py` está identificado? ¿Una nueva queda
    pisada por la re-aplicación de una editada?
+8. **Consultas e índices.** `python scripts/migration-analysis tabla <t>` por
+   cada tabla que se lee o se indexa: índice nuevo que duplica el prefijo de
+   uno vivo, `CONCURRENTLY`, filtro que no repite el `WHERE active = true` del
+   índice parcial, agregado sin filtrar antes (V112), columna `fk_*` nueva sin
+   índice (skill `optimizando-consultas`).
+9. **Roles.** `role_query` con roles que tienen el menú del gate, unidos por
+   nombre y atados a la fila por ruta y método (skill `definiendo-permisos`);
+   número junto a la categoría (`migration-analysis hueco`).
 
 ## Qué reportar
 

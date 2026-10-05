@@ -24,6 +24,9 @@ Instrucciones para trabajar en este repo. Prevalecen sobre el comportamiento por
   verificación → revisión adversarial (`migration-reviewer`) → `/pre-pr`.
 - **Reutilizar antes de escribir.** Ninguna función nueva sin correr antes
   `deps.py --reutilizable <dominio>` y justificar por qué nada existente sirve.
+- **Permisos y consultas con su skill:** `definiendo-permisos` (gate, alcance,
+  roles de `role_query`) y `optimizando-consultas` (índices y listados; antes de
+  indexar, `python scripts/migration-analysis tabla <t>`).
 - **Evidencia, no afirmaciones:** al cerrar, la salida de lint/orden/tests.
 - Skills propias invocables con `/`: `/next-migration-number`,
   `/new-query-endpoint`, `/server-status`, `/limpiando-migraciones`,

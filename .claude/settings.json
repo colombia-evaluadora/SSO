@@ -7,7 +7,8 @@
     "rabbitmq-development": "off",
     "github-actions-templates": "off",
     "github-actions-efficiency": "name-only",
-    "java-springboot": "off"
+    "java-springboot": "off",
+    "github-actions": "off"
   },
   "attribution": {
     "commit": "",
