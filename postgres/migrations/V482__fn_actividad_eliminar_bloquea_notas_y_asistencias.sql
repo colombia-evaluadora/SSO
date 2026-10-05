@@ -22,8 +22,8 @@ BEGIN
        AND ACTIVE = TRUE;
 
     IF v_registros > 0 THEN
-        RAISE EXCEPTION 'La actividad "%" tiene % registro(s) de asistencia en % fecha(s); no se puede eliminar',
-            (SELECT TITULO FROM academico_test.TACTIVIDAD WHERE PK_TACTIVIDAD = p_pk_tactividad), v_registros, v_fechas
+        RAISE EXCEPTION '% tiene % registro(s) de asistencia en % fecha(s); no se puede eliminar',
+            academico_test.fn_actividad_etiqueta(p_pk_tactividad), v_registros, v_fechas
             USING ERRCODE = '23503',
                   HINT = 'Elimine primero las asistencias tomadas en esta actividad';
     END IF;
@@ -50,8 +50,10 @@ BEGIN
        AND r.ACTIVE = TRUE AND a.ACTIVE = TRUE;
 
     IF v_dependientes > 0 THEN
-        RAISE EXCEPTION 'La actividad "%" es recuperada por % actividad(es) de recuperacion activa(s); no se puede eliminar',
-            (SELECT TITULO FROM academico_test.TACTIVIDAD WHERE PK_TACTIVIDAD = p_pk_tactividad), v_dependientes
+        RAISE EXCEPTION '% es recuperada por % % de recuperacion activa(s); no se puede eliminar',
+            academico_test.fn_actividad_etiqueta(p_pk_tactividad), v_dependientes,
+            (SELECT lower(academico_test.fn_actividad_rotulo(FK_TGRUPO, FK_TASIGNATURA, FK_TUNIDAD))
+               FROM academico_test.TACTIVIDAD WHERE PK_TACTIVIDAD = p_pk_tactividad)
             USING ERRCODE = '23503',
                   HINT = 'Reconfigure o elimine esas actividades de recuperacion y reintente';
     END IF;

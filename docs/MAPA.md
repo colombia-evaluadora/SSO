@@ -1,7 +1,7 @@
 # Mapa del dominio
 
 **Generado** por `python scripts/migration-analysis mapa` — no editar a mano.
-Estado: 460 migraciones (V1–V546), 1013 funciones vivas, 58 endpoints vivos. Ultima generacion: 2026-10-05.
+Estado: 458 migraciones (V1–V546), 1015 funciones vivas, 58 endpoints vivos. Ultima generacion: 2026-10-05.
 
 Para una **funcion**, la migracion dueña es la que hay que editar: es su ultima escritura viva, no la que la creo.
 
@@ -20,7 +20,7 @@ Las secciones son las categorias funcionales de `scripts/migration-analysis/anal
 - [Observaciones](#observaciones) — 30 funcion(es), 0 endpoint(s)
 - [Asistencias](#asistencias) — 59 funcion(es), 1 endpoint(s)
 - [Planilla de calificación](#planilla) — 33 funcion(es), 0 endpoint(s)
-- [Calificación con instrumentos](#calificacion) — 85 funcion(es), 1 endpoint(s)
+- [Calificación con instrumentos](#calificacion) — 87 funcion(es), 1 endpoint(s)
 - [Referentes curriculares](#referentes) — 68 funcion(es), 1 endpoint(s)
 - [Planeador (unidades, actividades)](#planeador) — 265 funcion(es), 22 endpoint(s)
 - [Auditoría](#auditoria) — 6 funcion(es), 9 endpoint(s)
@@ -273,7 +273,7 @@ Las secciones son las categorias funcionales de `scripts/migration-analysis/anal
 | `academico_test.fn_informe_grupo_listar` | 4 | V537 | V342, V496.25, V537, V539 |
 | `academico_test.fn_informe_grupo_listar_interno` | 3 | V536 | V537, V540, V541 |
 | `academico_test.fn_informe_grupo_reporte` | 5 | V537 | V420, V539 |
-| `academico_test.fn_informe_grupo_tabla` | 4 | V496.25 | V434, V439 |
+| `academico_test.fn_informe_grupo_tabla` | 4 | V496.25 | V434, V539 |
 | `academico_test.fn_informe_grupos_listar` | 5 | V537 | V419, V539 |
 | `academico_test.fn_informe_historial_listar` | 5 | V537 | V349, V539 |
 | `academico_test.fn_informe_historial_registrar_interno` | 6 | V536 | — |
@@ -432,7 +432,7 @@ Las secciones son las categorias funcionales de `scripts/migration-analysis/anal
 | `academico_test.fn_planilla_grupo_asignatura_assert` | 3 | V469.2 | V469.4, V490, V537, V538 |
 | `academico_test.fn_planilla_periodo_eval_resolver` | 2 | V469.3 | V469.4 |
 | `academico_test.fn_planilla_validar_periodo_del_grupo` | 2 | V469.2 | V469.3 |
-| `academico_test.fn_promedio_homologar` | 2 | V474 | V496.24, V536, V540 |
+| `academico_test.fn_promedio_homologar` | 3 | V474 | V496.24, V536, V540 |
 | `academico_test.fn_recuperacion_aprobada_vigente` | 3 | V496.18 | V496.19 |
 | `academico_test.fn_recuperacion_combinar` | 7 | V496.19 | V496.19 |
 | `academico_test.fn_recuperacion_definitiva_periodo` | 3 | V408 | V496.19 |
@@ -524,11 +524,13 @@ Las secciones son las categorias funcionales de `scripts/migration-analysis/anal
 | `academico_test.fn_escala_nivel_bulk_soft_delete` | 3 | V128 | — |
 | `academico_test.fn_escala_nivel_soft_delete` | 3 | V42 | V78, V128 |
 | `academico_test.fn_escala_propagar` | 3 | V42 | V41 |
+| `academico_test.fn_escala_valoracion_banda` | 2 | V428 | V474 |
 | `academico_test.fn_escala_valoracion_bulk_delete` | 2 | V42 | V78 |
 | `academico_test.fn_escala_variantes_permitidas` | 1 | V458 | — |
+| `academico_test.fn_grado_escala_aplicable` | 1 | V428 | V474, V540 |
 | `academico_test.fn_instrumento_nombre` | 1 | V214.2 | V479, V496.3 |
 | `academico_test.fn_instrumento_permitido_por_tipo_evaluacion` | 2 | V458 | V214.2, V496.5 |
-| `academico_test.fn_nota_homologar` | 3 | V428 | V432, V439, V469.3, V490, V496.6, V496.24… |
+| `academico_test.fn_nota_homologar` | 3 | V428 | V469.3, V490, V496.6, V496.24, V536, V537… |
 | `academico_test.fn_nota_redondear` | 3 | V496.5 | — |
 | `academico_test.fn_tactividad_nota_estado_default` | 0 | V496.5 | — |
 | `academico_test.fn_tactividad_nota_finalizacion` | 0 | V224 | — |
@@ -679,7 +681,7 @@ Las secciones son las categorias funcionales de `scripts/migration-analysis/anal
 | `academico_test.fn_actividad_disponibles_listar` | 5 | V223 | V492.4 |
 | `academico_test.fn_actividad_eliminar` | 2 | V496.3 | V246, V496.4 |
 | `academico_test.fn_actividad_eliminar_interno` | 2 | V482 | V496.3 |
-| `academico_test.fn_actividad_en_periodo_eval` | 2 | V332 | V333, V428, V433, V439, V469.3, V486… |
+| `academico_test.fn_actividad_en_periodo_eval` | 2 | V332 | V333, V428, V433, V469.3, V486, V490… |
 | `academico_test.fn_actividad_estado` | 5 | V462 | V251, V452, V481, V526, V528, V530 |
 | `academico_test.fn_actividad_estado_resultado` | 1 | V496.5 | V496.6 |
 | `academico_test.fn_actividad_estudiante_actividad` | 1 | V227 | V461, V463, V496.5, V496.6, V496.7 |
@@ -1164,7 +1166,7 @@ Las secciones son las categorias funcionales de `scripts/migration-analysis/anal
 | `academico_test.fn_asignatura_plan_elemento_calculo` | 1 | V239 | V333, V492.1, V496.23 |
 | `academico_test.fn_asignatura_plan_vigente` | 2 | V239 | V333, V496.23 |
 | `academico_test.fn_asignatura_plan_vigente_por_grado` | 2 | V239 | V492.1 |
-| `academico_test.fn_asignatura_tipo_evaluacion` | 2 | V428 | V432, V536 |
+| `academico_test.fn_asignatura_tipo_evaluacion` | 2 | V428 | V536 |
 | `academico_test.fn_criterio_eval_actualizar` | 14 | V41 | V76 |
 | `academico_test.fn_criterio_eval_obtener` | 2 | V41 | V76 |
 | `academico_test.fn_criterio_evaluacion_formato` | 1 | V227 | V428, V455, V474, V496.1, V496.2, V496.5… |
@@ -1180,7 +1182,7 @@ Las secciones son las categorias funcionales de `scripts/migration-analysis/anal
 | `academico_test.fn_grado_actualizar` | 6 | V43 | V79 |
 | `academico_test.fn_grado_bulk_delete` | 2 | V43 | V79 |
 | `academico_test.fn_grado_crear` | 5 | V43 | V79 |
-| `academico_test.fn_grado_desempeno_minimo` | 1 | V334 | V428, V439, V490, V496.2, V496.24, V536… |
+| `academico_test.fn_grado_desempeno_minimo` | 1 | V334 | V428, V490, V496.2, V496.24, V536, V537… |
 | `academico_test.fn_grado_es_preescolar` | 1 | V285 | V286, V287, V437 |
 | `academico_test.fn_grado_grupo_reporte_listar` | 5 | V187 | V135 |
 | `academico_test.fn_grado_listar` | 7 | V43 | V79 |

@@ -88,7 +88,10 @@ LANGUAGE plpgsql
 STABLE
 AS $$
 DECLARE
-    v_que VARCHAR := COALESCE(p_titulo, 'La actividad');
+    v_que VARCHAR := CASE WHEN p_titulo IS NULL
+                          THEN academico_test.fn_actividad_rotulo(p_fk_tgrupo, p_fk_tasignatura, p_fk_tunidad)
+                          ELSE academico_test.fn_actividad_etiqueta_de(p_titulo, p_fk_tgrupo, p_fk_tasignatura, p_fk_tunidad)
+                     END;
 BEGIN
     IF p_fk_tlv_instrumento IS NULL THEN
         RETURN;
@@ -100,12 +103,13 @@ BEGIN
     END IF;
 
     IF p_fk_tunidad IS NOT NULL THEN
-        RAISE EXCEPTION '% tiene configurado el instrumento de evaluacion %, pero la unidad "%" se rige por un referente curricular en el que el aprendizaje se valora con observaciones y no con instrumentos. Retirale el instrumento a la actividad o llevala a una unidad que si los admita.',
+        RAISE EXCEPTION '% tiene configurado el instrumento de evaluacion %, pero % se rige por un referente curricular en el que el aprendizaje se valora con observaciones y no con instrumentos. Retirale el instrumento o asignala a otra % que si los admita.',
             v_que, academico_test.fn_instrumento_nombre(p_fk_tlv_instrumento),
-            (SELECT NOMBRE FROM academico_test.TUNIDAD WHERE PK_TUNIDAD = p_fk_tunidad)
+            academico_test.fn_unidad_etiqueta(p_fk_tunidad),
+            (SELECT lower(academico_test.fn_unidad_rotulo(FK_REFERENTE_CURRICULAR)) FROM academico_test.TUNIDAD WHERE PK_TUNIDAD = p_fk_tunidad)
             USING ERRCODE = '22023';
     ELSE
-        RAISE EXCEPTION '% tiene configurado el instrumento de evaluacion %, pero el referente curricular que le corresponde a su grado y asignatura valora el aprendizaje con observaciones y no con instrumentos. Retirale el instrumento a la actividad.',
+        RAISE EXCEPTION '% tiene configurado el instrumento de evaluacion %, pero el referente curricular que le corresponde a su grado y asignatura valora el aprendizaje con observaciones y no con instrumentos. Retirale el instrumento.',
             v_que, academico_test.fn_instrumento_nombre(p_fk_tlv_instrumento)
             USING ERRCODE = '22023';
     END IF;
