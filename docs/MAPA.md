@@ -1,7 +1,7 @@
 # Mapa del dominio
 
 **Generado** por `python scripts/migration-analysis mapa` — no editar a mano.
-Estado: 460 migraciones (V1–V546), 1013 funciones vivas, 58 endpoints vivos. Ultima generacion: 2026-10-05.
+Estado: 460 migraciones (V1–V546), 1015 funciones vivas, 58 endpoints vivos. Ultima generacion: 2026-10-05.
 
 Para una **funcion**, la migracion dueña es la que hay que editar: es su ultima escritura viva, no la que la creo.
 
@@ -20,7 +20,7 @@ Las secciones son las categorias funcionales de `scripts/migration-analysis/anal
 - [Observaciones](#observaciones) — 30 funcion(es), 0 endpoint(s)
 - [Asistencias](#asistencias) — 59 funcion(es), 1 endpoint(s)
 - [Planilla de calificación](#planilla) — 33 funcion(es), 0 endpoint(s)
-- [Calificación con instrumentos](#calificacion) — 85 funcion(es), 1 endpoint(s)
+- [Calificación con instrumentos](#calificacion) — 87 funcion(es), 1 endpoint(s)
 - [Referentes curriculares](#referentes) — 68 funcion(es), 1 endpoint(s)
 - [Planeador (unidades, actividades)](#planeador) — 265 funcion(es), 22 endpoint(s)
 - [Auditoría](#auditoria) — 6 funcion(es), 9 endpoint(s)
@@ -432,7 +432,7 @@ Las secciones son las categorias funcionales de `scripts/migration-analysis/anal
 | `academico_test.fn_planilla_grupo_asignatura_assert` | 3 | V469.2 | V469.4, V490, V537, V538 |
 | `academico_test.fn_planilla_periodo_eval_resolver` | 2 | V469.3 | V469.4 |
 | `academico_test.fn_planilla_validar_periodo_del_grupo` | 2 | V469.2 | V469.3 |
-| `academico_test.fn_promedio_homologar` | 2 | V474 | V496.24, V536, V540 |
+| `academico_test.fn_promedio_homologar` | 3 | V474 | V496.24, V536, V540 |
 | `academico_test.fn_recuperacion_aprobada_vigente` | 3 | V496.18 | V496.19 |
 | `academico_test.fn_recuperacion_combinar` | 7 | V496.19 | V496.19 |
 | `academico_test.fn_recuperacion_definitiva_periodo` | 3 | V408 | V496.19 |
@@ -524,8 +524,10 @@ Las secciones son las categorias funcionales de `scripts/migration-analysis/anal
 | `academico_test.fn_escala_nivel_bulk_soft_delete` | 3 | V128 | — |
 | `academico_test.fn_escala_nivel_soft_delete` | 3 | V42 | V78, V128 |
 | `academico_test.fn_escala_propagar` | 3 | V42 | V41 |
+| `academico_test.fn_escala_valoracion_banda` | 2 | V428 | V474 |
 | `academico_test.fn_escala_valoracion_bulk_delete` | 2 | V42 | V78 |
 | `academico_test.fn_escala_variantes_permitidas` | 1 | V458 | — |
+| `academico_test.fn_grado_escala_aplicable` | 1 | V428 | V474, V540 |
 | `academico_test.fn_instrumento_nombre` | 1 | V214.2 | V479, V496.3 |
 | `academico_test.fn_instrumento_permitido_por_tipo_evaluacion` | 2 | V458 | V214.2, V496.5 |
 | `academico_test.fn_nota_homologar` | 3 | V428 | V432, V439, V469.3, V490, V496.6, V496.24… |
