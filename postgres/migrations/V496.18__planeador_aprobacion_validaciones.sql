@@ -338,7 +338,7 @@ END;
 $$;
 
 -- Rol por TROL.CODIGO (como V489): el Coordinador no tiene CATEGORIA_ROL propia.
-CREATE OR REPLACE FUNCTION academico_test.fn_usuario_sedes_coordinador(p_pk_tusuario BIGINT)
+CREATE OR REPLACE FUNCTION academico_test.fn_usuario_sedes_por_rol(p_pk_tusuario BIGINT, p_codigos VARCHAR[])
 RETURNS SETOF BIGINT
 LANGUAGE sql
 STABLE
@@ -349,11 +349,83 @@ AS $$
       JOIN academico_test.TROL r  ON r.PK_TROL  = su.FK_TROL
      WHERE su.FK_TUSUARIO = p_pk_tusuario
        AND su.ACTIVE = TRUE
-       AND UPPER(TRIM(r.CODIGO)) = 'COORDINADOR';
+       AND UPPER(TRIM(r.CODIGO)) = ANY (p_codigos);
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_usuario_sedes_por_rol(BIGINT, VARCHAR[])
+    IS 'Sedes activas donde el usuario tiene un TSEDE_USUARIO activo con alguno de los roles p_codigos (TROL.CODIGO en mayúsculas). Base de fn_usuario_sedes_coordinador y fn_usuario_ee_por_rol.';
+
+-- El Rector también se reconoce por el puntero del establecimiento, sin TSEDE_USUARIO.
+CREATE OR REPLACE FUNCTION academico_test.fn_usuario_ee_por_rol(p_pk_tusuario BIGINT, p_codigos VARCHAR[])
+RETURNS SETOF BIGINT
+LANGUAGE sql
+STABLE
+AS $$
+    SELECT s.FK_TESTABLECIMIENTO
+      FROM academico_test.TSEDE s
+     WHERE s.PK_TSEDE IN (SELECT academico_test.fn_usuario_sedes_por_rol(p_pk_tusuario, p_codigos))
+    UNION
+    SELECT e.PK_ESTABLECIMIENTO
+      FROM academico_test.TESTABLECIMIENTO e
+      JOIN academico_test.TFUNCIONARIO f ON f.PK_TFUNCIONARIO = e.FK_TFUNCIONARIO_RECTOR
+     WHERE 'RECTOR' = ANY (p_codigos)
+       AND e.ACTIVE = TRUE AND f.ACTIVE = TRUE AND f.FK_TUSUARIO = p_pk_tusuario;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_usuario_ee_por_rol(BIGINT, VARCHAR[])
+    IS 'Establecimientos donde el usuario tiene alguno de los roles p_codigos en una sede (fn_usuario_sedes_por_rol); si p_codigos incluye RECTOR, también los que tiene por FK_TFUNCIONARIO_RECTOR.';
+
+CREATE OR REPLACE FUNCTION academico_test.fn_usuario_sedes_coordinador(p_pk_tusuario BIGINT)
+RETURNS SETOF BIGINT
+LANGUAGE sql
+STABLE
+AS $$
+    SELECT academico_test.fn_usuario_sedes_por_rol(p_pk_tusuario, ARRAY['COORDINADOR']::VARCHAR[]);
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_usuario_sedes_coordinador(BIGINT)
-    IS 'Sedes activas donde el usuario es Coordinador (TSEDE_USUARIO + TROL.CODIGO). Fuente única de "es coordinador": la usan fn_usuario_es_coordinador_sede (gates de aprobación) y fn_mi_establecimiento_para_auditoria (claim est del JWT).';
+    IS 'Sedes activas donde el usuario es Coordinador (fn_usuario_sedes_por_rol). La usa fn_mi_establecimiento_para_auditoria (claim est del JWT).';
+
+-- Lista única de quién aprueba: para sumar o quitar un rol se edita solo esto
+-- (y su role_query en V496.21).
+CREATE OR REPLACE FUNCTION academico_test.fn_solicitud_aprobacion_roles_sede()
+RETURNS VARCHAR[]
+LANGUAGE sql
+IMMUTABLE
+AS $$
+    SELECT ARRAY['COORDINADOR']::VARCHAR[];
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_solicitud_aprobacion_roles_sede()
+    IS 'TROL.CODIGO de los roles que resuelven solicitudes de aprobación solo en la sede donde los tienen.';
+
+CREATE OR REPLACE FUNCTION academico_test.fn_solicitud_aprobacion_roles_ee()
+RETURNS VARCHAR[]
+LANGUAGE sql
+IMMUTABLE
+AS $$
+    SELECT ARRAY['RECTOR', 'JEFE_SISTEMA_ESTABLECIMIENTO', 'AUXILIAR_ADMINISTRATIVO']::VARCHAR[];
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_solicitud_aprobacion_roles_ee()
+    IS 'TROL.CODIGO de los roles que resuelven solicitudes de aprobación en todas las sedes de su establecimiento.';
+
+CREATE OR REPLACE FUNCTION academico_test.fn_usuario_sedes_aprobador(p_pk_tusuario BIGINT)
+RETURNS SETOF BIGINT
+LANGUAGE sql
+STABLE
+AS $$
+    SELECT academico_test.fn_usuario_sedes_por_rol(p_pk_tusuario, academico_test.fn_solicitud_aprobacion_roles_sede())
+    UNION
+    SELECT s.PK_TSEDE
+      FROM academico_test.TSEDE s
+     WHERE s.ACTIVE = TRUE
+       AND s.FK_TESTABLECIMIENTO IN (
+           SELECT academico_test.fn_usuario_ee_por_rol(p_pk_tusuario, academico_test.fn_solicitud_aprobacion_roles_ee()));
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_usuario_sedes_aprobador(BIGINT)
+    IS 'Sedes activas donde el usuario resuelve solicitudes de aprobación: donde tiene un rol de fn_solicitud_aprobacion_roles_sede, y todas las de los establecimientos donde tiene uno de fn_solicitud_aprobacion_roles_ee. La usa fn_usuario_es_aprobador_sede.';
 
 CREATE OR REPLACE FUNCTION academico_test.fn_solicitud_valor_vigente_recuperacion(
     p_pk_tactividad_estudiante BIGINT,

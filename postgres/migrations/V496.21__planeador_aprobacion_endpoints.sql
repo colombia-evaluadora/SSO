@@ -1,5 +1,6 @@
 -- V496.21 - Aprobación del Coordinador, capa 4 de 4: endpoints. Pendientes,
--- aprobar y rechazar (una o en lote) para CEVAL-COORDINADOR y CEVAL-SUPER_ADMINISTRADOR; la
+-- aprobar y rechazar (una o en lote) para CEVAL-COORDINADOR, CEVAL-RECTOR, CEVAL-JEFE_SISTEMA_ESTABLECIMIENTO,
+-- CEVAL-AUXILIAR_ADMINISTRATIVO y CEVAL-SUPER_ADMINISTRADOR; la
 -- marca de informe desactualizado con los roles de /informes/grupo. Las filas
 -- de calificar y de registrar o editar asistencia suman solicitudes_pendientes: la
 -- escritura no falla cuando exige aprobación, devuelve qué solicitud abrió.
@@ -143,7 +144,8 @@ INSERT INTO public.role_query (role_id, query_id)
 SELECT r.id_role, q.id_query
   FROM public.query q
   JOIN public.microservice m ON m.id_microservice = q.microservice_id AND m.serviceid = 'eval-col'
-  JOIN public.role r ON r.name IN ('CEVAL-COORDINADOR', 'CEVAL-SUPER_ADMINISTRADOR')
+  JOIN public.role r ON r.name IN ('CEVAL-COORDINADOR', 'CEVAL-RECTOR', 'CEVAL-JEFE_SISTEMA_ESTABLECIMIENTO',
+                                   'CEVAL-AUXILIAR_ADMINISTRATIVO', 'CEVAL-SUPER_ADMINISTRADOR')
  WHERE (q.http_method, q.path_template) IN (
         ('GET',  '/aprobaciones/pendientes'),
         ('POST', '/aprobaciones/:ID/aprobar'),

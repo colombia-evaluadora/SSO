@@ -13,7 +13,9 @@ CREATE OR REPLACE FUNCTION academico_test.fn_asistencia_puede_ver(p_pk_usuario b
  STABLE
 AS $function$
 DECLARE
-    v_nivel INT;
+    v_nivel   INT;
+    v_sede    BIGINT;
+    v_jornada BIGINT;
 BEGIN
     IF p_pk_usuario IS NULL THEN
         RETURN TRUE;
@@ -29,22 +31,12 @@ BEGIN
         RETURN FALSE;
     END IF;
 
-    IF v_nivel = 1 THEN
-        RETURN TRUE;
-    ELSIF v_nivel = 2 THEN
-        RETURN academico_test.fn_grupo_establecimiento(p_fk_tgrupo) IN (
-                   SELECT establecimiento_id
-                     FROM academico_test.fn_usuario_ee_accesibles(p_pk_usuario));
-    ELSIF v_nivel = 3 THEN
-        IF NOT academico_test.fn_usuario_solo_sus_grupos(p_pk_usuario) THEN
-            RETURN (
-                       academico_test.fn_periodo_sede(academico_test.fn_grupo_periodo(p_fk_tgrupo)),
-                       academico_test.fn_grupo_jornada(p_fk_tgrupo)
-                   ) IN (
-                       SELECT sede_id, jornada_id
-                         FROM academico_test.fn_usuario_sedes_jornadas_accesibles(p_pk_usuario));
-        END IF;
-
+    -- En la sede y jornada del grupo manda el rol que tiene ahí: el rector de
+    -- otro EE o el coordinador de otra sede que aquí es docente o director de
+    -- grupo solo ve sus grupos y clases.
+    v_sede    := academico_test.fn_periodo_sede(academico_test.fn_grupo_periodo(p_fk_tgrupo));
+    v_jornada := academico_test.fn_grupo_jornada(p_fk_tgrupo);
+    IF v_nivel IN (2, 3) AND academico_test.fn_usuario_solo_sus_grupos(p_pk_usuario, v_sede, v_jornada) THEN
         RETURN p_fk_tgrupo IN (SELECT grupo_id FROM academico_test.fn_usuario_grupos_dirigidos(p_pk_usuario))
             OR EXISTS (
                 SELECT 1
@@ -55,9 +47,21 @@ BEGIN
             );
     END IF;
 
+    IF v_nivel = 1 THEN
+        RETURN TRUE;
+    ELSIF v_nivel = 2 THEN
+        RETURN academico_test.fn_grupo_establecimiento(p_fk_tgrupo) IN (
+                   SELECT establecimiento_id
+                     FROM academico_test.fn_usuario_ee_accesibles(p_pk_usuario));
+    ELSIF v_nivel = 3 THEN
+        RETURN (v_sede, v_jornada) IN (
+                   SELECT sede_id, jornada_id
+                     FROM academico_test.fn_usuario_sedes_jornadas_accesibles(p_pk_usuario));
+    END IF;
+
     RETURN FALSE;
 END;
 $function$;
 
 COMMENT ON FUNCTION academico_test.fn_asistencia_puede_ver(BIGINT, BIGINT)
-    IS 'BOOLEAN para el WHERE de listados: capability ''VER'' + scope por categoria de rol (0/1 => todo, 2 => fn_usuario_ee_accesibles, 3 => sede/jornada si fn_usuario_solo_sus_grupos es FALSE (coordinador/jefe de area/psico orientador, V489), si no solo fn_usuario_grupos_dirigidos + TDOCENTE_ASIGNATURA propia (director de grupo/docente), 4/sin categoria => FALSE). p_pk_usuario NULL => TRUE. Redefinida aqui (V140, antes copia identica de V220) para acotar nivel 3 a grupo propio -- ver Regla 74.';
+    IS 'BOOLEAN para el WHERE de listados: capability ''VER'' + scope por categoria de rol (0/1 => todo, 2 => fn_usuario_ee_accesibles, 3 => sede/jornada; con nivel 2 o 3, si fn_usuario_solo_sus_grupos es TRUE EN LA SEDE Y JORNADA DEL GRUPO (alli solo es docente/director de grupo), solo fn_usuario_grupos_dirigidos + TDOCENTE_ASIGNATURA propia, 4/sin categoria => FALSE). p_pk_usuario NULL => TRUE. Redefinida aqui (V140, antes copia identica de V220) para acotar nivel 3 a grupo propio -- ver Regla 74.';
