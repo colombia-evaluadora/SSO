@@ -7,7 +7,8 @@
 -- el módulo de recuperación. Los que se renombran a _interno se dropean con su
 -- nombre viejo: solo los usaba informes.
 -- Por qué aquí: estructura por capas; un cambio futuro edita esta migración.
--- Depende de: V535, V496.19 (fn_actividad_recuperacion_consolidar_interno), V496.24.
+-- Depende de: V535, V496.19 (fn_actividad_recuperacion_consolidar_interno,
+-- fn_solicitud_aprobacion_aprobar_interno), V496.24.
 
 -- Los nucleos se renombran a _interno; nadie fuera de informes los llamaba.
 DROP FUNCTION IF EXISTS academico_test.fn_informe_estudiante_asignaturas(BIGINT, BIGINT, BIGINT[], BOOLEAN);
@@ -1199,6 +1200,21 @@ BEGIN
                 OR m.PK_TMATRICULA = ANY (p_fk_tmatriculas))
          ORDER BY 2, 1
     LOOP
+        -- Regla 55: aprobar la planilla aprueba las correcciones pendientes
+        -- del estudiante en esta asignatura y periodo, y luego consolida.
+        PERFORM academico_test.fn_solicitud_aprobacion_aprobar_interno(
+                    p_pk_usuario_solicitante, s.PK_TSOLICITUD_APROBACION)
+           FROM academico_test.TSOLICITUD_APROBACION s
+           JOIN academico_test.TACTIVIDAD_ESTUDIANTE ae
+             ON ae.PK_TACTIVIDAD_ESTUDIANTE = s.FK_OBJETO
+          WHERE s.TABLA_OBJETO = 'TACTIVIDAD_ESTUDIANTE'
+            AND ae.FK_TMATRICULA = r_mat.pk
+            AND s.FK_TASIGNATURA = p_fk_tasignatura
+            AND s.FK_TPERIODO_EVALUACION = p_fk_tperiodo_evaluacion
+            AND s.FK_TLV_TIPO = academico_test.fn_tlv_solicitud_tipo_pk('CORRECCION_RESULTADO')
+            AND s.FK_TLV_ESTADO = academico_test.fn_tlv_solicitud_estado_pk('PENDIENTE')
+            AND s.ACTIVE = TRUE;
+
         v_proy := academico_test.fn_asignatura_definitiva_proyectada_periodo(
                       r_mat.pk, p_fk_tasignatura, p_fk_tperiodo_evaluacion);
 
@@ -1264,4 +1280,4 @@ BEGIN
 END;
 $function$;
 COMMENT ON FUNCTION academico_test.fn_informe_planilla_guardar_interno(BIGINT, BIGINT, BIGINT, BIGINT, BIGINT[])
-    IS 'INTERNO: Congela la definitiva de UNA asignatura desde la planilla de informes, para el grupo o solo las matriculas indicadas (NULL o vacio = todas), recalcula las metricas del periodo y registra el guardado en el historial con FK_TASIGNATURA puesta, que es lo que lo distingue del guardado del informe completo. Al historial solo entran los estudiantes a los que se les escribio (guardada o actualizada); sin_cambio y sin_proyeccion no cuentan, y si ninguno cambio no se crea cabecera. Es el hermano acotado de fn_informe_periodo_guardar y NO SE PISAN: TASIGNATURA_NOTA es por (matricula, periodo, asignatura), y ambas terminan llamando al mismo recalculo de metricas y al mismo registrador, de modo que el resultado no depende del orden y las dos son idempotentes. El recalculo corre SIEMPRE, incluso en sin_cambio, porque otra asignatura pudo haberse movido desde el ultimo y esa fila las agrega a todas. En sin_proyeccion lo ya guardado NO se borra: quitar un consolidado por una ausencia no es decision de un boton de guardar. Devuelve ademas el promedio y los conteos del periodo ya recalculados, para que la pantalla refresque sin volver a consultar. Escribe con fn_informe_nota_periodo_escribir_interno: con una recuperacion de destino NOTA_FINAL la proyectada es la nueva base y la definitiva se recombina; sin_cambio, NOTA_ANTERIOR y NOTA_GUARDADA se expresan sobre esa base. Sin gate ni validaciones: los aplica fn_informe_planilla_guardar (POST /informes/planilla/guardar). El usuario es para auditoria y para el historial.';
+    IS 'INTERNO: Aprueba antes las correcciones de resultado pendientes (Regla 55) de cada estudiante en la asignatura y periodo. Congela la definitiva de UNA asignatura desde la planilla de informes, para el grupo o solo las matriculas indicadas (NULL o vacio = todas), recalcula las metricas del periodo y registra el guardado en el historial con FK_TASIGNATURA puesta, que es lo que lo distingue del guardado del informe completo. Al historial solo entran los estudiantes a los que se les escribio (guardada o actualizada); sin_cambio y sin_proyeccion no cuentan, y si ninguno cambio no se crea cabecera. Es el hermano acotado de fn_informe_periodo_guardar y NO SE PISAN: TASIGNATURA_NOTA es por (matricula, periodo, asignatura), y ambas terminan llamando al mismo recalculo de metricas y al mismo registrador, de modo que el resultado no depende del orden y las dos son idempotentes. El recalculo corre SIEMPRE, incluso en sin_cambio, porque otra asignatura pudo haberse movido desde el ultimo y esa fila las agrega a todas. En sin_proyeccion lo ya guardado NO se borra: quitar un consolidado por una ausencia no es decision de un boton de guardar. Devuelve ademas el promedio y los conteos del periodo ya recalculados, para que la pantalla refresque sin volver a consultar. Escribe con fn_informe_nota_periodo_escribir_interno: con una recuperacion de destino NOTA_FINAL la proyectada es la nueva base y la definitiva se recombina; sin_cambio, NOTA_ANTERIOR y NOTA_GUARDADA se expresan sobre esa base. Sin gate ni validaciones: los aplica fn_informe_planilla_guardar (POST /informes/planilla/guardar). El usuario es para auditoria y para el historial.';
