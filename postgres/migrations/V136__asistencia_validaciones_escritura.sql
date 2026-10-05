@@ -268,8 +268,11 @@ BEGIN
     -- docente. Director de grupo y coordinación conservan el alcance de V140.
     RETURN academico_test.fn_asistencia_puede_ver(p_pk_usuario, p_fk_tgrupo)
        AND (p_pk_usuario IS NULL OR p_fk_tasignatura IS NULL
-            OR COALESCE(academico_test.fn_usuario_categoria_rol_nivel(p_pk_usuario), 99) <> 3
-            OR NOT academico_test.fn_usuario_solo_sus_grupos(p_pk_usuario)
+            OR COALESCE(academico_test.fn_usuario_categoria_rol_nivel(p_pk_usuario), 99) NOT IN (2, 3)
+            OR NOT academico_test.fn_usuario_solo_sus_grupos(
+                   p_pk_usuario,
+                   academico_test.fn_periodo_sede(academico_test.fn_grupo_periodo(p_fk_tgrupo)),
+                   academico_test.fn_grupo_jornada(p_fk_tgrupo))
             OR p_fk_tgrupo IN (SELECT grupo_id FROM academico_test.fn_usuario_grupos_dirigidos(p_pk_usuario))
             OR EXISTS (SELECT 1
                          FROM academico_test.TDOCENTE_ASIGNATURA da
@@ -281,7 +284,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_asistencia_puede_ver_asignatura(BIGINT, BIGINT, BIGINT)
-    IS 'Regla 74, BOOLEAN para el WHERE de las lecturas de asistencia: fn_asistencia_puede_ver (V140) y, para el docente (nivel 3 solo-sus-grupos que no dirige el grupo), además que dicte esa asignatura en el grupo (TDOCENTE_ASIGNATURA). Asignatura NULL (toma por actividad) = alcance del grupo. plpgsql: depende de funciones posteriores (V140, V489).';
+    IS 'Regla 74, BOOLEAN para el WHERE de las lecturas de asistencia: fn_asistencia_puede_ver (V140) y, para el docente (en la sede y jornada del grupo solo es docente y no lo dirige), además que dicte esa asignatura en el grupo (TDOCENTE_ASIGNATURA). Asignatura NULL (toma por actividad) = alcance del grupo. plpgsql: depende de funciones posteriores (V140, V489).';
 
 CREATE OR REPLACE FUNCTION academico_test.fn_asistencia_assert_puede_ver(
     p_pk_usuario     BIGINT,
