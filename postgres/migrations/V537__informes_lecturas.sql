@@ -6,7 +6,8 @@
 -- un wrapper de fn_informe_grupo_listar_interno, y la planilla usa el
 -- validador del periodo y el estado con Habilitación.
 -- Por qué aquí: estructura por capas; un cambio futuro edita esta migración.
--- Depende de: V535, V536, V239 (fn_planilla_grupo_asignatura_assert).
+-- Las correcciones pendientes (Regla 55) cuentan como cambio a aprobar.
+-- Depende de: V535, V536, V239 (fn_planilla_grupo_asignatura_assert), V496.18, V496.23.
 
 CREATE OR REPLACE FUNCTION academico_test.fn_informe_sedes_listar(p_pk_usuario_solicitante bigint)
  RETURNS TABLE(fk_tsede bigint, sede_nombre character varying, fk_testablecimiento bigint, establecimiento_nombre character varying)
@@ -792,6 +793,30 @@ BEGIN
           CROSS JOIN LATERAL academico_test.fn_informe_estudiante_asignaturas_interno(
                          mt.pk,
                          p_fk_periodos_evaluacion, TRUE) d
+        UNION ALL
+        -- Una correccion pendiente no mueve la proyectada: se suma aparte.
+        SELECT mt.grupo,
+               s.FK_TASIGNATURA,
+               asig.NOMBRE::VARCHAR,
+               s.FK_TPERIODO_EVALUACION,
+               pe.NOMBRE::VARCHAR,
+               pe.FECHA_INICIO,
+               mt.pk,
+               s.FECHA_SOLICITUD
+          FROM matriculas mt
+          JOIN academico_test.TACTIVIDAD_ESTUDIANTE ae ON ae.FK_TMATRICULA = mt.pk
+          JOIN academico_test.TSOLICITUD_APROBACION s
+            ON s.TABLA_OBJETO = 'TACTIVIDAD_ESTUDIANTE'
+           AND s.FK_OBJETO = ae.PK_TACTIVIDAD_ESTUDIANTE
+           AND s.FK_TLV_TIPO = academico_test.fn_tlv_solicitud_tipo_pk('CORRECCION_RESULTADO')
+           AND s.FK_TLV_ESTADO = academico_test.fn_tlv_solicitud_estado_pk('PENDIENTE')
+           AND s.ACTIVE = TRUE
+          JOIN academico_test.TASIGNATURA asig ON asig.PK_TASIGNATURA = s.FK_TASIGNATURA
+          JOIN academico_test.TPERIODO_EVALUACION pe
+            ON pe.PK_TPERIODO_EVALUACION = s.FK_TPERIODO_EVALUACION
+         WHERE p_fk_periodos_evaluacion IS NULL
+            OR CARDINALITY(p_fk_periodos_evaluacion) = 0
+            OR s.FK_TPERIODO_EVALUACION = ANY (p_fk_periodos_evaluacion)
     ),
     -- El PERIODO entra en el agrupamiento: ver la cabecera. Un mismo grupo
     -- con cambios en dos periodos produce DOS filas.
@@ -1102,8 +1127,9 @@ BEGIN
                -- Con Habilitacion el estado compara contra la original.
                CASE WHEN sn.RECUPERACION IS NOT NULL AND sn.DEFINITIVA IS NOT NULL
                     THEN sn.CALIFICACION ELSE sn.DEFINITIVA END AS comparable,
+               -- Con las correcciones pendientes: es lo que se va a aprobar.
                academico_test.fn_asignatura_definitiva_proyectada_periodo(
-                   e.mat, p_fk_tasignatura, p_fk_tperiodo_evaluacion) AS proyectada
+                   e.mat, p_fk_tasignatura, p_fk_tperiodo_evaluacion, TRUE) AS proyectada
           FROM estudiantes e
           LEFT JOIN academico_test.TASIGNATURA_NOTA sn
                  ON sn.FK_TMATRICULA          = e.mat
@@ -1167,8 +1193,10 @@ BEGIN
                                                                               THEN 'CALIFICADA'
                                    ELSE 'PENDIENTE'
                                END,
-                           'porcentaje',  COALESCE(n.DEFINITIVA, n.CALIFICACION),
+                           'porcentaje',  COALESCE(sp.porcentaje, n.DEFINITIVA, n.CALIFICACION),
                            'nota',        hc.nota_homologada,
+                           'solicitudPendiente', (sp.porcentaje IS NOT NULL),
+                           'notaAnterior', CASE WHEN sp.porcentaje IS NOT NULL THEN ha.nota_homologada END,
                            'valoracion',  hc.valoracion_nombre,
                            'resultadoInstrumento',
                                academico_test.fn_actividad_nota_resultado_instrumento(ae.PK_TACTIVIDAD_ESTUDIANTE),
@@ -1189,9 +1217,22 @@ BEGIN
               LEFT JOIN academico_test.TACTIVIDAD_NOTA n
                      ON n.FK_TACTIVIDAD_ESTUDIANTE = ae.PK_TACTIVIDAD_ESTUDIANTE
                     AND n.ACTIVE = TRUE
+              LEFT JOIN LATERAL (
+                  SELECT (s.VALOR_PROPUESTO->>'porcentaje')::NUMERIC AS porcentaje
+                    FROM academico_test.TSOLICITUD_APROBACION s
+                   WHERE s.TABLA_OBJETO = 'TACTIVIDAD_ESTUDIANTE'
+                     AND s.FK_OBJETO = ae.PK_TACTIVIDAD_ESTUDIANTE
+                     AND s.FK_TLV_TIPO = academico_test.fn_tlv_solicitud_tipo_pk('CORRECCION_RESULTADO')
+                     AND s.FK_TLV_ESTADO = academico_test.fn_tlv_solicitud_estado_pk('PENDIENTE')
+                     AND s.ACTIVE = TRUE
+                   LIMIT 1
+              ) sp ON ae.PK_TACTIVIDAD_ESTUDIANTE IS NOT NULL
+              LEFT JOIN LATERAL academico_test.fn_nota_homologar(
+                            COALESCE(sp.porcentaje, n.DEFINITIVA, n.CALIFICACION),
+                            p_fk_tasignatura, v_fk_grado) hc ON TRUE
               LEFT JOIN LATERAL academico_test.fn_nota_homologar(
                             COALESCE(n.DEFINITIVA, n.CALIFICACION),
-                            p_fk_tasignatura, v_fk_grado) hc ON TRUE
+                            p_fk_tasignatura, v_fk_grado) ha ON sp.porcentaje IS NOT NULL
       ) cel ON TRUE
      ORDER BY b.nombre NULLS LAST, b.mat;
 END;
