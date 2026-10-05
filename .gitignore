@@ -99,6 +99,8 @@ skills-lock*
 !.claude/skills/server-status/
 !.claude/skills/new-query-endpoint/
 !.claude/skills/nueva-funcionalidad/
+!.claude/skills/definiendo-permisos/
+!.claude/skills/optimizando-consultas/
 
 **/__pycache__/
 **/migraciones-analisis.*
