@@ -1,7 +1,6 @@
 ---
 paths:
   - "postgres/**"
-  - "scripts/migration-lint.py"
   - "scripts/migration-analysis/**"
 ---
 
@@ -23,19 +22,69 @@ Si el objeto ya tiene dueña, **se edita esa migración**; solo se crea un `V<n>
 nuevo cuando el objeto no existe o la funcionalidad convive con la vieja.
 `docs/MAPA.md` da el índice dominio → función → migración.
 
+### Escaneo de reutilización (obligatorio antes de escribir funciones)
+
+```bash
+python .claude/skills/next-migration-number/deps.py --reutilizable <dominio>
+```
+
+Lista por capa lo vivo del dominio (validaciones, gates/alcance, núcleos
+`_interno`, wrappers) con su migración dueña y sus parámetros. Repetirlo con
+cada término cercano (tabla, menú, dominio vecino). En el plan, **cada función
+nueva justifica por qué ninguna de la lista sirve**; si una sirve a medias, se
+extiende su dueña in-place en lugar de escribir otra.
+
+### Funcionalidad nueva: cuatro migraciones por capas
+
+Cuando no hay dueña, la funcionalidad se reparte en migraciones consecutivas,
+cada capa llamando solo a las de número menor (así una base limpia aplica):
+
+1. **Validaciones** — una `fn_<dominio>_validar_<regla>` por regla (`RETURNS
+   VOID`, lanza o nada) y una grande que las compone por caso.
+2. **Núcleos `_interno`** — crear/actualizar/eliminar sin permisos, que validan
+   y filtran antes de escribir.
+3. **Wrappers CRUD** — existencia (P0002) → gate + alcance → `fn_audit_declarar`
+   (si escribe) → delegar en el núcleo. Las lecturas, sin etiqueta.
+4. **Endpoints** — filas de `public.query` + `role_query` con roles derivados de
+   los menús reales.
+
+Numeración: si el dominio ya tiene un bloque, usar **huecos decimales junto a
+él** (`V496.1`–`V496.4`) en vez del techo global: reduce colisiones entre PRs
+(V523) y deja las capas contiguas. `python scripts/migration-analysis hueco
+--categoria <id> [--objeto fn_x ...]` lo calcula (piso por dependencias,
+decimales de todas las ramas y PRs). Re-escanear antes de fusionar.
+
 ## Skills y agentes
 
 | Trabajo | Usar |
 |---|---|
-| Crear/editar/revisar una migración | agente `flyway-migration-author` |
+| Funcionalidad nueva de punta a punta | `/nueva-funcionalidad` |
+| Crear/editar una migración | agente `flyway-migration-author` |
+| Revisar migraciones escritas (contexto limpio) | agente `migration-reviewer` |
+| Qué archivo tocar, dependencias, número | skill `next-migration-number` (`deps.py`, `hueco`) |
+| Gate, alcance, roles de `role_query` | skill `definiendo-permisos` |
+| Índices, listados, consultas lentas | skill `optimizando-consultas` (`migration-analysis tabla`) |
 | Funciones, triggers, PL/pgSQL | skill `plpgsql` |
-| SQL, índices, constraints, performance | skill `postgresql` |
-| Versionado y patrones Flyway | skill `flyway-migrations` |
+| SQL genérico de Postgres | skill `postgresql` |
+| Versionado y patrones Flyway | skill `flyway-migrations` (ver precedencia abajo) |
 | SQL portado desde Oracle | skill `reviewing-oracle-to-postgres-migration` |
 | Endpoint de `query-service` | `/new-query-endpoint` + agente `query-service-endpoint-builder` |
 | Qué quedó obsoleto, firmas y llamadores | skill `analizando-migraciones` |
 | Regenerar el informe HTML y resumirlo | agente `migration-analysis-reporter` |
 | El servidor no se comporta como el repo | agente `server-drift-detector` |
+
+### Precedencia sobre las skills genéricas
+
+`flyway-migrations`, `postgresql` y `plpgsql` vienen de fuera (`skills-lock.json`)
+y no conocen este repo. Donde chocan, manda esta regla:
+
+- **"Never modify applied migrations"**: aquí la regla es la contraria, se
+  edita la dueña in-place y el deploy re-aplica (`reaplicando-migraciones`).
+- **`CREATE INDEX CONCURRENTLY`**: falla dentro de la transacción de Flyway.
+  `CREATE INDEX IF NOT EXISTS`, parcial `WHERE active = true` si aplica.
+- **Undo (`U<n>__`)**: es de Flyway Teams; aquí no existe.
+- **`SERIAL` / `ON CONFLICT (cols)` de los ejemplos**: los UNIQUE de este
+  esquema son índices parciales; el `ON CONFLICT` repite su `WHERE`.
 
 ## Anatomía de una función de endpoint
 
@@ -187,7 +236,7 @@ dentro del `.sql` queda mintiendo en cuanto alguien edite la función.
   define V500, una migración nueva V301 que la reescriba se pierde en una base
   limpia y revierte V500 en un servidor que ya pasó de ahí — los dos entornos
   quedan distintos. `deploy-test.yml` lo bloquea
-  (`python scripts/migration-orden.py --base <ref>`).
+  (`python scripts/migration-analysis orden --base <ref>`).
 - **Los huecos no son números libres.** Casi siempre son una rama borrada o una
   migración ya aplicada en un servidor. Reutilizar uno es una decisión explícita
   de orden (out-of-order), confirmada antes con `/server-status`.
@@ -225,10 +274,10 @@ dentro del `.sql` queda mintiendo en cuanto alguien edite la función.
 ## Al cerrar
 
 ```bash
-python scripts/migration-lint.py --all        # sin errores nuevos
-python scripts/migration-analysis/analyze_migrations.py
-python scripts/generar-mapa.py                # si cambiaron funciones o endpoints
-python scripts/generar-mapa.py --check        # lo comprueba sin reescribir (lo corre el hook Stop)
+python scripts/migration-analysis lint --all        # sin errores nuevos
+python scripts/migration-analysis informe
+python scripts/migration-analysis mapa                # si cambiaron funciones o endpoints
+python scripts/migration-analysis mapa --check        # lo comprueba sin reescribir (lo corre el hook Stop)
 ```
 
 El lint corre además como hook al editar cualquier `.sql` de este directorio.

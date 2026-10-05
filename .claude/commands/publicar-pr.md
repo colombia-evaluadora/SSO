@@ -5,7 +5,7 @@ allowed-tools: 'Bash(git status:*), Bash(git diff:*), Bash(git log:*),
   Bash(git branch:*), Bash(git fetch:*), Bash(git config:*), Bash(git rev-parse:*),
   Bash(git add:*), Bash(git commit:*), Bash(git push:*), Bash(git switch:*),
   Bash(gh pr list:*), Bash(gh pr view:*), Bash(gh pr create:*), Bash(gh pr edit:*),
-  Bash(python scripts/migration-lint.py:*), Read, Grep, Glob, Write'
+  Bash(python scripts/migration-analysis lint:*), Read, Grep, Glob, Write'
 ---
 
 Publica el trabajo de la rama actual: commit, rama en `origin` y PR contra
@@ -40,7 +40,7 @@ git diff --stat
 - Commits granulares (`CLAUDE.md`): si hay cambios sin relación entre sí, van en
   commits distintos. Si hay duda sobre qué entra, pregunta antes de commitear.
 - Si el diff toca `postgres/migrations/`, corre
-  `python scripts/migration-lint.py <ficheros>` y confirma que el `V<n>` sigue
+  `python scripts/migration-analysis lint <ficheros>` y confirma que el `V<n>` sigue
   libre en todas las ramas (`bash .claude/skills/next-migration-number/scan.sh`).
   Si el lint falla, para.
 

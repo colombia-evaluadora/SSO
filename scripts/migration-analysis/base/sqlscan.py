@@ -246,6 +246,62 @@ def find_top_level(text: str, pattern: str) -> int:
     return -1
 
 
+def mask_inert(sql: str, strings: bool = True, dollar: bool = True) -> str:
+    """
+    Misma longitud y mismos saltos de linea, con lo que NO se ejecuta al migrar
+    reemplazado por espacios: el contenido de los literales de cadena y de los
+    cuerpos $$ ... $$ (el cuerpo de una funcion corre cuando se la llama, no al
+    crearla). Comillas y delimitadores se conservan. Como las posiciones no
+    cambian, una coincidencia sobre el texto enmascarado se recorta del original.
+
+    Es la defensa contra los falsos positivos: `-- DROP INDEX falla` dentro de
+    un DO, un `CREATE TEMP TABLE` en el cuerpo de una funcion o un
+    `'ALTER TABLE x'` en un mensaje no son DDL de la migracion.
+    """
+    out = list(sql)
+    i, n = 0, len(sql)
+
+    def blank(a: int, b: int) -> None:
+        for k in range(a, b):
+            if out[k] != "\n":
+                out[k] = " "
+
+    while i < n:
+        ch = sql[i]
+        if ch == "'":
+            j = i + 1
+            while j < n:
+                if sql[j] == "'":
+                    if j + 1 < n and sql[j + 1] == "'":
+                        j += 2
+                        continue
+                    break
+                j += 1
+            if strings:
+                blank(i + 1, min(j, n))
+            i = j + 1
+            continue
+        if ch == '"':
+            j = sql.find('"', i + 1)
+            i = n if j == -1 else j + 1
+            continue
+        if ch == "$":
+            m = _DOLLAR_TAG.match(sql, i)
+            if m:
+                tag = m.group(0)
+                j = sql.find(tag, m.end())
+                j = n if j == -1 else j
+                if dollar:
+                    blank(m.end(), j)
+                i = j + len(tag)
+                continue
+        i += 1
+    return "".join(out)
+
+
+_DOLLAR_TAG = re.compile(r"\$[A-Za-z_]\w*\$|\$\$")
+
+
 def dollar_bodies(text: str) -> list[str]:
     """Contenido de cada bloque $$ ... $$ / $tag$ ... $tag$ del texto."""
     out, i, n = [], 0, len(text)
@@ -317,6 +373,7 @@ class FuncParam:
     name: str
     type: str
     has_default: bool
+    mode: str = "in"     # in | out | inout | variadic
 
 
 def parse_params(param_text: str) -> list[FuncParam]:
@@ -326,8 +383,10 @@ def parse_params(param_text: str) -> list[FuncParam]:
         if not chunk:
             continue
         has_default = bool(re.search(r"\bDEFAULT\b|\s:=\s", chunk, re.I))
-        body = re.split(r"\bDEFAULT\b", chunk, flags=re.I)[0].strip()
-        body = re.sub(r"^\s*(IN|OUT|INOUT|VARIADIC)\s+", "", body, flags=re.I)
+        body = re.split(r"\bDEFAULT\b|\s:=\s|\s=\s", chunk, flags=re.I)[0].strip()
+        mm = re.match(r"(IN|OUT|INOUT|VARIADIC)\s+", body, re.I)
+        mode = mm.group(1).lower() if mm else "in"
+        body = body[mm.end():] if mm else body
 
         # `nombre tipo` o solo `tipo`
         m = re.match(rf"^([A-Za-z_]\w*)\s+((?:{PG_TYPES})[\w\s\[\]().]*)$", body, re.I)
@@ -345,8 +404,16 @@ def parse_params(param_text: str) -> list[FuncParam]:
             name=name.lower(),
             type=normalize_type(typ),
             has_default=has_default,
+            mode=mode,
         ))
     return params
+
+
+def identity_sig(params: list[FuncParam]) -> str:
+    """Firma de identidad como la entiende Postgres: solo los tipos de entrada
+    (IN, INOUT, VARIADIC), sin nombres ni DEFAULT. `f(a int)` y `f(a int,
+    OUT b text)` son la MISMA funcion; `f(int)` y `f(int, text)`, dos."""
+    return ",".join(p.type for p in params if p.mode != "out")
 
 
 def normalize_type(t: str) -> str:
@@ -361,7 +428,15 @@ def normalize_type(t: str) -> str:
         "bool": "boolean",
         "timestamp without time zone": "timestamp",
         "timestamp with time zone": "timestamptz",
+        "time without time zone": "time",
+        "time with time zone": "timetz",
         "decimal": "numeric",
+        # como los devuelve pg_get_function_identity_arguments
+        "character": "char",
+        "bpchar": "char",
+        "int2": "smallint",
+        "float8": "double precision",
+        "float4": "real",
     }
     for long, short in alias.items():
         if t == long or t.startswith(long + "["):

@@ -4,7 +4,7 @@ description: >-
   Responde qué migración define hoy un objeto, qué quedó obsoleto tras una
   edición, qué firmas cambiaron y qué llamadores se quedaron desalineados, y
   cuál es el siguiente V<n> realmente libre. Corre
-  scripts/migration-analysis/analyze_migrations.py y lee su modelo JSON. Usar
+  `python scripts/migration-analysis informe` y lee su modelo JSON. Usar
   tras crear o editar una migración, antes de decidir un número de versión, al
   investigar por qué un endpoint responde 500 tras un deploy, o cuando se pida
   el informe de análisis de migraciones.
@@ -37,7 +37,7 @@ describe el estado real, no para limpiar el directorio.
 
 ```bash
 git fetch --all --quiet          # el techo de version se calcula contra TODAS las ramas
-python scripts/migration-analysis/analyze_migrations.py --json modelo.json
+python scripts/migration-analysis informe --json modelo.json
 ```
 
 - Sin argumentos escribe `docs/auditoria/migraciones-analisis.html`, que está
@@ -60,8 +60,9 @@ python .claude/skills/next-migration-number/deps.py --version 224
 ```
 
 Imprime quién define el objeto hoy, su historial con las versiones muertas, si
-la firma cambió y qué migraciones lo usan. Cachea el modelo en temp; `--refresh`
-lo recalcula tras editar migraciones.
+la firma cambió y qué migraciones lo usan. El modelo se cachea con la huella de
+las migraciones (`scripts/migration-analysis/base/modelo.py`) y se recalcula solo al
+cambiar un `.sql`; `--refresh` solo hace falta para forzarlo.
 
 Regla práctica: **`deps.py` para una pregunta, el informe para una revisión.**
 
@@ -80,8 +81,9 @@ Regla práctica: **`deps.py` para una pregunta, el informe para una revisión.**
 ## Dónde vive cada pieza
 
 El código está en `scripts/migration-analysis/` y no en esta skill a propósito:
-lo usan también dos hooks, dos comandos, dos agentes, `generar-mapa.py` y el
-propio `migration-lint.py` (que importa su `sqlscan`). Es infraestructura
+lo usan también dos hooks, dos comandos, dos agentes, `migration-analysis mapa` y el
+lint y el control de orden, que viven ahi mismo como subcomandos del CLI
+(`python scripts/migration-analysis lint|orden`). Es infraestructura
 compartida; esta skill es la puerta de entrada, no su dueña.
 
 `scripts/migration-analysis/README.md` tiene la referencia completa de

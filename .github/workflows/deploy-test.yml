@@ -231,7 +231,7 @@ jobs:
         # workflow_dispatch no aplica: no hay diff, se redespliega lo que ya
         # estaba.
         if: github.event_name != 'workflow_dispatch'
-        run: python scripts/migration-orden.py --base HEAD~1
+        run: python scripts/migration-analysis orden --base HEAD~1
       - name: Check SHA not yet deployed
         # Para `workflow_dispatch` no aplica: el usuario ya sabe que
         # está re-desplegando, y saltarse el guard permite precisamente
