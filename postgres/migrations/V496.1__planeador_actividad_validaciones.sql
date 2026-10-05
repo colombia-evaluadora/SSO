@@ -252,20 +252,29 @@ END;
 $$;
 
 -- Bloque 2: nombre obligatorio de hasta 150 caracteres.
-CREATE OR REPLACE FUNCTION academico_test.fn_actividad_validar_titulo(p_titulo VARCHAR, p_obligatorio BOOLEAN)
+DROP FUNCTION IF EXISTS academico_test.fn_actividad_validar_titulo(VARCHAR, BOOLEAN);
+CREATE OR REPLACE FUNCTION academico_test.fn_actividad_validar_titulo(
+    p_titulo         VARCHAR,
+    p_obligatorio    BOOLEAN,
+    p_fk_tgrupo      BIGINT DEFAULT NULL,
+    p_fk_tasignatura BIGINT DEFAULT NULL,
+    p_fk_tunidad     BIGINT DEFAULT NULL
+)
 RETURNS VOID
 LANGUAGE plpgsql
-IMMUTABLE
+STABLE
 AS $$
 BEGIN
     IF p_titulo IS NULL AND NOT p_obligatorio THEN
         RETURN;
     END IF;
     IF NULLIF(TRIM(p_titulo), '') IS NULL THEN
-        RAISE EXCEPTION 'Escriba el nombre de la actividad' USING ERRCODE = '22023';
+        RAISE EXCEPTION 'Escriba el nombre (%)',
+            academico_test.fn_actividad_rotulo(p_fk_tgrupo, p_fk_tasignatura, p_fk_tunidad) USING ERRCODE = '22023';
     END IF;
     IF length(TRIM(p_titulo)) > 150 THEN
-        RAISE EXCEPTION 'El nombre de la actividad no puede pasar de 150 caracteres (tiene %)',
+        RAISE EXCEPTION 'El nombre (%) no puede pasar de 150 caracteres (tiene %)',
+            academico_test.fn_actividad_rotulo(p_fk_tgrupo, p_fk_tasignatura, p_fk_tunidad),
             length(TRIM(p_titulo)) USING ERRCODE = '22023';
     END IF;
 END;
@@ -408,7 +417,12 @@ BEGIN
 END;
 $$;
 
-CREATE OR REPLACE FUNCTION academico_test.fn_actividad_validar_unidad(p_fk_tunidad BIGINT)
+DROP FUNCTION IF EXISTS academico_test.fn_actividad_validar_unidad(BIGINT);
+CREATE OR REPLACE FUNCTION academico_test.fn_actividad_validar_unidad(
+    p_fk_tunidad     BIGINT,
+    p_fk_tgrupo      BIGINT DEFAULT NULL,
+    p_fk_tasignatura BIGINT DEFAULT NULL
+)
 RETURNS VOID
 LANGUAGE plpgsql
 STABLE
@@ -418,7 +432,9 @@ BEGIN
         RETURN;
     END IF;
     IF NOT EXISTS (SELECT 1 FROM academico_test.TUNIDAD WHERE PK_TUNIDAD = p_fk_tunidad) THEN
-        RAISE EXCEPTION 'La unidad seleccionada no existe' USING ERRCODE = '23503';
+        RAISE EXCEPTION 'No existe la opción de % seleccionada',
+            lower(academico_test.fn_unidad_rotulo(academico_test.fn_unidad_referente_aplicable(
+                (SELECT FK_TGRADO FROM academico_test.TGRUPO WHERE PK_TGRUPO = p_fk_tgrupo), p_fk_tasignatura, NULL))) USING ERRCODE = '23503';
     END IF;
     IF EXISTS (SELECT 1 FROM academico_test.TUNIDAD WHERE PK_TUNIDAD = p_fk_tunidad AND ACTIVE = FALSE) THEN
         RAISE EXCEPTION 'No se puede usar %: ya fue eliminada',
@@ -450,11 +466,14 @@ $$;
 -- (fn_actividad_periodo_evaluacion): no puede repartirse entre dos. Se cuentan
 -- los periodos que SOLAPAN el rango, no los que contienen sus extremos: un
 -- cierre en el hueco entre dos cortes también sale del periodo en que empezó.
+DROP FUNCTION IF EXISTS academico_test.fn_actividad_validar_periodo_evaluacion_unico(BIGINT, BIGINT, DATE, DATE);
 CREATE OR REPLACE FUNCTION academico_test.fn_actividad_validar_periodo_evaluacion_unico(
-    p_fk_tgrupo    BIGINT,
-    p_fk_tunidad   BIGINT,
-    p_fecha_inicio DATE,
-    p_fecha_cierre DATE
+    p_fk_tgrupo      BIGINT,
+    p_fk_tunidad     BIGINT,
+    p_fecha_inicio   DATE,
+    p_fecha_cierre   DATE,
+    p_fk_tasignatura BIGINT  DEFAULT NULL,
+    p_titulo         VARCHAR DEFAULT NULL
 )
 RETURNS VOID
 LANGUAGE plpgsql
@@ -491,7 +510,8 @@ BEGIN
          ORDER BY pe.FECHA_INICIO
          LIMIT 1;
 
-        RAISE EXCEPTION 'La actividad no puede abarcar varios periodos de evaluación: del % al % pasa por %',
+        RAISE EXCEPTION '% no puede abarcar varios periodos de evaluación: del % al % pasa por %',
+            COALESCE(p_titulo, academico_test.fn_actividad_rotulo(p_fk_tgrupo, p_fk_tasignatura, p_fk_tunidad)),
             to_char(p_fecha_inicio, 'DD/MM/YYYY'), to_char(p_fecha_cierre, 'DD/MM/YYYY'), v_periodos
             USING ERRCODE = '22023',
                   HINT    = format('Si empieza en %s, la fecha de cierre debe ser a más tardar el %s',
@@ -523,11 +543,13 @@ BEGIN
     SELECT FK_TASIGNATURA, FK_TGRADO INTO v_asig_uni, v_grado_uni
       FROM academico_test.TUNIDAD WHERE PK_TUNIDAD = p_fk_tunidad;
     IF p_fk_tasignatura IS NOT NULL AND p_fk_tasignatura IS DISTINCT FROM v_asig_uni THEN
-        RAISE EXCEPTION '% es de "%" y % es de "%": elija una unidad de la misma asignatura',
+        RAISE EXCEPTION '% es de "%" y % es de "%": elija otra opción de % de la misma asignatura',
             p_titulo,
             (SELECT NOMBRE FROM academico_test.TASIGNATURA WHERE PK_TASIGNATURA = p_fk_tasignatura),
             academico_test.fn_unidad_etiqueta(p_fk_tunidad),
-            (SELECT NOMBRE FROM academico_test.TASIGNATURA WHERE PK_TASIGNATURA = v_asig_uni)
+            (SELECT NOMBRE FROM academico_test.TASIGNATURA WHERE PK_TASIGNATURA = v_asig_uni),
+            lower((SELECT academico_test.fn_unidad_rotulo(FK_REFERENTE_CURRICULAR)
+                     FROM academico_test.TUNIDAD WHERE PK_TUNIDAD = p_fk_tunidad))
             USING ERRCODE = '22023';
     END IF;
     SELECT FK_TGRADO INTO v_grado_gr FROM academico_test.TGRUPO WHERE PK_TGRUPO = p_fk_tgrupo;
@@ -585,11 +607,14 @@ $$;
 
 -- Bloque 5: el método de cálculo de la unidad decide si el % se captura a mano
 -- (Ponderar), no aplica (Promediar) o sale del puntaje (Sumatoria).
+DROP FUNCTION IF EXISTS academico_test.fn_actividad_validar_ponderacion(NUMERIC, BIGINT, academico_test.bool_sn, VARCHAR);
 CREATE OR REPLACE FUNCTION academico_test.fn_actividad_validar_ponderacion(
-    p_ponderacion   NUMERIC,
-    p_fk_tunidad    BIGINT,
-    p_es_evaluativa academico_test.bool_sn,
-    p_titulo        VARCHAR
+    p_ponderacion    NUMERIC,
+    p_fk_tunidad     BIGINT,
+    p_es_evaluativa  academico_test.bool_sn,
+    p_titulo         VARCHAR,
+    p_fk_tgrupo      BIGINT DEFAULT NULL,
+    p_fk_tasignatura BIGINT DEFAULT NULL
 )
 RETURNS VOID
 LANGUAGE plpgsql
@@ -600,15 +625,18 @@ BEGIN
         RETURN;
     END IF;
     IF p_ponderacion < 0 OR p_ponderacion > 100 THEN
-        RAISE EXCEPTION 'El peso de la actividad (%%) debe estar entre 0 y 100; llegó %', p_ponderacion
+        RAISE EXCEPTION 'El peso (%%) de % debe estar entre 0 y 100; llegó %', p_titulo, p_ponderacion
             USING ERRCODE = '22023';
     END IF;
     IF p_fk_tunidad IS NULL THEN
-        RAISE EXCEPTION 'El peso (%%) de % solo aplica cuando está vinculada a una unidad', p_titulo
+        RAISE EXCEPTION 'El peso (%%) de % solo aplica si tiene vínculo con %', p_titulo,
+            lower(academico_test.fn_unidad_rotulo(academico_test.fn_unidad_referente_aplicable(
+                (SELECT FK_TGRADO FROM academico_test.TGRUPO WHERE PK_TGRUPO = p_fk_tgrupo), p_fk_tasignatura, NULL)))
             USING ERRCODE = '22023';
     END IF;
     IF p_es_evaluativa = 'N' THEN
-        RAISE EXCEPTION '% no es sumativa: no lleva peso (%%) en la unidad', p_titulo
+        RAISE EXCEPTION '% no es sumativa: no lleva peso (%%) en %', p_titulo,
+            academico_test.fn_unidad_etiqueta(p_fk_tunidad)
             USING ERRCODE = '22023';
     END IF;
     PERFORM academico_test.fn_unidad_validar_ponderacion_actividad_manual(p_fk_tunidad);
@@ -616,14 +644,21 @@ END;
 $$;
 
 -- Sumatoria: el puntaje de la actividad es un número positivo.
-CREATE OR REPLACE FUNCTION academico_test.fn_actividad_validar_nota_maxima(p_nota_maxima NUMERIC)
+DROP FUNCTION IF EXISTS academico_test.fn_actividad_validar_nota_maxima(NUMERIC);
+CREATE OR REPLACE FUNCTION academico_test.fn_actividad_validar_nota_maxima(
+    p_nota_maxima    NUMERIC,
+    p_fk_tgrupo      BIGINT DEFAULT NULL,
+    p_fk_tasignatura BIGINT DEFAULT NULL,
+    p_fk_tunidad     BIGINT DEFAULT NULL
+)
 RETURNS VOID
 LANGUAGE plpgsql
-IMMUTABLE
+STABLE
 AS $$
 BEGIN
     IF p_nota_maxima IS NOT NULL AND p_nota_maxima <= 0 THEN
-        RAISE EXCEPTION 'El puntaje de la actividad debe ser un número positivo; llegó %', p_nota_maxima
+        RAISE EXCEPTION 'El puntaje de cada % debe ser un número positivo; llegó %',
+            lower(academico_test.fn_actividad_rotulo(p_fk_tgrupo, p_fk_tasignatura, p_fk_tunidad)), p_nota_maxima
             USING ERRCODE = '22023';
     END IF;
 END;
@@ -649,13 +684,17 @@ BEGIN
     CASE academico_test.fn_unidad_calculo_definitiva_modo(p_fk_tunidad)
         WHEN 'PONDERAR' THEN
             IF p_ponderacion IS NULL THEN
-                RAISE EXCEPTION '% pondera sus actividades: indique el peso (%%) de %',
-                    academico_test.fn_unidad_etiqueta(p_fk_tunidad), p_titulo USING ERRCODE = '22023';
+                RAISE EXCEPTION '% pondera sus %: indique el peso (%%) de %',
+                    academico_test.fn_unidad_etiqueta(p_fk_tunidad), lower(academico_test.fn_planeador_rotulo_pluralizar(
+                        academico_test.fn_actividad_rotulo(NULL, NULL, p_fk_tunidad))),
+                    p_titulo USING ERRCODE = '22023';
             END IF;
         WHEN 'SUMATORIA' THEN
             IF p_nota_maxima IS NULL THEN
-                RAISE EXCEPTION '% suma los puntajes de sus actividades: indique el puntaje de %',
-                    academico_test.fn_unidad_etiqueta(p_fk_tunidad), p_titulo USING ERRCODE = '22023';
+                RAISE EXCEPTION '% suma los puntajes de sus %: indique el puntaje de %',
+                    academico_test.fn_unidad_etiqueta(p_fk_tunidad), lower(academico_test.fn_planeador_rotulo_pluralizar(
+                        academico_test.fn_actividad_rotulo(NULL, NULL, p_fk_tunidad))),
+                    p_titulo USING ERRCODE = '22023';
             END IF;
         ELSE NULL;
     END CASE;
@@ -664,12 +703,14 @@ $$;
 
 -- Backstop de U_TACTIVIDAD_1: con unidad o grupo NULL el UNIQUE no garantiza
 -- nada (NULL nunca colisiona).
+DROP FUNCTION IF EXISTS academico_test.fn_actividad_validar_titulo_unico(VARCHAR, BIGINT, BIGINT, BIGINT, BIGINT);
 CREATE OR REPLACE FUNCTION academico_test.fn_actividad_validar_titulo_unico(
     p_titulo           VARCHAR,
     p_fk_tunidad       BIGINT,
     p_fk_tgrupo        BIGINT,
     p_fk_tlv_jerarquia BIGINT,
-    p_excluir_pk       BIGINT DEFAULT NULL
+    p_excluir_pk       BIGINT DEFAULT NULL,
+    p_fk_tasignatura   BIGINT DEFAULT NULL
 )
 RETURNS VOID
 LANGUAGE plpgsql
@@ -687,8 +728,12 @@ BEGIN
     ) THEN
         RAISE EXCEPTION 'Ya existe "%" en % para %: elija otro nombre',
             TRIM(p_titulo),
-            COALESCE(academico_test.fn_unidad_etiqueta(p_fk_tunidad), 'las actividades sin unidad'),
-            COALESCE(academico_test.fn_actividad_grupo_etiqueta(p_fk_tgrupo), 'las actividades sin grupo')
+            COALESCE(academico_test.fn_unidad_etiqueta(p_fk_tunidad),
+                     format('%s sin %s', lower(academico_test.fn_planeador_rotulo_pluralizar(
+                                             academico_test.fn_actividad_rotulo(p_fk_tgrupo, p_fk_tasignatura, NULL))),
+                            lower(academico_test.fn_unidad_rotulo(academico_test.fn_unidad_referente_aplicable(
+                (SELECT FK_TGRADO FROM academico_test.TGRUPO WHERE PK_TGRUPO = p_fk_tgrupo), p_fk_tasignatura, NULL))))),
+            COALESCE(academico_test.fn_actividad_grupo_etiqueta(p_fk_tgrupo), 'ningún grupo')
             USING ERRCODE = '23505';
     END IF;
 END;
@@ -699,25 +744,36 @@ $$;
 -- ---------------------------------------------------------------------------
 
 -- Las evidencias salen de la unidad: sin unidad no hay de dónde escogerlas.
-CREATE OR REPLACE FUNCTION academico_test.fn_actividad_validar_tiene_unidad(p_fk_tunidad BIGINT, p_titulo VARCHAR, p_que VARCHAR)
+DROP FUNCTION IF EXISTS academico_test.fn_actividad_validar_tiene_unidad(BIGINT, VARCHAR, VARCHAR);
+CREATE OR REPLACE FUNCTION academico_test.fn_actividad_validar_tiene_unidad(
+    p_fk_tunidad     BIGINT,
+    p_titulo         VARCHAR,
+    p_que            VARCHAR,
+    p_fk_tgrupo      BIGINT DEFAULT NULL,
+    p_fk_tasignatura BIGINT DEFAULT NULL
+)
 RETURNS VOID
 LANGUAGE plpgsql
-IMMUTABLE
+STABLE
 AS $$
 BEGIN
     IF p_fk_tunidad IS NULL THEN
-        RAISE EXCEPTION '% no está vinculada a ninguna unidad: vincúlela primero para seleccionar %',
-            p_titulo, p_que USING ERRCODE = '22023';
+        RAISE EXCEPTION '% no tiene vínculo con %: establézcalo primero para seleccionar %',
+            p_titulo, lower(academico_test.fn_unidad_rotulo(academico_test.fn_unidad_referente_aplicable(
+                (SELECT FK_TGRADO FROM academico_test.TGRUPO WHERE PK_TGRUPO = p_fk_tgrupo), p_fk_tasignatura, NULL))), p_que USING ERRCODE = '22023';
     END IF;
 END;
 $$;
 
 -- Una evidencia es un elemento de segundo nivel de un enunciado que la unidad
 -- seleccionó, del referente de la unidad y de su grado (Reglas 12, 16, 17).
+DROP FUNCTION IF EXISTS academico_test.fn_actividad_validar_evidencia(BIGINT, VARCHAR, BIGINT);
 CREATE OR REPLACE FUNCTION academico_test.fn_actividad_validar_evidencia(
     p_fk_tunidad             BIGINT,
     p_titulo                 VARCHAR,
-    p_fk_referente_enunciado BIGINT
+    p_fk_referente_enunciado BIGINT,
+    p_fk_tgrupo              BIGINT DEFAULT NULL,
+    p_fk_tasignatura         BIGINT DEFAULT NULL
 )
 RETURNS VOID
 LANGUAGE plpgsql
@@ -731,7 +787,7 @@ BEGIN
     IF p_fk_referente_enunciado IS NULL THEN
         RAISE EXCEPTION 'Seleccione la evidencia que cubre %', p_titulo USING ERRCODE = '22023';
     END IF;
-    PERFORM academico_test.fn_actividad_validar_tiene_unidad(p_fk_tunidad, p_titulo, 'sus evidencias');
+    PERFORM academico_test.fn_actividad_validar_tiene_unidad(p_fk_tunidad, p_titulo, 'sus evidencias', p_fk_tgrupo, p_fk_tasignatura);
 
     SELECT FK_PADRE, ACTIVE, ESTADO INTO v_padre, v_active, v_estado
       FROM academico_test.TREFERENTE_ENUNCIADO WHERE PK_REFERENTE_ENUNCIADO = p_fk_referente_enunciado;
@@ -744,8 +800,8 @@ BEGIN
             academico_test.fn_unidad_enunciado_etiqueta(p_fk_referente_enunciado) USING ERRCODE = '23503';
     END IF;
     IF v_padre IS NULL THEN
-        RAISE EXCEPTION '% es un elemento de primer nivel: en la actividad se marcan sus evidencias',
-            academico_test.fn_unidad_enunciado_etiqueta(p_fk_referente_enunciado) USING ERRCODE = '22023';
+        RAISE EXCEPTION '% es un elemento de primer nivel: en % se marcan sus evidencias',
+            academico_test.fn_unidad_enunciado_etiqueta(p_fk_referente_enunciado), p_titulo USING ERRCODE = '22023';
     END IF;
     IF NOT EXISTS (SELECT 1 FROM academico_test.TUNIDAD_ENUNCIADO
                     WHERE FK_TUNIDAD = p_fk_tunidad AND FK_REFERENTE_ENUNCIADO = v_padre AND ACTIVE = TRUE) THEN
@@ -795,10 +851,13 @@ END;
 $$;
 
 -- El criterio debe ser de la rúbrica (activa) de la misma unidad de la actividad.
+DROP FUNCTION IF EXISTS academico_test.fn_actividad_validar_criterio(BIGINT, VARCHAR, BIGINT);
 CREATE OR REPLACE FUNCTION academico_test.fn_actividad_validar_criterio(
     p_fk_tunidad          BIGINT,
     p_titulo              VARCHAR,
-    p_fk_tcriterio_unidad BIGINT
+    p_fk_tcriterio_unidad BIGINT,
+    p_fk_tgrupo           BIGINT DEFAULT NULL,
+    p_fk_tasignatura      BIGINT DEFAULT NULL
 )
 RETURNS VOID
 LANGUAGE plpgsql
@@ -814,7 +873,7 @@ BEGIN
         RAISE EXCEPTION 'Seleccione el criterio de la rúbrica que evalúa %', p_titulo
             USING ERRCODE = '22023';
     END IF;
-    PERFORM academico_test.fn_actividad_validar_tiene_unidad(p_fk_tunidad, p_titulo, 'criterios de su rúbrica');
+    PERFORM academico_test.fn_actividad_validar_tiene_unidad(p_fk_tunidad, p_titulo, 'criterios de su rúbrica', p_fk_tgrupo, p_fk_tasignatura);
 
     SELECT cu.DESCRIPCION, ru.FK_TUNIDAD, cu.ACTIVE, ru.ACTIVE
       INTO v_desc, v_unidad, v_active, v_rub_active
@@ -1024,7 +1083,13 @@ AS $$
         p_fk_tarchivo, p_que, ARRAY['pdf','doc','docx','jpg','jpeg','png'], 10);
 $$;
 
-CREATE OR REPLACE FUNCTION academico_test.fn_actividad_validar_materiales(p_materiales JSONB)
+DROP FUNCTION IF EXISTS academico_test.fn_actividad_validar_materiales(JSONB);
+CREATE OR REPLACE FUNCTION academico_test.fn_actividad_validar_materiales(
+    p_materiales     JSONB,
+    p_fk_tgrupo      BIGINT DEFAULT NULL,
+    p_fk_tasignatura BIGINT DEFAULT NULL,
+    p_fk_tunidad     BIGINT DEFAULT NULL
+)
 RETURNS VOID
 LANGUAGE plpgsql
 STABLE
@@ -1041,7 +1106,8 @@ BEGIN
         RAISE EXCEPTION 'Los materiales de apoyo deben enviarse como una lista' USING ERRCODE = '22023';
     END IF;
     IF jsonb_array_length(p_materiales) > 10 THEN
-        RAISE EXCEPTION 'Una actividad admite máximo 10 materiales de apoyo; llegaron %',
+        RAISE EXCEPTION 'Cada % admite máximo 10 materiales de apoyo; llegaron %',
+            lower(academico_test.fn_actividad_rotulo(p_fk_tgrupo, p_fk_tasignatura, p_fk_tunidad)),
             jsonb_array_length(p_materiales) USING ERRCODE = '22023';
     END IF;
     FOR v_m IN SELECT e AS j, ord FROM jsonb_array_elements(p_materiales) WITH ORDINALITY AS t(e, ord) LOOP
@@ -1250,7 +1316,12 @@ BEGIN
       INTO v_o
       FROM academico_test.TACTIVIDAD WHERE PK_TACTIVIDAD = p_fk_tactividad_recuperar;
     IF NOT FOUND OR NOT v_o.ACTIVE THEN
-        RAISE EXCEPTION 'No se encontró la actividad que se quiere recuperar' USING ERRCODE = 'P0002';
+        RAISE EXCEPTION 'No se encontró la opción de % que se quiere recuperar',
+            lower(COALESCE(
+                (SELECT academico_test.fn_actividad_rotulo(FK_TGRUPO, FK_TASIGNATURA, FK_TUNIDAD)
+                   FROM academico_test.TACTIVIDAD WHERE PK_TACTIVIDAD = p_pk_tactividad_actual),
+                academico_test.fn_actividad_rotulo(NULL, p_fk_tasignatura, NULL)))
+            USING ERRCODE = 'P0002';
     END IF;
     IF p_fk_tactividad_recuperar = p_pk_tactividad_actual THEN
         RAISE EXCEPTION '% no puede recuperarse a sí misma', academico_test.fn_actividad_etiqueta(p_fk_tactividad_recuperar) USING ERRCODE = '22023';
@@ -1277,7 +1348,13 @@ $$;
 
 -- Formato del objeto de recuperación {destino, tipoAplicacion, tipoCalculo?,
 -- valorPonderacion?, fkActividadRecuperar?}.
-CREATE OR REPLACE FUNCTION academico_test.fn_actividad_validar_recuperacion_config(p_config JSONB)
+DROP FUNCTION IF EXISTS academico_test.fn_actividad_validar_recuperacion_config(JSONB);
+CREATE OR REPLACE FUNCTION academico_test.fn_actividad_validar_recuperacion_config(
+    p_config         JSONB,
+    p_fk_tgrupo      BIGINT DEFAULT NULL,
+    p_fk_tasignatura BIGINT DEFAULT NULL,
+    p_fk_tunidad     BIGINT DEFAULT NULL
+)
 RETURNS VOID
 LANGUAGE plpgsql
 STABLE
@@ -1287,6 +1364,7 @@ DECLARE
     v_aplic   VARCHAR;
     v_calculo VARCHAR;
     v_valor   TEXT := NULLIF(TRIM(p_config->>'valorPonderacion'), '');
+    v_rotulo  VARCHAR := lower(academico_test.fn_actividad_rotulo(p_fk_tgrupo, p_fk_tasignatura, p_fk_tunidad));
 BEGIN
     IF p_config IS NULL THEN
         RETURN;
@@ -1295,7 +1373,7 @@ BEGIN
         RAISE EXCEPTION 'La configuración de la recuperación no tiene el formato esperado' USING ERRCODE = '22023';
     END IF;
     IF (p_config->>'destino') IS NULL THEN
-        RAISE EXCEPTION 'Indique qué desea recuperar: una actividad o la nota final' USING ERRCODE = '22023';
+        RAISE EXCEPTION 'Indique qué desea recuperar (% o nota final)', v_rotulo USING ERRCODE = '22023';
     END IF;
     IF (p_config->>'tipoAplicacion') IS NULL THEN
         RAISE EXCEPTION 'Indique cómo se aplicará la nota de la recuperación' USING ERRCODE = '22023';
@@ -1333,10 +1411,10 @@ BEGIN
         END IF;
     END IF;
     IF v_destino = 'ACTIVIDAD' AND (p_config->>'fkActividadRecuperar') IS NULL THEN
-        RAISE EXCEPTION 'Seleccione la actividad que se va a recuperar' USING ERRCODE = '22023';
+        RAISE EXCEPTION 'Seleccione qué % se va a recuperar', v_rotulo USING ERRCODE = '22023';
     END IF;
     IF v_destino IS DISTINCT FROM 'ACTIVIDAD' AND (p_config->>'fkActividadRecuperar') IS NOT NULL THEN
-        RAISE EXCEPTION 'Una recuperación de la nota final no se amarra a una actividad' USING ERRCODE = '22023';
+        RAISE EXCEPTION 'Una recuperación de la nota final no lleva % que recuperar', v_rotulo USING ERRCODE = '22023';
     END IF;
 END;
 $$;
@@ -1417,7 +1495,7 @@ AS $$
 DECLARE
     v_r RECORD;
 BEGIN
-    SELECT a.TITULO, a.FK_TGRUPO, a.FK_TUNIDAD,
+    SELECT a.TITULO, a.FK_TGRUPO, a.FK_TUNIDAD, a.FK_TASIGNATURA,
            o.TITULO AS o_titulo, o.FK_TGRUPO AS o_grupo, o.FK_TUNIDAD AS o_unidad,
            academico_test.fn_actividad_etiqueta(a.PK_TACTIVIDAD) AS etiqueta,
            academico_test.fn_actividad_etiqueta(o.PK_TACTIVIDAD) AS o_etiqueta
@@ -1435,13 +1513,16 @@ BEGIN
             USING ERRCODE = '22023';
     END IF;
     IF v_r.FK_TUNIDAD IS DISTINCT FROM v_r.o_unidad THEN
-        RAISE EXCEPTION '% es un refuerzo de %: debe quedar en la misma unidad (%)',
+        RAISE EXCEPTION '% es un refuerzo de %: debe quedar %',
             v_r.etiqueta, v_r.o_etiqueta,
-            COALESCE(academico_test.fn_unidad_etiqueta(v_r.o_unidad), 'sin unidad')
+            COALESCE('en ' || academico_test.fn_unidad_etiqueta(v_r.o_unidad),
+                     'sin ' || lower(academico_test.fn_unidad_rotulo(academico_test.fn_unidad_referente_aplicable(
+                         (SELECT FK_TGRADO FROM academico_test.TGRUPO WHERE PK_TGRUPO = v_r.FK_TGRUPO),
+                         v_r.FK_TASIGNATURA, NULL))))
             USING ERRCODE = '22023';
     END IF;
     IF position(lower(TRIM(v_r.o_titulo)) IN lower(v_r.TITULO)) = 0 THEN
-        RAISE EXCEPTION 'El título de un refuerzo conserva el de la actividad original "%"', v_r.o_titulo
+        RAISE EXCEPTION 'El título de un refuerzo conserva el de su original, %', v_r.o_etiqueta
             USING ERRCODE = '22023',
                   HINT    = format('Por ejemplo: "Recuperacion - %s"', v_r.o_titulo);
     END IF;
@@ -1472,9 +1553,12 @@ BEGIN
      WHERE u.PK_TUNIDAD = p_fk_tunidad;
     IF FOUND AND NOT (v_ref.ACTIVE AND v_ref.ESTADO = 'A') THEN
         RAISE EXCEPTION '% no se puede ubicar en %: su referente curricular "%" está inactivo',
-            COALESCE(p_titulo, 'La actividad'), academico_test.fn_unidad_etiqueta(p_fk_tunidad), v_ref.NOMBRE
+            COALESCE(p_titulo, academico_test.fn_actividad_rotulo(NULL, NULL, p_fk_tunidad)),
+            academico_test.fn_unidad_etiqueta(p_fk_tunidad), v_ref.NOMBRE
             USING ERRCODE = '23503',
-                  HINT    = 'Pida que reactiven el referente o elija una unidad con un referente activo';
+                  HINT    = format('Pida que reactiven el referente o elija otra opción de %s con un referente activo',
+                                   lower(academico_test.fn_unidad_rotulo(
+                                       (SELECT FK_REFERENTE_CURRICULAR FROM academico_test.TUNIDAD WHERE PK_TUNIDAD = p_fk_tunidad))));
     END IF;
 END;
 $$;
@@ -1520,7 +1604,8 @@ BEGIN
         RAISE EXCEPTION '% ya tiene resultados registrados para % estudiante(s); no se puede eliminar',
             academico_test.fn_actividad_etiqueta(p_pk_tactividad), v_estudiantes
             USING ERRCODE = '23503',
-                  HINT = 'Por normativa de conservación de datos, una actividad con resultados no se elimina';
+                  HINT = format('Por normativa de conservación de datos, %s no se elimina mientras tenga resultados',
+                                academico_test.fn_actividad_etiqueta(p_pk_tactividad));
     END IF;
 END;
 $$;
@@ -1535,23 +1620,28 @@ AS $$
 DECLARE
     v_estudiantes BIGINT := academico_test.fn_actividad_estudiantes_con_resultado(p_pk_tactividad);
     v_refuerzo    VARCHAR;
+    v_actual      RECORD;
 BEGIN
+    SELECT FK_TGRUPO, FK_TASIGNATURA, FK_TUNIDAD INTO v_actual
+      FROM academico_test.TACTIVIDAD WHERE PK_TACTIVIDAD = p_pk_tactividad;
     IF v_estudiantes > 0 THEN
         RAISE EXCEPTION '% ya tiene resultados registrados para % estudiante(s) y no se puede modificar',
             academico_test.fn_actividad_etiqueta(p_pk_tactividad), v_estudiantes
             USING ERRCODE = '23503',
-                  HINT = 'Para cambiarla, cree una actividad nueva';
+                  HINT = format('Para hacer cambios, cree un registro nuevo de %s',
+                                lower(academico_test.fn_actividad_rotulo(v_actual.FK_TGRUPO, v_actual.FK_TASIGNATURA, v_actual.FK_TUNIDAD)));
     END IF;
-    SELECT a.TITULO INTO v_refuerzo
+    SELECT academico_test.fn_actividad_etiqueta(a.PK_TACTIVIDAD) INTO v_refuerzo
       FROM academico_test.TACTIVIDAD_RECUPERACION r
       JOIN academico_test.TACTIVIDAD a ON a.PK_TACTIVIDAD = r.FK_TACTIVIDAD AND a.ACTIVE = TRUE
      WHERE r.FK_TACTIVIDAD_RECUPERAR = p_pk_tactividad AND r.ACTIVE = TRUE
      LIMIT 1;
     IF FOUND THEN
-        RAISE EXCEPTION '% es la actividad original de la recuperación "%" y no se puede modificar',
+        RAISE EXCEPTION '% es la base de la recuperación % y no se puede modificar',
             academico_test.fn_actividad_etiqueta(p_pk_tactividad), v_refuerzo
             USING ERRCODE = '23503',
-                  HINT = 'Para cambiarla, cree una actividad nueva';
+                  HINT = format('Para hacer cambios, cree un registro nuevo de %s',
+                                lower(academico_test.fn_actividad_rotulo(v_actual.FK_TGRUPO, v_actual.FK_TASIGNATURA, v_actual.FK_TUNIDAD)));
     END IF;
 END;
 $$;
@@ -1562,6 +1652,9 @@ $$;
 
 -- Formato de lo que llega en el formulario, antes de mirar el contexto. En el
 -- alta los obligatorios se exigen; en el PATCH solo se valida lo que viene.
+DROP FUNCTION IF EXISTS academico_test.fn_actividad_validar_campos(
+    BOOLEAN, VARCHAR, BIGINT, BIGINT, BIGINT, VARCHAR, VARCHAR, VARCHAR, BIGINT, BIGINT, BIGINT, BIGINT, BIGINT,
+    NUMERIC, JSONB, JSONB, JSONB);
 CREATE OR REPLACE FUNCTION academico_test.fn_actividad_validar_campos(
     p_es_alta                       BOOLEAN,
     p_titulo                        VARCHAR,
@@ -1579,20 +1672,24 @@ CREATE OR REPLACE FUNCTION academico_test.fn_actividad_validar_campos(
     p_nota_maxima                   NUMERIC,
     p_materiales                    JSONB,
     p_adaptaciones                  JSONB,
-    p_recuperacion                  JSONB
+    p_recuperacion                  JSONB,
+    p_fk_tgrupo                     BIGINT DEFAULT NULL,
+    p_fk_tunidad                    BIGINT DEFAULT NULL
 )
 RETURNS VOID
 LANGUAGE plpgsql
 STABLE
 AS $$
+DECLARE
+    v_rotulo VARCHAR := academico_test.fn_actividad_rotulo(p_fk_tgrupo, p_fk_tasignatura, p_fk_tunidad);
 BEGIN
-    PERFORM academico_test.fn_actividad_validar_titulo(p_titulo, p_es_alta);
+    PERFORM academico_test.fn_actividad_validar_titulo(p_titulo, p_es_alta, p_fk_tgrupo, p_fk_tasignatura, p_fk_tunidad);
     IF p_es_alta THEN
-        PERFORM academico_test.fn_actividad_validar_requerido(p_fk_tasignatura,        'Seleccione la asignatura de la actividad');
+        PERFORM academico_test.fn_actividad_validar_requerido(p_fk_tasignatura,        format('Seleccione la asignatura (%s)', v_rotulo));
         PERFORM academico_test.fn_actividad_validar_requerido(p_fk_tlv_tipo_actividad, 'Seleccione el tipo de actividad');
-        PERFORM academico_test.fn_actividad_validar_requerido(p_fk_tlv_jerarquia,      'Seleccione la jerarquía de la actividad');
+        PERFORM academico_test.fn_actividad_validar_requerido(p_fk_tlv_jerarquia,      format('Seleccione la jerarquía (%s)', v_rotulo));
     END IF;
-    PERFORM academico_test.fn_actividad_validar_texto(p_descripcion,             'La descripción de la actividad', 500);
+    PERFORM academico_test.fn_actividad_validar_texto(p_descripcion,             format('La descripción (%s)', v_rotulo), 500);
     PERFORM academico_test.fn_actividad_validar_texto(p_material_requerido,      'Los materiales requeridos', 500);
     PERFORM academico_test.fn_actividad_validar_texto(p_descripcion_instrumento, 'La descripción del instrumento', 200);
     PERFORM academico_test.fn_actividad_validar_catalogo(p_fk_tlv_tipo_actividad,         'TIPO_ACTIVIDAD',           'Tipo de actividad');
@@ -1602,10 +1699,10 @@ BEGIN
     PERFORM academico_test.fn_actividad_validar_catalogo(p_fk_tlv_tipo_evidencia,         'TIPO_EVIDENCIA',           'Tipo de evidencia esperada');
     PERFORM academico_test.fn_actividad_validar_catalogo(p_fk_tlv_metodo_valoracion,      'METODO_VALORACION',        'Método de valoración');
     PERFORM academico_test.fn_actividad_validar_catalogo(p_fk_tlv_tipo_calculo,           'TIPO_CALCULO',             'Tipo de cálculo');
-    PERFORM academico_test.fn_actividad_validar_nota_maxima(p_nota_maxima);
-    PERFORM academico_test.fn_actividad_validar_materiales(p_materiales);
+    PERFORM academico_test.fn_actividad_validar_nota_maxima(p_nota_maxima, p_fk_tgrupo, p_fk_tasignatura, p_fk_tunidad);
+    PERFORM academico_test.fn_actividad_validar_materiales(p_materiales, p_fk_tgrupo, p_fk_tasignatura, p_fk_tunidad);
     PERFORM academico_test.fn_actividad_validar_adaptaciones(p_adaptaciones);
-    PERFORM academico_test.fn_actividad_validar_recuperacion_config(p_recuperacion);
+    PERFORM academico_test.fn_actividad_validar_recuperacion_config(p_recuperacion, p_fk_tgrupo, p_fk_tasignatura, p_fk_tunidad);
 END;
 $$;
 
@@ -1641,25 +1738,26 @@ AS $$
 BEGIN
     PERFORM academico_test.fn_actividad_validar_asignatura(p_fk_tasignatura);
     PERFORM academico_test.fn_actividad_validar_grupo(p_fk_tgrupo);
-    PERFORM academico_test.fn_actividad_validar_unidad(p_fk_tunidad);
+    PERFORM academico_test.fn_actividad_validar_unidad(p_fk_tunidad, p_fk_tgrupo, p_fk_tasignatura);
     PERFORM academico_test.fn_actividad_validar_unidad_compatible(p_fk_tasignatura, p_fk_tgrupo, p_fk_tunidad, p_titulo);
     PERFORM academico_test.fn_actividad_validar_fechas_orden(p_fecha_inicio, p_fecha_cierre);
     PERFORM academico_test.fn_actividad_programacion_assert(
         p_fk_tgrupo, p_fk_tasignatura, p_fecha_inicio, p_fecha_cierre, p_duracion_estimada, p_semana_cronograma);
     PERFORM academico_test.fn_actividad_validar_periodo_evaluacion_unico(
-        p_fk_tgrupo, p_fk_tunidad, p_fecha_inicio, p_fecha_cierre);
+        p_fk_tgrupo, p_fk_tunidad, p_fecha_inicio, p_fecha_cierre, p_fk_tasignatura, p_titulo);
     PERFORM academico_test.fn_actividad_validar_evaluativa_contexto(
         p_es_evaluativa, p_ctx_evaluativo, p_fk_tunidad, p_titulo);
     PERFORM academico_test.fn_actividad_instrumento_contexto_assert(
         p_fk_tlv_instrumento, p_fk_tgrupo, p_fk_tasignatura, p_fk_tunidad, p_titulo);
     PERFORM academico_test.fn_actividad_validar_recuperacion_sumativa(p_es_recuperacion, p_es_evaluativa, p_titulo);
-    PERFORM academico_test.fn_actividad_validar_ponderacion(p_ponderacion, p_fk_tunidad, p_es_evaluativa, p_titulo);
+    PERFORM academico_test.fn_actividad_validar_ponderacion(
+        p_ponderacion, p_fk_tunidad, p_es_evaluativa, p_titulo, p_fk_tgrupo, p_fk_tasignatura);
     IF p_exigir_minimos THEN
         PERFORM academico_test.fn_actividad_validar_peso_requerido(
             p_fk_tunidad, p_es_evaluativa, p_ponderacion, p_nota_maxima, p_titulo);
     END IF;
     IF p_validar_evidencias THEN
-        PERFORM academico_test.fn_actividad_validar_evidencia(p_fk_tunidad, p_titulo, ev)
+        PERFORM academico_test.fn_actividad_validar_evidencia(p_fk_tunidad, p_titulo, ev, p_fk_tgrupo, p_fk_tasignatura)
            FROM unnest(p_evidencias) ev WHERE ev IS NOT NULL;
         IF p_exigir_minimos THEN
             PERFORM academico_test.fn_actividad_validar_evidencias_minimo(p_fk_tunidad, p_titulo, p_evidencias);
@@ -1729,9 +1827,11 @@ BEGIN
         IF NOT EXISTS (SELECT 1 FROM academico_test.TDOCENTE_ASIGNATURA
                         WHERE FK_TFUNCIONARIO = v_funcionario AND FK_TGRUPO = p_fk_tgrupo
                           AND FK_TASIGNATURA = p_fk_tasignatura AND ACTIVE = TRUE) THEN
-            RAISE EXCEPTION 'No tiene asignada "%" en %: solo puede planear actividades de su carga académica',
+            RAISE EXCEPTION 'No tiene asignada "%" en %: solo puede planear % de su carga académica',
                 (SELECT NOMBRE FROM academico_test.TASIGNATURA WHERE PK_TASIGNATURA = p_fk_tasignatura),
-                academico_test.fn_actividad_grupo_etiqueta(p_fk_tgrupo)
+                academico_test.fn_actividad_grupo_etiqueta(p_fk_tgrupo),
+                lower(academico_test.fn_planeador_rotulo_pluralizar(
+                    academico_test.fn_actividad_rotulo(p_fk_tgrupo, p_fk_tasignatura, p_fk_tunidad)))
                 USING ERRCODE = '42501';
         END IF;
         RETURN;
@@ -1741,9 +1841,11 @@ BEGIN
                      JOIN academico_test.TGRUPO g ON g.PK_TGRUPO = da.FK_TGRUPO
                     WHERE da.FK_TFUNCIONARIO = v_funcionario AND da.FK_TASIGNATURA = p_fk_tasignatura
                       AND da.ACTIVE = TRUE AND (v_grado IS NULL OR g.FK_TGRADO = v_grado)) THEN
-        RAISE EXCEPTION 'No dicta "%"%: solo puede planear actividades de su carga académica',
+        RAISE EXCEPTION 'No dicta "%"%: solo puede planear % de su carga académica',
             (SELECT NOMBRE FROM academico_test.TASIGNATURA WHERE PK_TASIGNATURA = p_fk_tasignatura),
-            COALESCE(' en ' || (SELECT NOMBRE FROM academico_test.TGRADO WHERE PK_TGRADO = v_grado), '')
+            COALESCE(' en ' || (SELECT NOMBRE FROM academico_test.TGRADO WHERE PK_TGRADO = v_grado), ''),
+            lower(academico_test.fn_planeador_rotulo_pluralizar(
+                academico_test.fn_actividad_rotulo(NULL, p_fk_tasignatura, p_fk_tunidad)))
             USING ERRCODE = '42501';
     END IF;
 END;
@@ -1757,7 +1859,7 @@ COMMENT ON FUNCTION academico_test.fn_actividad_validar_editable(BIGINT)
     IS 'Regla 37: 23503 si la actividad ya tiene resultados capturados o es la original de una recuperación activa. La usan los _interno que cambian la definición de la actividad.';
 COMMENT ON FUNCTION academico_test.fn_actividad_lv_assert(BIGINT, VARCHAR, VARCHAR)
     IS 'Valida una FK a TLISTA_VALOR: NULL pasa, si viene debe existir, estar activa y ser de p_categoria (si la categoría está sembrada). Mensaje con el nombre del campo, nunca la pk; delega en fn_actividad_validar_catalogo. La usan las definiciones de instrumento, recuperación y calificación.';
-COMMENT ON FUNCTION academico_test.fn_actividad_validar_periodo_evaluacion_unico(BIGINT, BIGINT, DATE, DATE)
+COMMENT ON FUNCTION academico_test.fn_actividad_validar_periodo_evaluacion_unico(BIGINT, BIGINT, DATE, DATE, BIGINT, VARCHAR)
     IS 'INTERNO: 22023 si [fecha_inicio, fecha_cierre] solapa más de un periodo de evaluación activo del periodo académico del grado de la actividad: la nota se imputa a un solo periodo. Sin fechas o sin ancla no aplica. La usa fn_actividad_validar_coherencia.';
 COMMENT ON FUNCTION academico_test.fn_actividad_validar_sin_notas(BIGINT)
     IS 'INTERNO: 23503 si algún estudiante activo de la actividad tiene resultado (nota, observación o captura de instrumento; fn_actividad_estudiantes_con_resultado). Lo usa fn_actividad_validar_eliminable.';
