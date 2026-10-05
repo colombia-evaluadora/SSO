@@ -116,6 +116,26 @@ ON CONFLICT (microservice_id, path_template, http_method) WHERE path_template IS
        cache_ttl_seconds = EXCLUDED.cache_ttl_seconds, action = EXCLUDED.action, style = EXCLUDED.style,
        param_types = EXCLUDED.param_types, detail = EXCLUDED.detail, query = EXCLUDED.query;
 
+-- POST /planeador/actividades/estudiantes/:ID/calificar/vista-previa
+INSERT INTO public.query (uuid, microservice_id, path_template, http_method, type, execution_mode, out_param_names,
+                          public_end, captcha, cacheable, cache_ttl_seconds, action, style, param_types, detail, query)
+SELECT '34f02142-f10f-448c-9699-649dd4a78332', m.id_microservice, '/planeador/actividades/estudiantes/:ID/calificar/vista-previa', 'POST', 'postgres', 'SELECT', NULL,
+       'f', 'f', 'f', '60', NULL, NULL,
+       '{"PARAM.ID": "BIGINT", "BODY.FECHA": "DATE", "BODY.CALIFICACION": "JSONB"}'::jsonb,
+       'Vista previa de calificar a UN estudiante (:ID = PK_TACTIVIDAD_ESTUDIANTE, fn_actividad_nota_previsualizar): mismo BODY que PUT .../calificar y mismas validaciones y errores, pero no guarda ni abre solicitud de aprobación. Devuelve porcentaje (0-100, con Regla 42, piso y tope) y nota_homologada en el formato del colegio. La usa la planilla para mostrar la nota nueva antes de enviar una corrección en un periodo cerrado.',
+       $q$SELECT * FROM academico_test.fn_actividad_nota_previsualizar(
+    public.fn_get_academico_usuario_id(:CONTEXT.USER_ID::BIGINT),
+    CAST(:PARAM.ID AS BIGINT),
+    CAST(:BODY.CALIFICACION AS JSONB),
+    COALESCE(CAST(:BODY.FECHA AS DATE), CURRENT_DATE)
+);$q$
+  FROM public.microservice m WHERE m.serviceid = 'eval-col'
+ON CONFLICT (microservice_id, path_template, http_method) WHERE path_template IS NOT NULL DO UPDATE
+   SET type = EXCLUDED.type, execution_mode = EXCLUDED.execution_mode, out_param_names = EXCLUDED.out_param_names,
+       public_end = EXCLUDED.public_end, captcha = EXCLUDED.captcha, cacheable = EXCLUDED.cacheable,
+       cache_ttl_seconds = EXCLUDED.cache_ttl_seconds, action = EXCLUDED.action, style = EXCLUDED.style,
+       param_types = EXCLUDED.param_types, detail = EXCLUDED.detail, query = EXCLUDED.query;
+
 -- GET /planeador/actividades/estudiantes/:ID/nota
 INSERT INTO public.query (uuid, microservice_id, path_template, http_method, type, execution_mode, out_param_names,
                           public_end, captcha, cacheable, cache_ttl_seconds, action, style, param_types, detail, query)
@@ -244,6 +264,7 @@ SELECT r.id_role, q.id_query
         ('PUT', '/planeador/actividades/:ID/calificar-bulk/escala'),
         ('PUT', '/planeador/actividades/:ID/calificar-bulk/rubrica'),
         ('PUT', '/planeador/actividades/estudiantes/:ID/calificar'),
+        ('POST', '/planeador/actividades/estudiantes/:ID/calificar/vista-previa'),
         ('GET', '/planeador/actividades/estudiantes/:ID/nota'),
         ('PUT', '/planeador/actividades/estudiantes/:ID/estado-resultado'),
         ('PUT', '/planeador/actividades/estudiantes/:ID/asistencia'),

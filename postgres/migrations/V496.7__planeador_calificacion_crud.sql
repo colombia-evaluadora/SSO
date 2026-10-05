@@ -54,6 +54,23 @@ BEGIN
 END;
 $$;
 
+CREATE OR REPLACE FUNCTION academico_test.fn_actividad_nota_previsualizar(
+    p_pk_usuario_solicitante   BIGINT,
+    p_pk_tactividad_estudiante BIGINT,
+    p_calificacion             JSONB,
+    p_fecha                    DATE DEFAULT CURRENT_DATE
+)
+RETURNS TABLE (porcentaje NUMERIC, nota_homologada NUMERIC)
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    PERFORM academico_test.fn_actividad_assert_resultados(p_pk_usuario_solicitante,
+        academico_test.fn_actividad_estudiante_actividad(p_pk_tactividad_estudiante), 'EDITAR');
+    RETURN QUERY SELECT * FROM academico_test.fn_actividad_nota_previsualizar_interno(
+        p_pk_usuario_solicitante, p_pk_tactividad_estudiante, p_calificacion, p_fecha);
+END;
+$$;
+
 CREATE OR REPLACE FUNCTION academico_test.fn_actividad_nota_calificar_rubrica_bulk(
     p_pk_usuario_solicitante   BIGINT,
     p_pk_tactividad            BIGINT,
@@ -228,6 +245,8 @@ COMMENT ON FUNCTION academico_test.fn_actividad_assert_resultados(BIGINT, BIGINT
     IS 'Gate común de los endpoints de resultados: existencia (P0002), actividad no eliminada (22023), alcance p_accion sobre PLANEADOR (42501) y propiedad de los resultados (Regla 54, 42501).';
 COMMENT ON FUNCTION academico_test.fn_actividad_nota_calificar(BIGINT, BIGINT, JSONB, DATE)
     IS 'PUT /planeador/actividades/estudiantes/:ID/calificar. Wrapper: gate EDITAR, Regla 54 y etiqueta "Calificación de <estudiante> en <actividad>"; delega en fn_actividad_nota_calificar_interno.';
+COMMENT ON FUNCTION academico_test.fn_actividad_nota_previsualizar(BIGINT, BIGINT, JSONB, DATE)
+    IS 'POST /planeador/actividades/estudiantes/:ID/calificar/vista-previa. Wrapper: el mismo gate EDITAR y Regla 54 de calificar; delega en fn_actividad_nota_previsualizar_interno. No escribe, no audita.';
 COMMENT ON FUNCTION academico_test.fn_actividad_nota_calificar_rubrica_bulk(BIGINT, BIGINT, BIGINT, BIGINT, BIGINT[], DATE)
     IS 'PUT /planeador/actividades/:ID/calificar-bulk/rubrica. Wrapper: gate EDITAR, Regla 54 y etiqueta; delega en fn_actividad_nota_calificar_rubrica_bulk_interno.';
 COMMENT ON FUNCTION academico_test.fn_actividad_nota_calificar_cotejo_bulk(BIGINT, BIGINT, BIGINT, CHAR, BIGINT[], DATE)
