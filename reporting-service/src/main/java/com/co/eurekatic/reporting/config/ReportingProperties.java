@@ -152,6 +152,22 @@ public class ReportingProperties {
          */
         private java.util.List<String> formats = new java.util.ArrayList<>();
 
+        /**
+         * Query param que elige la variante de un reporte que agrupa a
+         * otros: {@code POST /reportes/boletin?nivel=preescolar}. Con
+         * {@link #variants} declarado, el reporte no tiene datos propios:
+         * delega en la clave que le toque.
+         */
+        private String variantParam;
+
+        /**
+         * Valor del {@link #variantParam} -> clave del reporte que lo
+         * atiende. Asi un mismo endpoint sirve a reportes con datos y
+         * plantilla distintos (el boletin de preescolar y el de los demas
+         * niveles) sin que el front tenga que conocer cada clave.
+         */
+        private Map<String, String> variants = new LinkedHashMap<>();
+
         public String getPath() { return path; }
         public void setPath(String v) { this.path = v; }
 
@@ -172,5 +188,11 @@ public class ReportingProperties {
 
         public java.util.List<String> getFormats() { return formats; }
         public void setFormats(java.util.List<String> v) { this.formats = v; }
+
+        public String getVariantParam() { return variantParam; }
+        public void setVariantParam(String v) { this.variantParam = v; }
+
+        public Map<String, String> getVariants() { return variants; }
+        public void setVariants(Map<String, String> v) { this.variants = v; }
     }
 }

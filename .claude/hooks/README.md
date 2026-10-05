@@ -107,7 +107,7 @@ Sale con código 2 cuando hay un error.
 
 ## `migration_lint.py`
 
-`PostToolUse` sobre `Write`/`Edit`: pasa `scripts/migration-lint.py` a la
+`PostToolUse` sobre `Write`/`Edit`: pasa `scripts/migration-analysis/comandos/lint.py` a la
 migración recién editada. Cada una de sus reglas corresponde a una regresión que
 ya ocurrió; no valida SQL —para eso está el Postgres local— sino las
 convenciones que se violan en silencio.
@@ -150,7 +150,7 @@ secuestrar la sesión.
 | Lo mismo, sin cambios desde entonces | 0,4 s — reusa el veredicto |
 
 Los ~11 s son de `--check`, que fuerza recalcular el modelo del analizador
-(`generar-mapa.py`: `load_model(refresh or check)`). Eso está bien para CI y
+(`migration-analysis mapa`: `load_model(refresh or check)`). Eso está bien para CI y
 mal para un hook, así que aquí se paga **una vez por cambio, no una por turno**:
 se guarda el veredicto junto a una huella del directorio de migraciones y del
 propio `MAPA.md`.

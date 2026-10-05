@@ -35,9 +35,18 @@ piezas, aquí solo se citan los cambios que introduce esta rama.
 
 ## 1. Estado de resultado (nuevo)
 
-Hasta ahora la falta de asistencia bloqueaba calificar. Ahora la asistencia
-**ya no bloquea**: se refleja como uno de estos estados, independiente de la
-nota.
+La asistencia de la actividad es la de su **fecha fin** (`FECHA_CIERRE`) en cuanto llega y se toma; hasta entonces, la de su **primer día** (`FECHA_INICIO`),
+juntando todos los bloques del día. La tomada en la Vista Asistencias se
+refleja sola en el estado (Regla 73) y es la que muestra el Planeador. Un
+cambio desde el Planeador (`PUT .../estudiantes/:ID/asistencia`) **vale solo
+para esa actividad** y no toca la asistencia tomada. Si ese día no se tomó la
+Vista, la asistencia **oficial** del día (una fila por bloque) se calcula con
+las marcas de todas las actividades del día: presente si asistió en alguna,
+tarde si solo llegó tarde, ausente si faltó en todas. La Vista la reemplaza.
+
+**Sin asistencia, No asistido o No presentó no se califica ni se observa**
+(400). Al registrar el resultado, la asistencia de la actividad queda
+**congelada** (`asistencia_editable = false`).
 
 `ESTADO_RESULTADO` (catálogo `TLISTA_VALOR`), valores:
 
@@ -46,11 +55,11 @@ nota.
 | `PENDIENTE` | Aún sin resolver. Estado por defecto. |
 | `CALIFICADO` | Se fija **automáticamente** al calificar u observar; no se marca a mano. |
 | `NO_PRESENTO` | El estudiante no entregó / no se presentó a la actividad. |
-| `NO_ASISTIO_JUSTIFICADA` | Faltó con excusa justificada. |
-| `NO_ASISTIO_NO_JUSTIFICADA` | Faltó sin justificar. |
+| `NO_ASISTIO_JUSTIFICADA` | Faltó y hay archivo de excusa en algún bloque del día. Sale de la asistencia; no se marca a mano. |
+| `NO_ASISTIO_NO_JUSTIFICADA` | Faltó sin excusa. Sale de la asistencia; no se marca a mano. |
 
-Marcar cualquiera de los tres estados "no calificado" **borra la nota** del
-estudiante (Regla 62): son excluyentes, no conviven con una nota.
+A mano solo se marca `NO_PRESENTO` o `PENDIENTE`. `NO_PRESENTO` exige que no
+haya nota (400): primero se quita la nota. `PENDIENTE` borra la nota (Regla 62).
 
 ### 1.1 `PUT /planeador/actividades/estudiantes/:ID/estado-resultado`
 
@@ -63,15 +72,45 @@ Marca el estado de **un** estudiante. `:ID` = `pk_tactividad_estudiante`.
 **Roles:** `CEVAL-SUPER_ADMINISTRADOR`, `CEVAL-DOCENTE`.
 
 **Errores:** 404 si la asignación no existe; 400 si la actividad fue
-eliminada, su referente está inactivo o el estado no es válido; 403 sin
-alcance o si un docente toca una actividad que no creó.
+eliminada, su referente está inactivo, el estado no es válido (`CALIFICADO` o
+`NO_ASISTIO_*`), el estudiante está No asistido, o se marca `NO_PRESENTO` con
+nota; 403 sin alcance o si un docente toca una actividad que no creó.
+
+### 1.3 `PUT /planeador/actividades/estudiantes/:ID/asistencia`
+
+Asistencia de **un** estudiante en la actividad, marcada desde la tabla de
+calificaciones. `:ID` = `pk_tactividad_estudiante`.
+
+**Body:** `{ "TIPO_ASISTENCIA": 2 }` (1 Asistió, 2 No asistió, 5 Llegó tarde).
+
+**Respuesta:** `{ "estado_resultado": "..." }`.
+
+- Nunca cambia la asistencia de la Vista: el cambio queda en **esta
+  actividad**.
+- Si ese día no se tomó la Vista, la asistencia **oficial** en `TASISTENCIA`
+  (`ORIGEN = PLANEADOR`, una fila por bloque) se recalcula con las marcas de
+  todas las actividades del día: presente si asistió en alguna, tarde si solo
+  llegó tarde, ausente si faltó en todas. Las actividades del día sin marca
+  propia ni resultado toman su estado.
+- Si después se guarda la Vista, esa pasa a ser la oficial. Las actividades
+  con marca propia del Planeador **conservan su marca** (es la asistencia de
+  esa actividad); las demás toman la de la Vista.
+- No asistió → `NO_ASISTIO_JUSTIFICADA` si la Vista trae excusa ese día, si no
+  `NO_ASISTIO_NO_JUSTIFICADA`. Asistió o Llegó tarde devuelven a `PENDIENTE`.
+- No asistió marcado aquí queda **No justificada** hasta que se suba la excusa
+  en la Vista Asistencias; entonces pasa a Justificada sin perder el cambio.
+- Con nota no se puede cambiar (y tampoco marcar No presentó).
+
+**Errores:** 400 si ya tiene nota u observación (congelada), la actividad aún no
+empieza o fue eliminada; 400 (23503) si el tipo no es 1, 2 o 5; 403 sin alcance
+o Regla 54.
 
 ### 1.2 `PUT /planeador/actividades/:ID/estado-resultado-bulk`
 
 Mismo estado para **varios** estudiantes de la actividad `:ID` = `pk_tactividad`.
 
-**Body:** `{ "ESTADO": "NO_ASISTIO_JUSTIFICADA", "ESTUDIANTES": [501, 502] }`
-(`ESTUDIANTES` = `pk_tactividad_estudiante[]`).
+**Body:** `{ "ESTADO": "NO_PRESENTO", "ESTUDIANTES": [501, 502] }`
+(`ESTUDIANTES` = `pk_tactividad_estudiante[]`; `ESTADO` = `NO_PRESENTO` o `PENDIENTE`).
 
 | Columna | Significado |
 |---|---|
@@ -94,7 +133,8 @@ versión documentada en `calificacion-y-materiales-endpoints.md`:
 
 | Columna | Significado |
 |---|---|
-| `estado_resultado` | Ver la tabla de valores arriba. Si hay asistencia guardada que sugiere inasistencia, el valor sugerido ya viene reflejado aquí; el front no lo infiere. |
+| `estado_resultado` | Ver la tabla de valores arriba. El No asistido que sale de la asistencia ya viene reflejado aquí; el front no lo infiere. |
+| `tipo_asistencia_valor`, `asistencia_justificada`, `origen_asistencia`, `asistencia_editable` | Asistencia de la actividad: código 1/2/5, si hay excusa, `ASISTENCIA` (Vista) o `PLANEADOR`, y si todavía se puede cambiar (`false` con resultado). |
 | `momento` | Momento del registro narrativo (observación), solo relevante en formativas. |
 | `evidencia_enlace` | Enlace de evidencia de la observación, si se registró uno. |
 | `resultados_completos` | **Regla 58.** `true` solo si **ningún** estudiante de la actividad quedó en `PENDIENTE`; es el mismo valor en todas las filas de la respuesta (se usa para pintar el indicador "completo" de la actividad, no por estudiante). |

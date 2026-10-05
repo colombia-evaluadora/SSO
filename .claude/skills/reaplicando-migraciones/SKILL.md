@@ -58,7 +58,7 @@ desordenado deja el mismo estado incorrecto que no re-aplicar nada.
 ## Después
 
 ```bash
-python scripts/migration-analysis/analyze_migrations.py   # o /migration-analysis
+python scripts/migration-analysis informe   # o /migration-analysis
 ```
 
 Confirma que no quedan llamadores con la firma vieja. Y compara contra el

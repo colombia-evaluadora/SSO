@@ -61,7 +61,10 @@ BEGIN
     SELECT NOMBRE INTO v_nombre_grupo FROM academico_test.TGRUPO WHERE PK_TGRUPO = p_fk_tgrupo;
     PERFORM academico_test.fn_audit_declarar(
         p_pk_usuario_solicitante,
-        format('Registro de asistencia del grupo %s (%s)', v_nombre_grupo, p_fecha),
+        format(CASE WHEN COALESCE(academico_test.fn_asistencia_fecha_requiere_aprobacion(p_fk_tgrupo, p_fecha), FALSE)
+                    THEN 'Solicitud de correccion de asistencia del grupo %s (%s)'
+                    ELSE 'Registro de asistencia del grupo %s (%s)' END,
+               v_nombre_grupo, p_fecha),
         academico_test.fn_grupo_establecimiento(p_fk_tgrupo),
         academico_test.fn_periodo_sede(academico_test.fn_grupo_periodo(p_fk_tgrupo)));
 
@@ -73,7 +76,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_asistencia_registrar_bulk(BIGINT, BIGINT, BIGINT, DATE, NUMERIC, JSONB, NUMERIC, BIGINT)
-    IS 'POST /asistencias/registrar. WRAPPER: 1) fn_asistencia_gate_escritura, 2) fecha no futura, contexto, periodo abierto, docente asignado (Regla 74), día de clase programado (72c) y excusa solo en inasistencia o tardanza (72b), 3) etiqueta de auditoría y fn_asistencia_registrar_bulk_interno.';
+    IS 'POST /asistencias/registrar. WRAPPER: 1) fn_asistencia_gate_escritura, 2) fecha no futura, contexto, periodo abierto, docente asignado (Regla 74), día de clase programado (72c) y excusa solo en inasistencia o tardanza (72b), 3) etiqueta de auditoría y fn_asistencia_registrar_bulk_interno. En un periodo de evaluación no calificable no escribe: corregir o capturar tarde abre solicitudes CORRECCION_ASISTENCIA (Regla 75), que el endpoint devuelve en solicitudes_pendientes.';
 
 CREATE OR REPLACE FUNCTION academico_test.fn_asistencia_editar(
     p_pk_usuario_solicitante BIGINT,

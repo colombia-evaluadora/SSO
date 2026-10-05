@@ -222,19 +222,50 @@ AS $$
        AND a.ES_RECUPERACION IS DISTINCT FROM 'S';
 $$;
 
+CREATE OR REPLACE FUNCTION academico_test.fn_asistencia_fecha_requiere_aprobacion(p_fk_tgrupo BIGINT, p_fecha DATE)
+RETURNS BOOLEAN
+LANGUAGE sql
+STABLE
+AS $$
+    -- Regla 75: manda el periodo DE EVALUACIÓN de la fecha de la sesión. Un
+    -- periodo que ya terminó por fechas también exige aprobación aunque siga
+    -- Calificable. NULL si la fecha no cae en ninguno: bloqueo plano (V136).
+    SELECT NOT academico_test.fn_periodo_evaluacion_calificable(pe.PK_TPERIODO_EVALUACION)
+           OR pe.FECHA_FIN < CURRENT_DATE
+      FROM academico_test.TPERIODO_EVALUACION pe
+     WHERE pe.PK_TPERIODO_EVALUACION = academico_test.fn_asistencia_periodo_eval(p_fk_tgrupo, p_fecha);
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_asistencia_fecha_requiere_aprobacion(BIGINT, DATE)
+    IS 'TRUE si escribir asistencia de esa fecha exige aprobación del Coordinador (Regla 75: su periodo de evaluación no es Calificable o ya terminó por fechas); NULL si la fecha no cae en ningún periodo. La usan fn_asistencia_correccion_requiere_aprobacion y fn_asistencia_registrar_bulk.';
+
 CREATE OR REPLACE FUNCTION academico_test.fn_asistencia_correccion_requiere_aprobacion(p_pk_tasistencia BIGINT)
 RETURNS BOOLEAN
 LANGUAGE sql
 STABLE
 AS $$
-    -- Regla 75: manda el periodo DE EVALUACIÓN de la fecha de la sesión. NULL
-    -- si la fecha no cae en ninguno: el llamador aplica el bloqueo plano (V136).
-    SELECT NOT academico_test.fn_periodo_evaluacion_calificable(
-               academico_test.fn_asistencia_periodo_eval(m.FK_TGRUPO, a.FECHA))
+    SELECT academico_test.fn_asistencia_fecha_requiere_aprobacion(m.FK_TGRUPO, a.FECHA)
       FROM academico_test.TASISTENCIA a
       JOIN academico_test.TMATRICULA m ON m.PK_TMATRICULA = a.FK_TMATRICULA
      WHERE a.PK_TASISTENCIA = p_pk_tasistencia;
 $$;
+
+CREATE OR REPLACE FUNCTION academico_test.fn_asistencia_solicitud_pendiente(p_pk_tasistencia BIGINT)
+RETURNS BIGINT
+LANGUAGE sql
+STABLE
+AS $$
+    SELECT s.PK_TSOLICITUD_APROBACION
+      FROM academico_test.TSOLICITUD_APROBACION s
+     WHERE s.TABLA_OBJETO = 'TASISTENCIA' AND s.FK_OBJETO = p_pk_tasistencia
+       AND s.FK_TLV_TIPO = academico_test.fn_tlv_solicitud_tipo_pk('CORRECCION_ASISTENCIA')
+       AND s.FK_TLV_ESTADO = academico_test.fn_tlv_solicitud_estado_pk('PENDIENTE')
+       AND s.ACTIVE = TRUE
+     LIMIT 1;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_asistencia_solicitud_pendiente(BIGINT)
+    IS 'PK de la solicitud CORRECCION_ASISTENCIA pendiente sobre un registro de TASISTENCIA (activo, o el inactivo que espera una captura tardía), o NULL. La usan el padrón de la sesión, Seguimiento y registrar.';
 
 -- Regla 70: una recuperación ya aprobada con ESA nota se reconsolida sin pedir
 -- de nuevo (cambió la base, no lo aprobado); otra nota vuelve a pedirla.
@@ -307,7 +338,7 @@ END;
 $$;
 
 -- Rol por TROL.CODIGO (como V489): el Coordinador no tiene CATEGORIA_ROL propia.
-CREATE OR REPLACE FUNCTION academico_test.fn_usuario_sedes_coordinador(p_pk_tusuario BIGINT)
+CREATE OR REPLACE FUNCTION academico_test.fn_usuario_sedes_por_rol(p_pk_tusuario BIGINT, p_codigos VARCHAR[])
 RETURNS SETOF BIGINT
 LANGUAGE sql
 STABLE
@@ -318,11 +349,83 @@ AS $$
       JOIN academico_test.TROL r  ON r.PK_TROL  = su.FK_TROL
      WHERE su.FK_TUSUARIO = p_pk_tusuario
        AND su.ACTIVE = TRUE
-       AND UPPER(TRIM(r.CODIGO)) = 'COORDINADOR';
+       AND UPPER(TRIM(r.CODIGO)) = ANY (p_codigos);
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_usuario_sedes_por_rol(BIGINT, VARCHAR[])
+    IS 'Sedes activas donde el usuario tiene un TSEDE_USUARIO activo con alguno de los roles p_codigos (TROL.CODIGO en mayúsculas). Base de fn_usuario_sedes_coordinador y fn_usuario_ee_por_rol.';
+
+-- El Rector también se reconoce por el puntero del establecimiento, sin TSEDE_USUARIO.
+CREATE OR REPLACE FUNCTION academico_test.fn_usuario_ee_por_rol(p_pk_tusuario BIGINT, p_codigos VARCHAR[])
+RETURNS SETOF BIGINT
+LANGUAGE sql
+STABLE
+AS $$
+    SELECT s.FK_TESTABLECIMIENTO
+      FROM academico_test.TSEDE s
+     WHERE s.PK_TSEDE IN (SELECT academico_test.fn_usuario_sedes_por_rol(p_pk_tusuario, p_codigos))
+    UNION
+    SELECT e.PK_ESTABLECIMIENTO
+      FROM academico_test.TESTABLECIMIENTO e
+      JOIN academico_test.TFUNCIONARIO f ON f.PK_TFUNCIONARIO = e.FK_TFUNCIONARIO_RECTOR
+     WHERE 'RECTOR' = ANY (p_codigos)
+       AND e.ACTIVE = TRUE AND f.ACTIVE = TRUE AND f.FK_TUSUARIO = p_pk_tusuario;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_usuario_ee_por_rol(BIGINT, VARCHAR[])
+    IS 'Establecimientos donde el usuario tiene alguno de los roles p_codigos en una sede (fn_usuario_sedes_por_rol); si p_codigos incluye RECTOR, también los que tiene por FK_TFUNCIONARIO_RECTOR.';
+
+CREATE OR REPLACE FUNCTION academico_test.fn_usuario_sedes_coordinador(p_pk_tusuario BIGINT)
+RETURNS SETOF BIGINT
+LANGUAGE sql
+STABLE
+AS $$
+    SELECT academico_test.fn_usuario_sedes_por_rol(p_pk_tusuario, ARRAY['COORDINADOR']::VARCHAR[]);
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_usuario_sedes_coordinador(BIGINT)
-    IS 'Sedes activas donde el usuario es Coordinador (TSEDE_USUARIO + TROL.CODIGO). Fuente única de "es coordinador": la usan fn_usuario_es_coordinador_sede (gates de aprobación) y fn_mi_establecimiento_para_auditoria (claim est del JWT).';
+    IS 'Sedes activas donde el usuario es Coordinador (fn_usuario_sedes_por_rol). La usa fn_mi_establecimiento_para_auditoria (claim est del JWT).';
+
+-- Lista única de quién aprueba: para sumar o quitar un rol se edita solo esto
+-- (y su role_query en V496.21).
+CREATE OR REPLACE FUNCTION academico_test.fn_solicitud_aprobacion_roles_sede()
+RETURNS VARCHAR[]
+LANGUAGE sql
+IMMUTABLE
+AS $$
+    SELECT ARRAY['COORDINADOR']::VARCHAR[];
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_solicitud_aprobacion_roles_sede()
+    IS 'TROL.CODIGO de los roles que resuelven solicitudes de aprobación solo en la sede donde los tienen.';
+
+CREATE OR REPLACE FUNCTION academico_test.fn_solicitud_aprobacion_roles_ee()
+RETURNS VARCHAR[]
+LANGUAGE sql
+IMMUTABLE
+AS $$
+    SELECT ARRAY['RECTOR', 'JEFE_SISTEMA_ESTABLECIMIENTO', 'AUXILIAR_ADMINISTRATIVO']::VARCHAR[];
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_solicitud_aprobacion_roles_ee()
+    IS 'TROL.CODIGO de los roles que resuelven solicitudes de aprobación en todas las sedes de su establecimiento.';
+
+CREATE OR REPLACE FUNCTION academico_test.fn_usuario_sedes_aprobador(p_pk_tusuario BIGINT)
+RETURNS SETOF BIGINT
+LANGUAGE sql
+STABLE
+AS $$
+    SELECT academico_test.fn_usuario_sedes_por_rol(p_pk_tusuario, academico_test.fn_solicitud_aprobacion_roles_sede())
+    UNION
+    SELECT s.PK_TSEDE
+      FROM academico_test.TSEDE s
+     WHERE s.ACTIVE = TRUE
+       AND s.FK_TESTABLECIMIENTO IN (
+           SELECT academico_test.fn_usuario_ee_por_rol(p_pk_tusuario, academico_test.fn_solicitud_aprobacion_roles_ee()));
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_usuario_sedes_aprobador(BIGINT)
+    IS 'Sedes activas donde el usuario resuelve solicitudes de aprobación: donde tiene un rol de fn_solicitud_aprobacion_roles_sede, y todas las de los establecimientos donde tiene uno de fn_solicitud_aprobacion_roles_ee. La usa fn_usuario_es_aprobador_sede.';
 
 CREATE OR REPLACE FUNCTION academico_test.fn_solicitud_valor_vigente_recuperacion(
     p_pk_tactividad_estudiante BIGINT,

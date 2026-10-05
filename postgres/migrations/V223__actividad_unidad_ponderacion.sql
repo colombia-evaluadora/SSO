@@ -18,6 +18,12 @@ ALTER TABLE TACTIVIDAD DROP CONSTRAINT IF EXISTS CK_TACTIVIDAD_PONDERACION;
 ALTER TABLE TACTIVIDAD ADD CONSTRAINT CK_TACTIVIDAD_PONDERACION
   CHECK (PONDERACION IS NULL OR (PONDERACION >= 0 AND PONDERACION <= 100));
 
+-- DROP explicito: entre el 2026-10-04 y el 2026-10-05 este indice estuvo en
+-- (FK_TASIGNATURA, FK_TGRUPO) por un cambio de bucket que se revirtio (el tope
+-- de 100% es por unidad y grupo, no por grado+asignatura+grupo). Sin el DROP,
+-- "CREATE INDEX IF NOT EXISTS" con el mismo nombre seria un no-op y el indice
+-- quedaria en las columnas equivocadas en los entornos que ya lo aplicaron.
+DROP INDEX IF EXISTS IDX_TACTIVIDAD_27;
 CREATE INDEX IF NOT EXISTS IDX_TACTIVIDAD_27
   ON TACTIVIDAD (FK_TUNIDAD, FK_TGRUPO) WHERE ACTIVE = true;
 

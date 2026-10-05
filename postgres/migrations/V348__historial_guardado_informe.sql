@@ -1,9 +1,8 @@
 -- ===========================================================================
--- V348 - Historial de guardado del informe: TINFORME_GUARDADO(+_ESTUDIANTE) y
--- fn_informe_historial_registrar.
---
---   fn_informe_periodo_guardar y fn_informe_planilla_guardar viven hoy en
---   V490; aqui quedan sus COMMENT, que V490 no reescribe.
+-- V348 - historial guardado informe
+-- Recortada: las funciones de informes que V535-V541 reescriben en capas
+-- se quitaron de aqui y viven alli. Queda lo que sigue vivo y lo que una
+-- base limpia necesita al migrar (CREATE solo si la funcion no existe).
 -- ===========================================================================
 
 
@@ -85,58 +84,3 @@ COMMENT ON TABLE academico_test.TINFORME_GUARDADO
 
 COMMENT ON TABLE academico_test.TINFORME_GUARDADO_ESTUDIANTE
     IS 'Detalle del historial: a que estudiantes alcanzo un guardado, con el PROMEDIO del periodo tal como quedo despues de esa operacion y cuantas asignaturas se le escribieron. El promedio se COPIA y no se recalcula al consultar: el historial dice que paso ESE dia, y si manana alguien vuelve a consolidar, aquella entrada debe seguir mostrando lo que mostro entonces -- esa es la diferencia entre un historial y un listado. Solo entran los estudiantes a los que se les escribio alguna nota (resultado guardada o actualizada).';
-
-CREATE OR REPLACE FUNCTION academico_test.fn_informe_historial_registrar(
-    p_pk_usuario_solicitante BIGINT,
-    p_fk_tgrupo              BIGINT,
-    p_fk_tasignatura         BIGINT,
-    p_fk_tperiodo_evaluacion BIGINT,
-    p_origen                 VARCHAR,
-    p_estudiantes            JSONB
-)
-RETURNS BIGINT
-LANGUAGE plpgsql
-AS $function$
-DECLARE
-    v_pk BIGINT;
-BEGIN
-    -- Sin estudiantes no hay nada que registrar. Se devuelve NULL en vez de
-    -- crear una cabecera en cero: ver el punto (2) de la cabecera.
-    IF p_estudiantes IS NULL OR JSONB_ARRAY_LENGTH(p_estudiantes) = 0 THEN
-        RETURN NULL;
-    END IF;
-
-    INSERT INTO academico_test.TINFORME_GUARDADO (
-        FK_TGRUPO, FK_TASIGNATURA, FK_TPERIODO_EVALUACION, FK_TUSUARIO,
-        ORIGEN, ESTUDIANTES, CREATED_BY, CREATED_AT, ACTIVE
-    ) VALUES (
-        p_fk_tgrupo, p_fk_tasignatura, p_fk_tperiodo_evaluacion,
-        p_pk_usuario_solicitante, p_origen,
-        JSONB_ARRAY_LENGTH(p_estudiantes),
-        p_pk_usuario_solicitante::VARCHAR, CURRENT_TIMESTAMP, TRUE
-    )
-    RETURNING PK_TINFORME_GUARDADO INTO v_pk;
-
-    INSERT INTO academico_test.TINFORME_GUARDADO_ESTUDIANTE (
-        FK_TINFORME_GUARDADO, FK_TMATRICULA, PROMEDIO, ASIGNATURAS_AFECTADAS,
-        CREATED_BY, CREATED_AT, ACTIVE
-    )
-    SELECT v_pk,
-           (e ->> 'matricula')::BIGINT,
-           NULLIF(e ->> 'promedio', '')::NUMERIC,
-           NULLIF(e ->> 'asignaturas', '')::NUMERIC,
-           p_pk_usuario_solicitante::VARCHAR, CURRENT_TIMESTAMP, TRUE
-      FROM JSONB_ARRAY_ELEMENTS(p_estudiantes) e;
-
-    RETURN v_pk;
-END;
-$function$;
-
-COMMENT ON FUNCTION academico_test.fn_informe_historial_registrar(BIGINT, BIGINT, BIGINT, BIGINT, VARCHAR, JSONB)
-    IS 'Punto UNICO de escritura del historial de guardados: crea la cabecera en TINFORME_GUARDADO y una fila por estudiante en TINFORME_GUARDADO_ESTUDIANTE. Lo llaman los dos guardados -- el del informe completo y el de una asignatura desde la planilla -- para que la forma del historial no dependa de por donde se guardo. Recibe los estudiantes como JSONB ([{"matricula":1,"promedio":77.71,"asignaturas":2}]) porque ambos los acumulan dentro de su bucle, y recibirlos de una vez evita abrir la cabecera antes de saber si hubo algo que registrar. Con arreglo vacio o NULL devuelve NULL sin escribir nada: una cabecera en cero ensuciaria un historial que se agrupa por dia y solo muestra los dias con movimiento. p_fk_tasignatura NULL indica guardado del informe completo.';
-
-COMMENT ON FUNCTION academico_test.fn_informe_periodo_guardar(BIGINT, BIGINT, BIGINT, BIGINT[])
-    IS 'Consolida un periodo COMPLETO: congela la nota proyectada de cada asignatura en TASIGNATURA_NOTA para el grupo (o solo las matriculas indicadas; NULL o vacio = todas), deja las metricas al dia via fn_informe_metricas_recalcular y registra el guardado en el historial via fn_informe_historial_registrar con FK_TASIGNATURA NULL, que es lo que marca "informe completo". Al historial solo entran los estudiantes a los que se les ESCRIBIO alguna nota: los sin_cambio y sin_proyeccion no cuentan, y si ninguno cambio no se crea cabecera, para que volver a pulsar guardar no deje entradas vacias. Convive sin pisarse con fn_informe_planilla_guardar, que congela una sola asignatura: TASIGNATURA_NOTA es por (matricula, periodo, asignatura) y ambas terminan en el mismo recalculo y el mismo registrador, asi que son idempotentes y su efecto final no depende del orden. Lo ya guardado con el mismo valor se reporta sin_cambio y no se toca, para no borrar el MODIFIED_AT que dice cuando se consolido. DEFINITIVA se guarda en PORCENTAJE, no homologada, porque la escala depende de TCRITERIO_EVALUACION por (asignatura, grado) y puede cambiar. Preescolar no usa este endpoint: alli todo sale sin_proyeccion porque las observaciones se guardan con CALIFICABLE=N y no promedian. Gate: INFORMES/EDITAR.';
-
-COMMENT ON FUNCTION academico_test.fn_informe_planilla_guardar(BIGINT, BIGINT, BIGINT, BIGINT, BIGINT[])
-    IS 'Congela la definitiva de UNA asignatura desde la planilla de informes, para el grupo o solo las matriculas indicadas (NULL o vacio = todas), recalcula las metricas del periodo y registra el guardado en el historial con FK_TASIGNATURA puesta, que es lo que lo distingue del guardado del informe completo. Al historial solo entran los estudiantes a los que se les escribio (guardada o actualizada); sin_cambio y sin_proyeccion no cuentan, y si ninguno cambio no se crea cabecera. Es el hermano acotado de fn_informe_periodo_guardar y NO SE PISAN: TASIGNATURA_NOTA es por (matricula, periodo, asignatura), y ambas terminan llamando al mismo recalculo de metricas y al mismo registrador, de modo que el resultado no depende del orden y las dos son idempotentes. El recalculo corre SIEMPRE, incluso en sin_cambio, porque otra asignatura pudo haberse movido desde el ultimo y esa fila las agrega a todas. En sin_proyeccion lo ya guardado NO se borra: quitar un consolidado por una ausencia no es decision de un boton de guardar. Devuelve ademas el promedio y los conteos del periodo ya recalculados, para que la pantalla refresque sin volver a consultar. Gate: INFORMES/EDITAR sobre el grupo, mas el validador puro fn_planilla_grupo_asignatura_assert (V239).';

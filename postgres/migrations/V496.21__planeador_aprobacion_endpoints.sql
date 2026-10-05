@@ -1,10 +1,11 @@
 -- V496.21 - Aprobación del Coordinador, capa 4 de 4: endpoints. Pendientes,
--- aprobar y rechazar para CEVAL-COORDINADOR y CEVAL-SUPER_ADMINISTRADOR; la
+-- aprobar y rechazar (una o en lote) para CEVAL-COORDINADOR, CEVAL-RECTOR, CEVAL-JEFE_SISTEMA_ESTABLECIMIENTO,
+-- CEVAL-AUXILIAR_ADMINISTRATIVO y CEVAL-SUPER_ADMINISTRADOR; la
 -- marca de informe desactualizado con los roles de /informes/grupo. Las filas
--- de calificar y de editar asistencia suman solicitudes_pendientes: la
+-- de calificar y de registrar o editar asistencia suman solicitudes_pendientes: la
 -- escritura no falla cuando exige aprobación, devuelve qué solicitud abrió.
 -- Upsert por (microservicio, ruta, método), como V496.8.
--- Depende de: V496.20, V496.8 y V221 (filas que se envuelven), V342.
+-- Depende de: V496.20, V496.8, V221 y V438 (filas que se envuelven), V342.
 
 SET search_path TO academico_test, public;
 
@@ -14,7 +15,7 @@ INSERT INTO public.query (uuid, microservice_id, path_template, http_method, typ
 SELECT 'a88692e0-a70e-438e-8ed9-9f8e3b30eb71', m.id_microservice, '/aprobaciones/pendientes', 'GET', 'postgres', 'SELECT', NULL,
        'f', 'f', 'f', '60', NULL, NULL,
        '{"QUERY.TIPO": "VARCHAR", "QUERY.GRUPO": "BIGINT", "QUERY.ESTADO": "VARCHAR"}'::jsonb,
-       'Solicitudes de aprobación que el Coordinador puede resolver (fn_solicitud_aprobacion_listar; Regla 70): las de los grupos de las sedes donde es Coordinador, o todas para el super administrador. ?tipo= RECUPERACION_HABILITACION, RECUPERACION_REFUERZO, CORRECCION_RESULTADO o CORRECCION_ASISTENCIA; ?grupo= PK_TGRUPO; ?estado= PENDIENTE (por defecto), APROBADA o RECHAZADA. Cada fila trae grupo, asignatura, periodo, actividad, estudiante, valor_anterior y valor_propuesto, solicitante y fechas. Errores: 403 (42501) si no es Coordinador en ninguna sede.',
+       'Solicitudes de aprobación que el Coordinador puede resolver (fn_solicitud_aprobacion_listar; Regla 70): las de los grupos de las sedes donde es Coordinador, o todas para el super administrador. ?tipo= RECUPERACION_HABILITACION, RECUPERACION_REFUERZO, CORRECCION_RESULTADO o CORRECCION_ASISTENCIA; ?grupo= PK_TGRUPO; ?estado= PENDIENTE (por defecto), APROBADA o RECHAZADA. Cada fila trae grupo, asignatura, periodo, actividad, estudiante, valor_anterior y valor_propuesto, solicitante y fechas; en asistencia, además fk_tmatricula, fecha y bloque de la sesión. Errores: 403 (42501) si no es Coordinador en ninguna sede.',
        $q$SELECT * FROM academico_test.fn_solicitud_aprobacion_listar(
     public.fn_get_academico_usuario_id(:CONTEXT.USER_ID::BIGINT),
     CAST(:QUERY.TIPO AS VARCHAR),
@@ -85,7 +86,47 @@ ON CONFLICT (microservice_id, path_template, http_method) WHERE path_template IS
        cache_ttl_seconds = EXCLUDED.cache_ttl_seconds, action = EXCLUDED.action, style = EXCLUDED.style,
        param_types = EXCLUDED.param_types, detail = EXCLUDED.detail, query = EXCLUDED.query;
 
--- Editar asistencia (las filas de calificar se envuelven en V496.8, su dueña):
+-- POST /aprobaciones/aprobar-masivo
+INSERT INTO public.query (uuid, microservice_id, path_template, http_method, type, execution_mode, out_param_names,
+                          public_end, captcha, cacheable, cache_ttl_seconds, action, style, param_types, detail, query)
+SELECT 'c4b3d9e9-2a8f-450d-801f-0b0b84bd6f20', m.id_microservice, '/aprobaciones/aprobar-masivo', 'POST', 'postgres', 'SELECT', NULL,
+       'f', 'f', 'f', '60', NULL, NULL,
+       '{"BODY.IDS": "BIGINT[]", "BODY.MOTIVO": "VARCHAR"}'::jsonb,
+       'Aprueba las solicitudes BODY.IDS (hasta 500) en una llamada (fn_solicitud_aprobacion_resolver_masivo): cada una como POST /aprobaciones/:ID/aprobar, y la que falla no frena a las demás. BODY.MOTIVO opcional (≤1000). Devuelve resultado = {resueltas: [pk], fallidas: [{id, codigo, error}]}. Errores del lote: 400 (22023) si IDS viene vacío, pasa de 500 o el motivo excede 1000.',
+       $q$SELECT academico_test.fn_solicitud_aprobacion_resolver_masivo(
+    public.fn_get_academico_usuario_id(:CONTEXT.USER_ID::BIGINT),
+    TRUE,
+    CAST(:BODY.IDS AS BIGINT[]),
+    CAST(:BODY.MOTIVO AS VARCHAR)
+) AS resultado;$q$
+  FROM public.microservice m WHERE m.serviceid = 'eval-col'
+ON CONFLICT (microservice_id, path_template, http_method) WHERE path_template IS NOT NULL DO UPDATE
+   SET type = EXCLUDED.type, execution_mode = EXCLUDED.execution_mode, out_param_names = EXCLUDED.out_param_names,
+       public_end = EXCLUDED.public_end, captcha = EXCLUDED.captcha, cacheable = EXCLUDED.cacheable,
+       cache_ttl_seconds = EXCLUDED.cache_ttl_seconds, action = EXCLUDED.action, style = EXCLUDED.style,
+       param_types = EXCLUDED.param_types, detail = EXCLUDED.detail, query = EXCLUDED.query;
+
+-- POST /aprobaciones/rechazar-masivo
+INSERT INTO public.query (uuid, microservice_id, path_template, http_method, type, execution_mode, out_param_names,
+                          public_end, captcha, cacheable, cache_ttl_seconds, action, style, param_types, detail, query)
+SELECT '39733258-a13e-464b-8e86-cc5701d879fc', m.id_microservice, '/aprobaciones/rechazar-masivo', 'POST', 'postgres', 'SELECT', NULL,
+       'f', 'f', 'f', '60', NULL, NULL,
+       '{"BODY.IDS": "BIGINT[]", "BODY.MOTIVO": "VARCHAR"}'::jsonb,
+       'Rechaza las solicitudes BODY.IDS (hasta 500) en una llamada (fn_solicitud_aprobacion_resolver_masivo): cada una como POST /aprobaciones/:ID/rechazar, y la que falla no frena a las demás. BODY.MOTIVO obligatorio (≤1000), el mismo para todas. Devuelve resultado = {resueltas: [pk], fallidas: [{id, codigo, error}]}. Errores del lote: 400 (22023) si IDS viene vacío, pasa de 500 o falta el motivo.',
+       $q$SELECT academico_test.fn_solicitud_aprobacion_resolver_masivo(
+    public.fn_get_academico_usuario_id(:CONTEXT.USER_ID::BIGINT),
+    FALSE,
+    CAST(:BODY.IDS AS BIGINT[]),
+    CAST(:BODY.MOTIVO AS VARCHAR)
+) AS resultado;$q$
+  FROM public.microservice m WHERE m.serviceid = 'eval-col'
+ON CONFLICT (microservice_id, path_template, http_method) WHERE path_template IS NOT NULL DO UPDATE
+   SET type = EXCLUDED.type, execution_mode = EXCLUDED.execution_mode, out_param_names = EXCLUDED.out_param_names,
+       public_end = EXCLUDED.public_end, captcha = EXCLUDED.captcha, cacheable = EXCLUDED.cacheable,
+       cache_ttl_seconds = EXCLUDED.cache_ttl_seconds, action = EXCLUDED.action, style = EXCLUDED.style,
+       param_types = EXCLUDED.param_types, detail = EXCLUDED.detail, query = EXCLUDED.query;
+
+-- Registrar y editar asistencia (las filas de calificar se envuelven en V496.8, su dueña):
 -- la escritura no cambia, se le suma la solicitud que abrió. MATERIALIZED garantiza que la función ya corrió cuando
 -- se lee la lista. El guard por prefijo hace el UPDATE idempotente.
 UPDATE public.query q
@@ -95,17 +136,22 @@ UPDATE public.query q
   FROM public.microservice m
  WHERE m.id_microservice = q.microservice_id AND m.serviceid = 'eval-col'
    AND q.query NOT LIKE 'WITH w AS MATERIALIZED (%'
-   AND (q.http_method, q.path_template) IN (('PATCH', '/asistencias/:ID'));
+   AND (q.http_method, q.path_template) IN (('PATCH', '/asistencias/:ID'),
+                                            ('POST', '/asistencias/registrar'),
+                                            ('POST', '/asistencias/editar-masivo'));
 
 INSERT INTO public.role_query (role_id, query_id)
 SELECT r.id_role, q.id_query
   FROM public.query q
   JOIN public.microservice m ON m.id_microservice = q.microservice_id AND m.serviceid = 'eval-col'
-  JOIN public.role r ON r.name IN ('CEVAL-COORDINADOR', 'CEVAL-SUPER_ADMINISTRADOR')
+  JOIN public.role r ON r.name IN ('CEVAL-COORDINADOR', 'CEVAL-RECTOR', 'CEVAL-JEFE_SISTEMA_ESTABLECIMIENTO',
+                                   'CEVAL-AUXILIAR_ADMINISTRATIVO', 'CEVAL-SUPER_ADMINISTRADOR')
  WHERE (q.http_method, q.path_template) IN (
         ('GET',  '/aprobaciones/pendientes'),
         ('POST', '/aprobaciones/:ID/aprobar'),
-        ('POST', '/aprobaciones/:ID/rechazar'))
+        ('POST', '/aprobaciones/:ID/rechazar'),
+        ('POST', '/aprobaciones/aprobar-masivo'),
+        ('POST', '/aprobaciones/rechazar-masivo'))
 ON CONFLICT DO NOTHING;
 
 INSERT INTO public.role_query (role_id, query_id)

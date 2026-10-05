@@ -87,20 +87,31 @@ COMMENT ON FUNCTION academico_test.fn_solicitud_aprobacion_creadas()
 -- ---------------------------------------------------------------------------
 -- Regla 55: solicitud de corrección de un resultado (la decide fn_actividad_nota_guardar_interno, V496.6)
 -- ---------------------------------------------------------------------------
+DROP FUNCTION IF EXISTS academico_test.fn_actividad_resultado_correccion_solicitar_interno(BIGINT, BIGINT, NUMERIC);
+
 CREATE OR REPLACE FUNCTION academico_test.fn_actividad_resultado_correccion_solicitar_interno(
     p_pk_usuario_solicitante   BIGINT,
     p_pk_tactividad_estudiante BIGINT,
-    p_porcentaje               NUMERIC
+    p_porcentaje               NUMERIC,
+    p_captura                  JSONB
 )
 RETURNS BIGINT
 LANGUAGE sql
 AS $$
+    -- Las capturas se acumulan sobre la pendiente: en bloque la rúbrica y la
+    -- lista de cotejo se corrigen un criterio o un elemento a la vez.
     SELECT academico_test.fn_solicitud_aprobacion_crear_interno(
                p_pk_usuario_solicitante, 'CORRECCION_RESULTADO', 'TACTIVIDAD_ESTUDIANTE', ae.PK_TACTIVIDAD_ESTUDIANTE,
                m.FK_TGRUPO, a.FK_TASIGNATURA,
                academico_test.fn_actividad_periodo_evaluacion(a.PK_TACTIVIDAD, ae.FK_TMATRICULA), a.PK_TACTIVIDAD,
                jsonb_build_object('porcentaje', n.CALIFICACION),
-               jsonb_build_object('porcentaje', p_porcentaje))
+               jsonb_build_object('porcentaje', p_porcentaje,
+                                  'capturas', COALESCE((
+                                      SELECT s.VALOR_PROPUESTO->'capturas' FROM academico_test.TSOLICITUD_APROBACION s
+                                       WHERE s.TABLA_OBJETO = 'TACTIVIDAD_ESTUDIANTE' AND s.FK_OBJETO = ae.PK_TACTIVIDAD_ESTUDIANTE
+                                         AND s.FK_TLV_TIPO = academico_test.fn_tlv_solicitud_tipo_pk('CORRECCION_RESULTADO')
+                                         AND s.FK_TLV_ESTADO = academico_test.fn_tlv_solicitud_estado_pk('PENDIENTE')
+                                         AND s.ACTIVE = TRUE), '[]'::jsonb) || jsonb_build_array(p_captura)))
       FROM academico_test.TACTIVIDAD_ESTUDIANTE ae
       JOIN academico_test.TACTIVIDAD a  ON a.PK_TACTIVIDAD = ae.FK_TACTIVIDAD
       JOIN academico_test.TMATRICULA m  ON m.PK_TMATRICULA = ae.FK_TMATRICULA
@@ -109,8 +120,70 @@ AS $$
      WHERE ae.PK_TACTIVIDAD_ESTUDIANTE = p_pk_tactividad_estudiante;
 $$;
 
-COMMENT ON FUNCTION academico_test.fn_actividad_resultado_correccion_solicitar_interno(BIGINT, BIGINT, NUMERIC)
-    IS 'INTERNO: abre (o actualiza) la solicitud CORRECCION_RESULTADO con la nota vigente y la propuesta (Regla 55). Devuelve su PK. La usa fn_actividad_nota_guardar_interno.';
+COMMENT ON FUNCTION academico_test.fn_actividad_resultado_correccion_solicitar_interno(BIGINT, BIGINT, NUMERIC, JSONB)
+    IS 'INTERNO: abre (o actualiza) la solicitud CORRECCION_RESULTADO con la nota vigente y la propuesta (Regla 55): {porcentaje, capturas:[{operacion,...}]}, capturas acumuladas en orden. Devuelve su PK. La usa fn_actividad_resultado_correccion_diferir_interno.';
+
+CREATE OR REPLACE FUNCTION academico_test.fn_actividad_resultado_correccion_diferir_interno(
+    p_pk_usuario_solicitante   BIGINT,
+    p_pk_tactividad_estudiante BIGINT,
+    p_porcentaje               NUMERIC,
+    p_captura                  JSONB
+)
+RETURNS NUMERIC
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    PERFORM academico_test.fn_actividad_resultado_correccion_solicitar_interno(
+        p_pk_usuario_solicitante, p_pk_tactividad_estudiante, p_porcentaje, p_captura);
+    -- Regla 55: mientras se aprueba manda el valor anterior.
+    RETURN (SELECT n.CALIFICACION FROM academico_test.TACTIVIDAD_NOTA n
+             WHERE n.FK_TACTIVIDAD_ESTUDIANTE = p_pk_tactividad_estudiante AND n.ACTIVE = TRUE);
+END;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_actividad_resultado_correccion_diferir_interno(BIGINT, BIGINT, NUMERIC, JSONB)
+    IS 'INTERNO: tras revertir una captura que exige aprobación (PA055 de fn_actividad_nota_guardar_interno), abre la solicitud con la captura propuesta y devuelve la nota vigente. La usan fn_actividad_nota_calificar_interno y los calificar en bloque.';
+
+CREATE OR REPLACE FUNCTION academico_test.fn_actividad_resultado_correccion_reaplicar_interno(
+    p_pk_usuario_solicitante   BIGINT,
+    p_pk_tactividad_estudiante BIGINT,
+    p_capturas                 JSONB
+)
+RETURNS NUMERIC
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_c   JSONB;
+    v_pct NUMERIC;
+BEGIN
+    -- Ya aprobada: la captura se repite con el núcleo de siempre sin volver a pedirla.
+    PERFORM set_config('academico_test.aprobacion_en_curso', 'on', TRUE);
+    FOR v_c IN SELECT * FROM jsonb_array_elements(p_capturas) LOOP
+        CASE v_c->>'operacion'
+            WHEN 'CALIFICAR' THEN
+                v_pct := academico_test.fn_actividad_nota_calificar_interno(
+                             p_pk_usuario_solicitante, p_pk_tactividad_estudiante, v_c->'calificacion', CURRENT_DATE);
+            WHEN 'RUBRICA_CRITERIO' THEN
+                PERFORM academico_test.fn_actividad_rubrica_captura_guardar(p_pk_usuario_solicitante, p_pk_tactividad_estudiante,
+                    (v_c->>'pkCriterio')::BIGINT, (v_c->>'pkNivel')::BIGINT);
+                v_pct := academico_test.fn_actividad_nota_guardar_interno(p_pk_usuario_solicitante, p_pk_tactividad_estudiante,
+                             academico_test.fn_actividad_nota_rubrica_recalcular(p_pk_tactividad_estudiante));
+            WHEN 'COTEJO_ITEM' THEN
+                PERFORM academico_test.fn_actividad_cotejo_captura_guardar(p_pk_usuario_solicitante, p_pk_tactividad_estudiante,
+                    (v_c->>'pkItem')::BIGINT, v_c->>'cumplido');
+                v_pct := academico_test.fn_actividad_nota_guardar_interno(p_pk_usuario_solicitante, p_pk_tactividad_estudiante,
+                             academico_test.fn_actividad_nota_cotejo_recalcular(p_pk_tactividad_estudiante));
+            ELSE
+                RAISE EXCEPTION 'La solicitud trae una captura desconocida (%)', v_c->>'operacion' USING ERRCODE = '22023';
+        END CASE;
+    END LOOP;
+    PERFORM set_config('academico_test.aprobacion_en_curso', 'off', TRUE);
+    RETURN v_pct;
+END;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_actividad_resultado_correccion_reaplicar_interno(BIGINT, BIGINT, JSONB)
+    IS 'INTERNO: repite, en orden, las capturas de una corrección de resultado ya aprobada (CALIFICAR, RUBRICA_CRITERIO, COTEJO_ITEM) y devuelve la nota resultante. La usa fn_solicitud_aprobacion_aprobar_interno.';
 
 -- ---------------------------------------------------------------------------
 -- Recuperación: combinar sin redondear (redondea una sola vez quien escribe)
@@ -420,12 +493,16 @@ RETURNS BIGINT
 LANGUAGE plpgsql
 AS $$
 BEGIN
+    -- Igual que la edición directa: no se abre una solicitud que fallaría al aprobarse.
+    IF p_tipo_asistencia_valor IS NOT NULL THEN
+        PERFORM academico_test.fn_asistencia_validar_tipo(p_tipo_asistencia_valor);
+    END IF;
     PERFORM academico_test.fn_solicitud_aprobacion_crear_interno(
                p_pk_usuario_solicitante, 'CORRECCION_ASISTENCIA', 'TASISTENCIA', a.PK_TASISTENCIA,
                m.FK_TGRUPO, a.FK_TASIGNATURA,
                academico_test.fn_asistencia_periodo_eval(m.FK_TGRUPO, a.FECHA), a.FK_TACTIVIDAD,
                jsonb_build_object('tipoAsistencia', lv.VALOR, 'observacion', a.OBSERVACION,
-                                  'soporteArchivo', a.FK_SOPORTE_ARCHIVO, 'fecha', a.FECHA),
+                                  'soporteArchivo', a.FK_SOPORTE_ARCHIVO, 'fecha', a.FECHA, 'bloque', a.BLOQUE),
                jsonb_build_object('tipoAsistencia', p_tipo_asistencia_valor, 'observacion', p_observacion,
                                   'soporteArchivo', p_fk_soporte_archivo,
                                   'limpiarArchivo', COALESCE(p_limpiar_archivo, FALSE),
@@ -439,7 +516,177 @@ END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_asistencia_correccion_solicitar_interno(BIGINT, BIGINT, NUMERIC, VARCHAR, BIGINT, BOOLEAN, BOOLEAN)
-    IS 'INTERNO: guarda como solicitud CORRECCION_ASISTENCIA la edición de un registro cuyo periodo de evaluación ya no es calificable (Regla 75); el registro no cambia hasta aprobarla. Devuelve el PK del registro, como fn_asistencia_editar. La usa fn_asistencia_editar.';
+    IS 'INTERNO: guarda como solicitud CORRECCION_ASISTENCIA la edición de un registro cuyo periodo de evaluación ya no es calificable (Regla 75); el registro no cambia hasta aprobarla. Devuelve el PK del registro, como fn_asistencia_editar. La usan fn_asistencia_editar y fn_asistencia_registrar_solicitar_interno.';
+
+-- Captura tardía (Regla 75: tomar asistencia de un periodo cerrado cuenta como
+-- corrección). La fila nace INACTIVA para que la solicitud tenga objeto; ningún
+-- lector la ve hasta aprobarla. Una propuesta nueva reusa la fila que ya espera.
+CREATE OR REPLACE FUNCTION academico_test.fn_asistencia_alta_solicitar_interno(
+    p_pk_usuario_solicitante BIGINT,
+    p_fk_tmatricula          BIGINT,
+    p_fk_tgrupo              BIGINT,
+    p_fk_tasignatura         BIGINT,
+    p_fk_tactividad          BIGINT,
+    p_fecha                  DATE,
+    p_bloque                 NUMERIC,
+    p_fk_tperiodo_evaluacion BIGINT,
+    p_tipo_asistencia_valor  NUMERIC,
+    p_observacion            VARCHAR,
+    p_fk_soporte_archivo     BIGINT
+)
+RETURNS BIGINT
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_pk BIGINT;
+BEGIN
+    SELECT a.PK_TASISTENCIA INTO v_pk
+      FROM academico_test.TASISTENCIA a
+     WHERE a.ACTIVE = FALSE AND a.FK_TMATRICULA = p_fk_tmatricula AND a.FECHA = p_fecha
+       AND COALESCE(a.FK_TASIGNATURA, 0) = COALESCE(p_fk_tasignatura, 0)
+       AND COALESCE(a.FK_TACTIVIDAD, 0) = COALESCE(p_fk_tactividad, 0)
+       AND COALESCE(a.BLOQUE, 0) = COALESCE(p_bloque, 0)
+       AND academico_test.fn_asistencia_solicitud_pendiente(a.PK_TASISTENCIA) IS NOT NULL
+     LIMIT 1;
+
+    IF v_pk IS NULL THEN
+        INSERT INTO academico_test.TASISTENCIA (
+            FECHA, FK_TLV_TIPO_ASISTENCIA, FK_TASIGNATURA, FK_TACTIVIDAD, FK_TPERIODO_EVALUACION,
+            FK_TMATRICULA, OBSERVACION, FK_SOPORTE_ARCHIVO, BLOQUE, ORIGEN, CREATED_BY, CREATED_AT, ACTIVE)
+        VALUES (
+            p_fecha, academico_test.fn_asistencia_tipo_pk(p_tipo_asistencia_valor), p_fk_tasignatura, p_fk_tactividad,
+            p_fk_tperiodo_evaluacion, p_fk_tmatricula, p_observacion, p_fk_soporte_archivo, p_bloque, 'ASISTENCIA',
+            p_pk_usuario_solicitante::VARCHAR, CURRENT_TIMESTAMP, FALSE)
+        RETURNING PK_TASISTENCIA INTO v_pk;
+    ELSE
+        UPDATE academico_test.TASISTENCIA
+           SET FK_TLV_TIPO_ASISTENCIA = academico_test.fn_asistencia_tipo_pk(p_tipo_asistencia_valor),
+               OBSERVACION = p_observacion, FK_SOPORTE_ARCHIVO = p_fk_soporte_archivo,
+               MODIFIED_BY = p_pk_usuario_solicitante::VARCHAR, MODIFIED_AT = CURRENT_TIMESTAMP
+         WHERE PK_TASISTENCIA = v_pk;
+    END IF;
+
+    RETURN academico_test.fn_solicitud_aprobacion_crear_interno(
+               p_pk_usuario_solicitante, 'CORRECCION_ASISTENCIA', 'TASISTENCIA', v_pk,
+               p_fk_tgrupo, p_fk_tasignatura, p_fk_tperiodo_evaluacion, p_fk_tactividad,
+               jsonb_build_object('tipoAsistencia', NULL, 'observacion', NULL, 'soporteArchivo', NULL,
+                                  'fecha', p_fecha, 'bloque', p_bloque),
+               jsonb_build_object('alta', TRUE, 'tipoAsistencia', p_tipo_asistencia_valor,
+                                  'observacion', p_observacion, 'soporteArchivo', p_fk_soporte_archivo));
+END;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_asistencia_alta_solicitar_interno(BIGINT, BIGINT, BIGINT, BIGINT, BIGINT, DATE, NUMERIC, BIGINT, NUMERIC, VARCHAR, BIGINT)
+    IS 'INTERNO: captura tardía de un periodo no calificable (Regla 75). Deja la fila de TASISTENCIA INACTIVA y abre (o reemplaza) su solicitud CORRECCION_ASISTENCIA con VALOR_PROPUESTO.alta = true; aprobarla la activa (fn_asistencia_alta_aplicar_interno). Devuelve el PK de la solicitud. La usa fn_asistencia_registrar_solicitar_interno.';
+
+CREATE OR REPLACE FUNCTION academico_test.fn_asistencia_registrar_solicitar_interno(
+    p_pk_usuario_solicitante BIGINT,
+    p_fk_tgrupo              BIGINT,
+    p_fk_tasignatura         BIGINT,
+    p_fk_tactividad          BIGINT,
+    p_fecha                  DATE,
+    p_bloque                 NUMERIC,
+    p_fk_tperiodo_evaluacion BIGINT,
+    p_entrada                JSONB,
+    p_marcar_todos_valor     NUMERIC
+)
+RETURNS INTEGER
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    r        RECORD;
+    v_actual RECORD;
+    v_n      INTEGER := 0;
+BEGIN
+    FOR r IN
+        SELECT (e->>'fkMatricula')::BIGINT                                     AS fk_matricula,
+               COALESCE((e->>'tipoAsistencia')::NUMERIC, p_marcar_todos_valor) AS tipo,
+               NULLIF(TRIM(e->>'observacion'), '')                             AS observacion,
+               NULLIF(e->>'fkArchivo', '')::BIGINT                             AS fk_archivo
+          FROM jsonb_array_elements(p_entrada) e
+    LOOP
+        -- Solo la asistencia de la Vista cuenta como ya capturada; la oficial que dejó
+        -- el Planeador no: tomarla en la Vista es una captura tardía.
+        SELECT a.PK_TASISTENCIA, a.FK_TLV_TIPO_ASISTENCIA, a.OBSERVACION, a.FK_SOPORTE_ARCHIVO INTO v_actual
+          FROM academico_test.TASISTENCIA a
+         WHERE a.ACTIVE = TRUE AND a.ORIGEN = 'ASISTENCIA' AND a.FK_TMATRICULA = r.fk_matricula AND a.FECHA = p_fecha
+           AND COALESCE(a.FK_TASIGNATURA, 0) = COALESCE(p_fk_tasignatura, 0)
+           AND COALESCE(a.FK_TACTIVIDAD, 0) = COALESCE(p_fk_tactividad, 0)
+           AND COALESCE(a.BLOQUE, 0) = COALESCE(p_bloque, 0);
+
+        IF FOUND THEN
+            -- Mismo reemplazo completo que el upsert: lo que no viaja se limpia.
+            CONTINUE WHEN v_actual.FK_TLV_TIPO_ASISTENCIA = academico_test.fn_asistencia_tipo_pk(r.tipo)
+                      AND v_actual.OBSERVACION IS NOT DISTINCT FROM r.observacion
+                      AND v_actual.FK_SOPORTE_ARCHIVO IS NOT DISTINCT FROM r.fk_archivo;
+            PERFORM academico_test.fn_asistencia_correccion_solicitar_interno(
+                p_pk_usuario_solicitante, v_actual.PK_TASISTENCIA, r.tipo, r.observacion, r.fk_archivo,
+                r.fk_archivo IS NULL AND v_actual.FK_SOPORTE_ARCHIVO IS NOT NULL,
+                r.observacion IS NULL AND v_actual.OBSERVACION IS NOT NULL);
+        ELSE
+            PERFORM academico_test.fn_asistencia_alta_solicitar_interno(
+                p_pk_usuario_solicitante, r.fk_matricula, p_fk_tgrupo, p_fk_tasignatura, p_fk_tactividad,
+                p_fecha, p_bloque, p_fk_tperiodo_evaluacion, r.tipo, r.observacion, r.fk_archivo);
+        END IF;
+        v_n := v_n + 1;
+    END LOOP;
+    RETURN v_n;
+END;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_asistencia_registrar_solicitar_interno(BIGINT, BIGINT, BIGINT, BIGINT, DATE, NUMERIC, BIGINT, JSONB, NUMERIC)
+    IS 'INTERNO: registrar en un periodo no calificable (Regla 75, solo asistencia de la Vista). Por cada registro de la sesión: si la Vista ya lo tomó y cambia, abre la corrección (fn_asistencia_correccion_solicitar_interno); si no (aunque haya oficial del Planeador), la captura tardía (fn_asistencia_alta_solicitar_interno); si no cambia, nada. No escribe TASISTENCIA visible. Devuelve cuántas solicitudes abrió o actualizó. La usa fn_asistencia_registrar_bulk_interno.';
+
+CREATE OR REPLACE FUNCTION academico_test.fn_asistencia_alta_aplicar_interno(
+    p_pk_usuario_solicitante BIGINT,
+    p_pk_tasistencia         BIGINT,
+    p_fk_tgrupo              BIGINT
+)
+RETURNS BIGINT
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_a      RECORD;
+    v_activa BIGINT;
+BEGIN
+    SELECT a.*, lv.VALOR AS tipo_valor INTO v_a
+      FROM academico_test.TASISTENCIA a
+      LEFT JOIN academico_test.TLISTA_VALOR lv ON lv.PK_LISTA_VALOR = a.FK_TLV_TIPO_ASISTENCIA
+     WHERE a.PK_TASISTENCIA = p_pk_tasistencia;
+
+    -- La Vista predomina, igual que en el upsert de registrar.
+    UPDATE academico_test.TASISTENCIA s
+       SET ACTIVE = FALSE, MODIFIED_BY = p_pk_usuario_solicitante::VARCHAR, MODIFIED_AT = CURRENT_TIMESTAMP
+     WHERE s.ORIGEN = 'PLANEADOR' AND s.ACTIVE = TRUE AND s.FECHA = v_a.FECHA
+       AND s.FK_TASIGNATURA IS NOT DISTINCT FROM v_a.FK_TASIGNATURA
+       AND s.FK_TMATRICULA = v_a.FK_TMATRICULA;
+
+    -- Si la Vista tomó la sesión mientras esperaba, lo aprobado se aplica sobre esa fila.
+    SELECT a.PK_TASISTENCIA INTO v_activa
+      FROM academico_test.TASISTENCIA a
+     WHERE a.ACTIVE = TRUE AND a.FK_TMATRICULA = v_a.FK_TMATRICULA AND a.FECHA = v_a.FECHA
+       AND COALESCE(a.FK_TASIGNATURA, 0) = COALESCE(v_a.FK_TASIGNATURA, 0)
+       AND COALESCE(a.FK_TACTIVIDAD, 0) = COALESCE(v_a.FK_TACTIVIDAD, 0)
+       AND COALESCE(a.BLOQUE, 0) = COALESCE(v_a.BLOQUE, 0)
+     LIMIT 1;
+    IF v_activa IS NOT NULL THEN
+        RETURN academico_test.fn_asistencia_editar_interno(
+            v_activa, p_fk_tgrupo, v_a.tipo_valor::NUMERIC, v_a.OBSERVACION, v_a.FK_SOPORTE_ARCHIVO,
+            v_a.FK_SOPORTE_ARCHIVO IS NULL, v_a.OBSERVACION IS NULL, p_pk_usuario_solicitante);
+    END IF;
+
+    UPDATE academico_test.TASISTENCIA
+       SET ACTIVE = TRUE, MODIFIED_BY = p_pk_usuario_solicitante::VARCHAR, MODIFIED_AT = CURRENT_TIMESTAMP
+     WHERE PK_TASISTENCIA = p_pk_tasistencia;
+
+    PERFORM academico_test.fn_actividad_resultado_desde_asistencia_interno(
+        p_pk_usuario_solicitante, p_fk_tgrupo, v_a.FK_TASIGNATURA, v_a.FECHA, ARRAY[v_a.FK_TMATRICULA]);
+    RETURN p_pk_tasistencia;
+END;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_asistencia_alta_aplicar_interno(BIGINT, BIGINT, BIGINT)
+    IS 'INTERNO: aprueba una captura tardía (Regla 75): retira la asistencia oficial del Planeador de ese día (la Vista predomina), activa la fila que esperaba y sincroniza el estado de resultado (Regla 73). Si mientras tanto la Vista tomó la sesión, aplica lo aprobado sobre esa fila. Devuelve el PK que quedó vigente. La usa fn_solicitud_aprobacion_aprobar_interno.';
 
 -- ---------------------------------------------------------------------------
 -- Regla 71: el informe emitido queda desactualizado al aprobar
@@ -559,9 +806,17 @@ BEGIN
         v_resultado := academico_test.fn_actividad_recuperacion_consolidar_interno(
                            p_pk_usuario_solicitante, v_s.FK_OBJETO, (v_p->>'excluir')::BIGINT);
     ELSIF v_tipo = 'CORRECCION_RESULTADO' THEN
+        -- Una solicitud sin captura guardada solo trae el porcentaje.
         v_resultado := jsonb_build_object('aplicada', TRUE, 'porcentaje',
-                           academico_test.fn_actividad_nota_aplicar_interno(
-                               p_pk_usuario_solicitante, v_s.FK_OBJETO, (v_p->>'porcentaje')::NUMERIC));
+                           CASE WHEN jsonb_typeof(v_p->'capturas') = 'array'
+                                THEN academico_test.fn_actividad_resultado_correccion_reaplicar_interno(
+                                         p_pk_usuario_solicitante, v_s.FK_OBJETO, v_p->'capturas')
+                                ELSE academico_test.fn_actividad_nota_aplicar_interno(
+                                         p_pk_usuario_solicitante, v_s.FK_OBJETO, (v_p->>'porcentaje')::NUMERIC) END);
+    ELSIF COALESCE((v_p->>'alta')::BOOLEAN, FALSE) THEN
+        v_resultado := jsonb_build_object('aplicada', TRUE, 'pk_tasistencia',
+                           academico_test.fn_asistencia_alta_aplicar_interno(
+                               p_pk_usuario_solicitante, v_s.FK_OBJETO, v_s.FK_TGRUPO));
     ELSE
         PERFORM academico_test.fn_asistencia_editar_interno(
             v_s.FK_OBJETO, v_s.FK_TGRUPO, (v_p->>'tipoAsistencia')::NUMERIC, v_p->>'observacion',
@@ -578,7 +833,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_solicitud_aprobacion_aprobar_interno(BIGINT, BIGINT, VARCHAR)
-    IS 'INTERNO: aprueba una solicitud PENDIENTE (el llamador ya validó estado y permisos) y aplica el valor propuesto con el núcleo de siempre: consolidación de la recuperación, fn_actividad_nota_aplicar_interno o fn_asistencia_editar_interno. Marca el informe emitido como desactualizado (Regla 71). La usa fn_solicitud_aprobacion_aprobar.';
+    IS 'INTERNO: aprueba una solicitud PENDIENTE (el llamador ya validó estado y permisos) y aplica el valor propuesto con el núcleo de siempre: consolidación de la recuperación, fn_actividad_nota_aplicar_interno, fn_asistencia_editar_interno o, en una captura tardía, fn_asistencia_alta_aplicar_interno. Marca el informe emitido como desactualizado (Regla 71). La usa fn_solicitud_aprobacion_aprobar.';
 
 CREATE OR REPLACE FUNCTION academico_test.fn_solicitud_aprobacion_rechazar_interno(
     p_pk_usuario_solicitante BIGINT,
@@ -601,6 +856,9 @@ $$;
 
 COMMENT ON FUNCTION academico_test.fn_solicitud_aprobacion_rechazar_interno(BIGINT, BIGINT, VARCHAR)
     IS 'INTERNO: rechaza una solicitud PENDIENTE; el valor vigente sigue siendo el anterior (Regla 70), así que no se toca ningún dato. La usa fn_solicitud_aprobacion_rechazar.';
+
+-- Cambiar el RETURNS TABLE exige soltar la función: CREATE OR REPLACE no lo permite.
+DROP FUNCTION IF EXISTS academico_test.fn_solicitud_aprobacion_listar_interno(VARCHAR, VARCHAR, BIGINT);
 
 CREATE OR REPLACE FUNCTION academico_test.fn_solicitud_aprobacion_listar_interno(
     p_estado    VARCHAR DEFAULT 'PENDIENTE',
@@ -630,7 +888,11 @@ RETURNS TABLE (
     motivo                   VARCHAR,
     aprobador                VARCHAR,
     fecha_resolucion         TIMESTAMP,
-    motivo_resolucion        VARCHAR
+    motivo_resolucion        VARCHAR,
+    -- Solo en solicitudes de asistencia: la sesión, para agrupar por clase y bloque.
+    fk_tmatricula            BIGINT,
+    fecha                    DATE,
+    bloque                   NUMERIC
 )
 LANGUAGE sql
 STABLE
@@ -644,7 +906,8 @@ AS $$
            NULLIF(TRIM(CONCAT_WS(' ', us.PRIMER_NOMBRE, us.PRIMER_APELLIDO)), '')::VARCHAR,
            s.FECHA_SOLICITUD, s.MOTIVO,
            NULLIF(TRIM(CONCAT_WS(' ', ua.PRIMER_NOMBRE, ua.PRIMER_APELLIDO)), '')::VARCHAR,
-           s.FECHA_RESOLUCION, s.MOTIVO_RESOLUCION
+           s.FECHA_RESOLUCION, s.MOTIVO_RESOLUCION,
+           COALESCE(ae.FK_TMATRICULA, asis.FK_TMATRICULA), asis.FECHA, asis.BLOQUE
       FROM academico_test.TSOLICITUD_APROBACION s
       JOIN academico_test.TLISTA_VALOR lt ON lt.PK_LISTA_VALOR = s.FK_TLV_TIPO
       JOIN academico_test.TLISTA_VALOR le ON le.PK_LISTA_VALOR = s.FK_TLV_ESTADO
