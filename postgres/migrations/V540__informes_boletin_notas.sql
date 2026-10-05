@@ -196,7 +196,9 @@ STABLE
 AS $function$
     WITH ctx AS (
         SELECT gd.PK_TGRADO AS grado, gd.FK_TPERIODO_ACADEMICO AS peraca,
-               f.es_numerico, f.nota_maxima, f.decimales, f.fk_tescala,
+               f.es_numerico, f.nota_maxima, f.decimales,
+               -- Por periodo o por nivel: el mismo respaldo que las notas.
+               COALESCE(f.fk_tescala, academico_test.fn_grado_escala_aplicable(gd.PK_TGRADO)) AS fk_tescala,
                cra.VALOR AS criterio_area,
                academico_test.fn_grado_desempeno_minimo(gd.PK_TGRADO) AS minimo,
                pe.FECHA_INICIO AS inicio_actual
@@ -303,8 +305,10 @@ AS $function$
                     ELSE a.nota * 100 / ctx.nota_maxima >= ctx.minimo END AS aprobada
           FROM area_pe a
           CROSS JOIN ctx
+          -- Un area agrega asignaturas: su desempeño sale del criterio del
+          -- periodo, o de la escala del nivel, como un promedio.
           LEFT JOIN LATERAL academico_test.fn_promedio_homologar(
-                        a.nota * 100 / NULLIF(ctx.nota_maxima, 0), ctx.peraca) h ON TRUE
+                        a.nota * 100 / NULLIF(ctx.nota_maxima, 0), ctx.peraca, ctx.grado) h ON TRUE
          WHERE a.pe = p_fk_tperiodo_evaluacion
     ),
     resumen AS (

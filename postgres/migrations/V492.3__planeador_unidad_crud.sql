@@ -58,10 +58,13 @@ DECLARE
 BEGIN
     -- Sin grado el alcance no tiene sede contra la cual comprobarse.
     IF p_fk_tgrado IS NULL THEN
-        RAISE EXCEPTION 'Seleccione el grado de la unidad' USING ERRCODE = '22023';
+        RAISE EXCEPTION 'Seleccione el grado de %',
+            lower(academico_test.fn_unidad_rotulo(p_fk_referente_curricular)) USING ERRCODE = '22023';
     END IF;
     PERFORM academico_test.fn_planeador_assert_alcance(p_pk_usuario_solicitante, 'CREAR', NULL, p_fk_tgrado);
-    PERFORM academico_test.fn_unidad_assert_autor(p_pk_usuario_solicitante, v_autor);
+    PERFORM academico_test.fn_unidad_assert_autor(p_pk_usuario_solicitante, v_autor,
+        COALESCE(p_fk_referente_curricular,
+                 academico_test.fn_unidad_referente_aplicable(p_fk_tgrado, p_fk_tasignatura)));
 
     PERFORM academico_test.fn_audit_declarar(p_pk_usuario_solicitante,
         format('Creación de la unidad %s', TRIM(p_nombre)), NULL,

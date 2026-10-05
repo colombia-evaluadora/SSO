@@ -327,6 +327,15 @@ BEGIN
                      'observacion',   n.OBSERVACION,
                      'fechaAsistencia', asi.fecha,
                      'tieneAsistencia', (asi.fecha IS NOT NULL),
+                     'estadoResultado',
+                         CASE
+                             WHEN ae.PK_TACTIVIDAD_ESTUDIANTE IS NULL             THEN NULL
+                             WHEN lve.VALOR IS NOT NULL                           THEN lve.VALOR
+                             WHEN COALESCE(n.DEFINITIVA, n.CALIFICACION) IS NOT NULL THEN 'CALIFICADO'
+                             WHEN sa.ausente AND sa.justificada                   THEN 'NO_ASISTIO_JUSTIFICADA'
+                             WHEN sa.ausente                                      THEN 'NO_ASISTIO_NO_JUSTIFICADA'
+                             ELSE 'PENDIENTE'
+                         END,
                      'evidencias',    COALESCE(ev.evidencias, '[]'::jsonb))
                      ORDER BY c.orden_columna) AS celdas
             FROM columnas c
@@ -339,6 +348,11 @@ BEGIN
                   AND n.ACTIVE = TRUE
             LEFT JOIN LATERAL academico_test.fn_nota_homologar(
                           COALESCE(n.DEFINITIVA, n.CALIFICACION), p_fk_tasignatura, v_fk_tgrado) hc ON TRUE
+            -- Estado del resultado y asistencia de la actividad.
+            LEFT JOIN academico_test.TLISTA_VALOR lve
+                   ON lve.PK_LISTA_VALOR = n.FK_TLV_ESTADO_RESULTADO
+            LEFT JOIN LATERAL academico_test.fn_actividad_asistencia_estudiante(
+                          ae.PK_TACTIVIDAD_ESTUDIANTE) sa ON ae.PK_TACTIVIDAD_ESTUDIANTE IS NOT NULL
             LEFT JOIN LATERAL (
                 SELECT academico_test.fn_actividad_asistencia_fecha_resolver(
                            b.PK_TMATRICULA, c.pk_tactividad) AS fecha
@@ -362,7 +376,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_planilla_calificaciones_listar_interno(BIGINT, BIGINT, BIGINT, DATE, DATE, VARCHAR, VARCHAR, INT, INT)
-    IS 'INTERNO: celdas de la planilla para un periodo ya resuelto: una fila por matricula del grupo con definitiva_proyectada (fn_asignatura_definitiva_proyectada_periodo) y definitiva_registrada (TASIGNATURA_NOTA) del periodo, tendencia, homologaciones al formato de la asignatura y una celda por actividad del periodo (mismo universo y orden que el header). Lo usa fn_planilla_calificaciones_listar.';
+    IS 'INTERNO: celdas de la planilla para un periodo ya resuelto: una fila por matricula del grupo con definitiva_proyectada (fn_asignatura_definitiva_proyectada_periodo) y definitiva_registrada (TASIGNATURA_NOTA) del periodo, tendencia, homologaciones al formato de la asignatura y una celda por actividad del periodo (mismo universo y orden que el header), con estadoResultado como en la tabla de calificaciones del Planeador. Lo usa fn_planilla_calificaciones_listar.';
 
 CREATE OR REPLACE FUNCTION academico_test.fn_periodo_evaluacion_listar_interno(
     p_fk_tperiodo_academico BIGINT,

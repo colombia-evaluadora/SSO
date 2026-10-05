@@ -213,7 +213,10 @@ BEGIN
            AND NOT academico_test.fn_planeador_periodo_vigente(a.FK_TGRUPO, NULL, a.FK_TUNIDAD);
 
         IF v_vencidas IS NOT NULL THEN
-            RAISE EXCEPTION 'Las actividades % pertenecen a un periodo academico que ya termino',
+            RAISE EXCEPTION 'Estas % pertenecen a un periodo academico que ya termino: %',
+                lower(academico_test.fn_planeador_rotulo_pluralizar(COALESCE(
+                    (SELECT academico_test.fn_actividad_rotulo(a.FK_TGRUPO, a.FK_TASIGNATURA, a.FK_TUNIDAD)
+                       FROM academico_test.TACTIVIDAD a WHERE a.PK_TACTIVIDAD = v_vencidas[1]), 'Actividad'))),
                 ARRAY_TO_STRING(v_vencidas, ', ')
                 USING ERRCODE = '22023',
                       HINT    = 'El planeador solo opera sobre el periodo en curso; no es una '
@@ -257,7 +260,10 @@ BEGIN
                  WHERE NOT (x = ANY(v_ajenas));
             ELSE
                 -- Se nombraron: callar seria hacer creer que no existen.
-                RAISE EXCEPTION 'El usuario no tiene alcance sobre las actividades %',
+                RAISE EXCEPTION 'El usuario no tiene alcance sobre estas %: %',
+                    lower(academico_test.fn_planeador_rotulo_pluralizar(COALESCE(
+                    (SELECT academico_test.fn_actividad_rotulo(a.FK_TGRUPO, a.FK_TASIGNATURA, a.FK_TUNIDAD)
+                       FROM academico_test.TACTIVIDAD a WHERE a.PK_TACTIVIDAD = v_ajenas[1]), 'Actividad'))),
                     ARRAY_TO_STRING(v_ajenas, ', ')
                     USING ERRCODE = '42501',
                           HINT    = 'Pertenecen a un establecimiento, sede o jornada fuera del '
@@ -283,7 +289,9 @@ BEGIN
          WHERE NOT (x = ANY(COALESCE(v_ids, ARRAY[]::BIGINT[])));
 
         IF v_faltan IS NOT NULL THEN
-            RAISE EXCEPTION 'No se encontraron las actividades %',
+            RAISE EXCEPTION 'No se encontraron estas %: %',
+                lower(academico_test.fn_planeador_rotulo_pluralizar(
+                    academico_test.fn_actividad_rotulo(p_fk_tgrupo, p_fk_tasignatura, p_pk_tunidad))),
                 ARRAY_TO_STRING(v_faltan, ', ')
                 USING ERRCODE = '22023',
                       HINT    = 'Cada identificador enviado tiene que existir y estar activo. '

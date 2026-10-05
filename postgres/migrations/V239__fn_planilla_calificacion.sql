@@ -60,8 +60,10 @@ BEGIN
 
     IF v_suma + NEW.PONDERACION > 100 THEN
         RAISE EXCEPTION
-          'La ponderacion de las unidades de la asignatura % para el grado % ya suma % y con % nueva llegaria a % (maximo 100)',
-          NEW.FK_TASIGNATURA, NEW.FK_TGRADO, v_suma, NEW.PONDERACION, v_suma + NEW.PONDERACION
+          'La ponderacion de % (asignatura %, grado %) ya suma %; con el % de % "%" llegaria a % (maximo 100)',
+          lower(academico_test.fn_planeador_rotulo_pluralizar(academico_test.fn_unidad_rotulo(NEW.FK_REFERENTE_CURRICULAR))),
+          NEW.FK_TASIGNATURA, NEW.FK_TGRADO, v_suma, NEW.PONDERACION,
+          academico_test.fn_unidad_rotulo(NEW.FK_REFERENTE_CURRICULAR), NEW.NOMBRE, v_suma + NEW.PONDERACION
           USING ERRCODE = '23514';
     END IF;
 

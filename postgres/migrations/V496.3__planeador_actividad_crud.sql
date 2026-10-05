@@ -283,7 +283,7 @@ BEGIN
     SELECT FK_TACTIVIDAD, FK_REFERENTE_ENUNCIADO INTO v_actividad, v_enunciado
       FROM academico_test.TACTIVIDAD_EVIDENCIA WHERE PK_TACTIVIDAD_EVIDENCIA = p_pk_tactividad_evidencia;
     IF NOT FOUND THEN
-        RAISE EXCEPTION 'No se encontró la evidencia marcada en la actividad' USING ERRCODE = 'P0002';
+        RAISE EXCEPTION 'No se encontró la evidencia marcada' USING ERRCODE = 'P0002';
     END IF;
     PERFORM academico_test.fn_actividad_assert_escritura(p_pk_usuario_solicitante, v_actividad, 'EDITAR');
     PERFORM academico_test.fn_actividad_auditar(p_pk_usuario_solicitante, v_actividad,
@@ -327,7 +327,7 @@ BEGIN
     SELECT FK_TACTIVIDAD, FK_TCRITERIO_UNIDAD INTO v_actividad, v_criterio
       FROM academico_test.TACTIVIDAD_CRITERIO_UNIDAD WHERE PK_TACTIVIDAD_CRITERIO_UNIDAD = p_pk_tactividad_criterio_unidad;
     IF NOT FOUND THEN
-        RAISE EXCEPTION 'No se encontró el criterio asociado a la actividad' USING ERRCODE = 'P0002';
+        RAISE EXCEPTION 'No se encontró el criterio asociado' USING ERRCODE = 'P0002';
     END IF;
     PERFORM academico_test.fn_actividad_assert_escritura(p_pk_usuario_solicitante, v_actividad, 'EDITAR');
     PERFORM academico_test.fn_actividad_auditar(p_pk_usuario_solicitante, v_actividad,
@@ -521,7 +521,10 @@ BEGIN
           FROM academico_test.TACTIVIDAD a WHERE a.PK_TACTIVIDAD = p_pk_tactividad;
     END IF;
     IF v_unidad IS NOT NULL AND NOT EXISTS (SELECT 1 FROM academico_test.TUNIDAD WHERE PK_TUNIDAD = v_unidad) THEN
-        RAISE EXCEPTION 'No se encontró la unidad indicada' USING ERRCODE = 'P0002';
+        RAISE EXCEPTION 'No se encontró la opción de % indicada',
+            lower(academico_test.fn_unidad_rotulo(academico_test.fn_unidad_referente_aplicable(
+                (SELECT FK_TGRADO FROM academico_test.TGRUPO WHERE PK_TGRUPO = v_grupo), v_asignatura, NULL)))
+            USING ERRCODE = 'P0002';
     END IF;
     IF v_grupo IS NOT NULL AND NOT EXISTS (SELECT 1 FROM academico_test.TGRUPO WHERE PK_TGRUPO = v_grupo) THEN
         RAISE EXCEPTION 'No se encontró el grupo indicado' USING ERRCODE = 'P0002';

@@ -1026,9 +1026,9 @@ BEGIN
       -- Las dos laterales devuelven SIEMPRE una fila -- con todo en NULL si no
       -- hay porcentaje --, asi que no pueden perder estudiantes.
       LEFT JOIN LATERAL academico_test.fn_promedio_homologar(
-                    s.o_prom_guardado, v_fk_peraca) hg ON TRUE
+                    s.o_prom_guardado, v_fk_peraca, v_fk_grado) hg ON TRUE
       LEFT JOIN LATERAL academico_test.fn_promedio_homologar(
-                    s.o_prom_proyectado, v_fk_peraca) hp ON TRUE
+                    s.o_prom_proyectado, v_fk_peraca, v_fk_grado) hp ON TRUE
      WHERE NULLIF(TRIM(COALESCE(p_search, '')), '') IS NULL
         OR s.o_nombre ILIKE '%' || TRIM(p_search) || '%'
         OR s.o_doc    ILIKE '%' || TRIM(p_search) || '%'

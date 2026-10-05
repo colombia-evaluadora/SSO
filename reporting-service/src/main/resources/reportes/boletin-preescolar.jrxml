@@ -113,12 +113,7 @@
 		</element>
 	</background>
 	<pageHeader height="114" splitType="Prevent">
-			<element kind="rectangle" x="24" y="8" width="88" height="88" backcolor="#FFFFFF" mode="Opaque" radius="44">
-			<printWhenExpression><![CDATA[$F{escudo_archivo} != null]]></printWhenExpression>
-			<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "acento")]]></propertyExpression>
-			<pen lineWidth="1.5"/>
-		</element>
-		<element kind="image" x="34" y="18" width="68" height="68" scaleImage="RetainShape" hImageAlign="Center" vImageAlign="Middle" onErrorType="Blank" usingCache="true">
+			<element kind="image" x="24" y="4" width="92" height="100" scaleImage="RetainShape" hImageAlign="Center" vImageAlign="Middle" onErrorType="Blank" usingCache="true">
 			<printWhenExpression><![CDATA[$F{escudo_archivo} != null]]></printWhenExpression>
 			<expression><![CDATA[$F{escudo_archivo}]]></expression>
 		</element>
@@ -156,12 +151,14 @@
 			<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "texto")]]></propertyExpression>
 			<expression><![CDATA[$P{GENERADO}.replace(" a las ", " ").replaceFirst(" 0(\\d:)", " $1")]]></expression>
 		</element>
-		<element kind="textField" x="24" y="105" width="360" height="9" fontName="DejaVu Sans" fontSize="7" forecolor="#16305C" hTextAlign="Left" vTextAlign="Top" bold="true" blankWhenNull="true">
-			<printWhenExpression><![CDATA[$V{PAGE_NUMBER} > 1]]></printWhenExpression>
+	</pageHeader>
+	<columnHeader height="26" splitType="Prevent">
+		<printWhenExpression><![CDATA[$V{PAGE_NUMBER} > 1]]></printWhenExpression>
+			<element kind="textField" x="24" y="8" width="360" height="11" fontName="DejaVu Sans" fontSize="7.5" forecolor="#16305C" hTextAlign="Left" vTextAlign="Middle" bold="true" blankWhenNull="true">
 			<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "gris")]]></propertyExpression>
 			<expression><![CDATA[$F{estudiante} + " (continuacion)"]]></expression>
 		</element>
-	</pageHeader>
+	</columnHeader>
 	<detail>
 		<band height="104" splitType="Prevent">
 			<element kind="rectangle" x="24" y="2" width="80" height="96" backcolor="#E8EEF7" mode="Opaque" radius="6">
