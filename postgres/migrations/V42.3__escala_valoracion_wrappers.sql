@@ -196,6 +196,8 @@ BEGIN
     IF p_teaching_level_ids IS NULL THEN RETURN; END IF;
     FOREACH v_id IN ARRAY p_teaching_level_ids LOOP
         BEGIN
+            -- El borrado de la escala arrastra sus bandas; aqui solo se exige que exista.
+            PERFORM academico_test.fn_escala_validar_nivel_tiene_escala(p_academic_period_id, v_id);
             PERFORM academico_test.fn_escala_nivel_soft_delete(
                 p_academic_period_id, v_id, p_pk_usuario_solicitante);
             id := v_id; eliminado := TRUE; error_code := NULL; error_mensaje := NULL;

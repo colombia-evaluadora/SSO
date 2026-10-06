@@ -498,21 +498,13 @@ COMMENT ON FUNCTION academico_test.fn_descanso_agregar_interno(BIGINT, TIME, TIM
 
 CREATE OR REPLACE FUNCTION academico_test.fn_descanso_eliminar_interno(p_pk_descanso BIGINT, p_audit VARCHAR)
 RETURNS BIGINT LANGUAGE plpgsql AS $$
-DECLARE v_hi TIME; v_hf TIME;
 BEGIN
+    PERFORM academico_test.fn_descanso_validar_existe(p_pk_descanso);
+    PERFORM academico_test.fn_descanso_validar_activo(p_pk_descanso);
+    -- Nada referencia TDESCANSOS: no hay dependientes que bloquear ni arrastrar.
     UPDATE academico_test.TDESCANSOS
        SET ACTIVE = FALSE, MODIFIED_BY = p_audit, MODIFIED_AT = CURRENT_TIMESTAMP
      WHERE PK_TDESCANSOS = p_pk_descanso AND ACTIVE = TRUE;
-    IF NOT FOUND THEN
-        SELECT HORA_INICIO, HORA_FIN INTO v_hi, v_hf
-          FROM academico_test.TDESCANSOS WHERE PK_TDESCANSOS = p_pk_descanso;
-        IF v_hi IS NOT NULL THEN
-            RAISE EXCEPTION 'El descanso de % a % existe pero ya esta inactivo', v_hi, v_hf
-                USING ERRCODE = 'P0002';
-        ELSE
-            RAISE EXCEPTION 'El descanso seleccionado no existe' USING ERRCODE = 'P0002';
-        END IF;
-    END IF;
     RETURN p_pk_descanso;
 END;
 $$;

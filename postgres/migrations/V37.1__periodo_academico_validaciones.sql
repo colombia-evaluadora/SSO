@@ -307,6 +307,19 @@ BEGIN
 END;
 $$;
 
+CREATE OR REPLACE FUNCTION academico_test.fn_descanso_validar_activo(p_pk BIGINT)
+RETURNS VOID LANGUAGE plpgsql STABLE AS $$
+DECLARE v_hi TIME; v_hf TIME;
+BEGIN
+    SELECT HORA_INICIO, HORA_FIN INTO v_hi, v_hf
+      FROM academico_test.TDESCANSOS WHERE PK_TDESCANSOS = p_pk AND ACTIVE = FALSE;
+    IF FOUND THEN
+        RAISE EXCEPTION 'El descanso de % a % existe pero ya esta inactivo', v_hi, v_hf
+            USING ERRCODE = 'P0002';
+    END IF;
+END;
+$$;
+
 CREATE OR REPLACE FUNCTION academico_test.fn_descanso_validar_rango(p_hora_inicio TIME, p_hora_fin TIME)
 RETURNS VOID LANGUAGE plpgsql IMMUTABLE AS $$
 BEGIN
