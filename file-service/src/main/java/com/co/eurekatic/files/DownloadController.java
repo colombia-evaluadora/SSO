@@ -347,7 +347,12 @@ public class DownloadController {
         // autorización — ver el javadoc de clase de
         // CachedFileBlobService para por qué eso es lo que hace que
         // esto sea seguro y no una fuga entre usuarios.
-        byte[] cacheados = blobCache.get(clave).orElse(null);
+        // Archivo migrado del sistema anterior: se lee de su bucket, sin
+        // copiarlo. La clave de caché lleva el bucket para no mezclarse
+        // con una clave igual del bucket propio.
+        boolean legado = almacen.esLegado(extraerBucket(archivo.urls3()));
+        String claveCache = legado ? "legado:" + clave : clave;
+        byte[] cacheados = blobCache.get(claveCache).orElse(null);
         if (cacheados != null) {
             HttpHeaders headers = headersFor(tipoForzado, clave, archivo, (long) cacheados.length);
             log.info("acceso id={} ({} bytes, cache HIT) para {}", archivoId, cacheados.length, quien);
@@ -356,7 +361,7 @@ public class DownloadController {
 
         ResponseInputStream<GetObjectResponse> objeto;
         try {
-            objeto = almacen.abrir(clave);
+            objeto = legado ? almacen.abrirLegado(clave) : almacen.abrir(clave);
         } catch (NoSuchKeyException e) {
             // Hay fila pero no hay bytes: pasó la reserva pero la
             // subida nunca cerró — o un job de limpieza borró el
@@ -408,7 +413,7 @@ public class DownloadController {
                         archivoId, clave, e.getMessage());
                 return ResponseEntity.status(502).build();
             }
-            blobCache.put(clave, bytes);
+            blobCache.put(claveCache, bytes);
             log.info("acceso id={} ({} bytes, cache MISS→escrito) para {}", archivoId, bytes.length, quien);
             return ResponseEntity.ok().headers(headers).body(salidaDesdeBytes(bytes));
         }
@@ -682,6 +687,48 @@ public class DownloadController {
                 return null;
             }
             return sinBarra.substring(idx + 1);
+        } catch (IllegalArgumentException e) {
+            return null;
+        }
+    }
+
+    /**
+     * Bucket que nombra {@code urls3}, o {@code null} si es una clave cruda
+     * (que siempre es del bucket propio).
+     *
+     * <ul>
+     *   <li>{@code s3://bucket/key} → {@code bucket};</li>
+     *   <li>{@code https://bucket.s3[.region].amazonaws.com/key} → {@code bucket};</li>
+     *   <li>{@code http(s)://host/bucket/key} (path-style) → {@code bucket}.</li>
+     * </ul>
+     */
+    static String extraerBucket(String urls3) {
+        if (urls3 == null || urls3.isBlank()) {
+            return null;
+        }
+        if (urls3.startsWith("s3://")) {
+            String resto = urls3.substring("s3://".length());
+            int slash = resto.indexOf('/');
+            return slash <= 0 ? null : resto.substring(0, slash);
+        }
+        if (!urls3.startsWith("http://") && !urls3.startsWith("https://")) {
+            return null;
+        }
+        try {
+            URI uri = URI.create(urls3);
+            String host = uri.getHost();
+            if (esVirtualHosted(host)) {
+                String h = host.toLowerCase();
+                int fin = h.contains(".s3.") ? h.indexOf(".s3.") : h.indexOf(".s3-");
+                return host.substring(0, fin);
+            }
+            String path = uri.getPath();
+            if (path == null || path.length() < 2) {
+                return null;
+            }
+            String sinBarra = path.substring(1);
+            int idx = sinBarra.indexOf('/');
+            return idx <= 0 ? null : sinBarra.substring(0, idx);
         } catch (IllegalArgumentException e) {
             return null;
         }
