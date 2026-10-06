@@ -190,7 +190,9 @@ LANGUAGE plpgsql AS $$
 DECLARE v_id BIGINT; v_state TEXT; v_msg TEXT;
 BEGIN
     PERFORM academico_test.fn_periodo_gate_escritura(
-        p_pk_usuario_solicitante, academico_test.fn_periodo_establecimiento(p_academic_period_id));
+        p_pk_usuario_solicitante, academico_test.fn_periodo_establecimiento(p_academic_period_id),
+        academico_test.fn_periodo_sede(p_academic_period_id),
+        academico_test.fn_periodo_jornada(p_academic_period_id), 'ELIMINAR');
     IF p_teaching_level_ids IS NULL THEN RETURN; END IF;
     FOREACH v_id IN ARRAY p_teaching_level_ids LOOP
         BEGIN

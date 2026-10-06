@@ -106,7 +106,7 @@ RETURNS TABLE (id BIGINT, eliminado BOOLEAN, error_code TEXT, error_mensaje TEXT
 LANGUAGE plpgsql AS $$
 DECLARE v_id BIGINT; v_state TEXT; v_msg TEXT;
 BEGIN
-    PERFORM academico_test.fn_periodo_gate_escritura(p_pk_usuario_solicitante, NULL);
+    PERFORM academico_test.fn_periodo_gate_escritura(p_pk_usuario_solicitante, NULL, NULL, NULL, 'ELIMINAR');
     IF p_ids IS NULL THEN RETURN; END IF;
     FOREACH v_id IN ARRAY p_ids LOOP
         BEGIN
@@ -352,6 +352,39 @@ $$;
 COMMENT ON FUNCTION academico_test.fn_nivel_ensenanza_listar(BIGINT)
     IS 'GET /niveles-ensenanza y /catalogos/niveles-ensenanza. Catalogo de niveles activos, sin alcance.';
 
+-- Version por sede de fn_periodo_puede_ver: capability VER del menu y alcance
+-- de la sede (nivel 3: cualquier jornada de la sede que el usuario alcance).
+CREATE OR REPLACE FUNCTION academico_test.fn_periodo_sede_puede_ver(
+    p_pk_usuario BIGINT, p_fk_sede BIGINT
+)
+RETURNS BOOLEAN LANGUAGE plpgsql STABLE AS $$
+DECLARE v_nivel INT;
+BEGIN
+    IF p_pk_usuario IS NULL THEN RETURN TRUE; END IF;
+    v_nivel := COALESCE(academico_test.fn_usuario_categoria_rol_nivel(p_pk_usuario), 99);
+    IF v_nivel = 0 THEN RETURN TRUE; END IF;
+    IF NOT academico_test.fn_usuario_puede_en_menu(p_pk_usuario, 'PERIODOS_ACADEMICOS', 'VER') THEN
+        RETURN FALSE;
+    END IF;
+    IF v_nivel = 1 THEN
+        RETURN TRUE;
+    ELSIF v_nivel = 2 THEN
+        RETURN EXISTS (SELECT 1 FROM academico_test.TSEDE s
+                        WHERE s.PK_TSEDE = p_fk_sede
+                          AND s.FK_TESTABLECIMIENTO IN (
+                              SELECT establecimiento_id
+                                FROM academico_test.fn_usuario_ee_accesibles(p_pk_usuario)));
+    ELSIF v_nivel = 3 THEN
+        RETURN EXISTS (SELECT 1 FROM academico_test.fn_usuario_sedes_jornadas_accesibles(p_pk_usuario) sj
+                        WHERE sj.sede_id = p_fk_sede);
+    END IF;
+    RETURN FALSE;
+END;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_periodo_sede_puede_ver(BIGINT, BIGINT)
+    IS 'Version BOOLEAN del gate de lectura de la cascada academica a nivel de sede: capability VER sobre PERIODOS_ACADEMICOS + alcance (nivel 1 todos, nivel 2 EE de la sede, nivel 3 cualquier jornada de la sede). p_pk_usuario NULL o SUPER_ADMIN => TRUE. No lanza.';
+
 -- Candidatos a director: funcionarios activos con un TSEDE_USUARIO activo en la sede.
 CREATE OR REPLACE FUNCTION academico_test.fn_funcionario_sede_listar(
     p_fk_sede BIGINT, p_filtro TEXT DEFAULT NULL,
@@ -370,6 +403,7 @@ LANGUAGE sql STABLE AS $$
      WHERE su.FK_TSEDE = p_fk_sede
        AND su.ACTIVE = TRUE AND su.TLV_ESTADO = 'ACTIVO'
        AND f.ACTIVE = TRUE
+       AND academico_test.fn_periodo_sede_puede_ver(p_pk_usuario_solicitante, p_fk_sede)
        AND (NULLIF(TRIM(p_filtro),'') IS NULL
             OR u.PRIMER_NOMBRE   ILIKE '%' || p_filtro || '%'
             OR u.PRIMER_APELLIDO ILIKE '%' || p_filtro || '%'
@@ -379,7 +413,7 @@ LANGUAGE sql STABLE AS $$
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_funcionario_sede_listar(BIGINT, TEXT, BIGINT)
-    IS 'GET /sedes/:ID/funcionarios. Select de director de grupo; sin gate ni alcance.';
+    IS 'GET /sedes/:ID/funcionarios. Select de director de grupo; vacio si el usuario no alcanza la sede (fn_periodo_sede_puede_ver).';
 
 -- ---------------------------------------------------------------- configuracion del grado
 
@@ -398,8 +432,9 @@ BEGIN
     -- fn_criterio_prom_obtener resuelve el override del grado o el default del periodo.
     SELECT * INTO c FROM academico_test.fn_criterio_prom_obtener(v_periodo, p_fk_grado, p_pk_usuario_solicitante) LIMIT 1;
     IF c.id IS NOT NULL THEN
-        SELECT COALESCE(jsonb_agg(COALESCE(a.subject_id, a.area_id)::text), '[]'::jsonb)
-          INTO v_req FROM academico_test.fn_criterio_prom_asig_listar(c.id) a;
+        -- Ids de asignatura o de area segun el nodo, como texto (lo que manda el front).
+        SELECT COALESCE(jsonb_agg(COALESCE(e->>'subjectId', e->>'areaId')), '[]'::jsonb)
+          INTO v_req FROM jsonb_array_elements(c.mandatory_subjects) e;
         v_prom := jsonb_build_object(
             'curriculumNode', c.curriculum_node,
             'maxFailedRecovery', c.max_failed_recovery,
@@ -430,16 +465,16 @@ CREATE OR REPLACE FUNCTION academico_test.fn_grade_config_guardar(
     p_pk_usuario_solicitante BIGINT DEFAULT NULL
 )
 RETURNS BIGINT LANGUAGE plpgsql AS $$
-DECLARE v_periodo BIGINT; v_oblig jsonb;
+DECLARE v_periodo BIGINT; v_oblig BIGINT[];
 BEGIN
     IF p_schedule IS NOT NULL AND p_schedule ? 'entries' THEN
         PERFORM academico_test.fn_horario_guardar(p_fk_grado, p_schedule->'entries', p_pk_usuario_solicitante);
     END IF;
     IF p_promotion IS NOT NULL THEN
         SELECT FK_TPERIODO_ACADEMICO INTO v_periodo FROM academico_test.TGRADO WHERE PK_TGRADO = p_fk_grado;
-        -- requiredSubjects llega como array de ids; se remapea a [{asignaturaId}].
+        -- requiredSubjects llega como array de ids; vacio borra las obligatorias.
         IF p_promotion ? 'requiredSubjects' THEN
-            SELECT COALESCE(jsonb_agg(jsonb_build_object('asignaturaId', (x)::bigint)), '[]'::jsonb)
+            SELECT COALESCE(array_agg(x::bigint), '{}'::bigint[])
               INTO v_oblig
               FROM jsonb_array_elements_text(p_promotion->'requiredSubjects') x
              WHERE NULLIF(TRIM(x),'') IS NOT NULL;
