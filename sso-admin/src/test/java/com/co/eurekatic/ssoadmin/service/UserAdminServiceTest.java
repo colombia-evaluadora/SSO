@@ -476,7 +476,8 @@ class UserAdminServiceTest {
 
         assertThat(res.status()).isEqualTo("valid");
         assertThat(res.expiresIn()).isBetween(1L, 600L);
-        assertThat(res.ttlSeconds()).isEqualTo(2 * 24 * 60 * 60);
+        // La invitacion dura 7 dias (el front arma el contador con esto).
+        assertThat(res.ttlSeconds()).isEqualTo(7 * 24 * 60 * 60);
         assertThat(res.maskedEmail()).isEqualTo("a****@example.com");
         assertThat(res.issuedAt()).isNotNull();
     }
@@ -529,6 +530,8 @@ class UserAdminServiceTest {
                 payload.capture(), any(), eq("PIGSE"));
         assertThat(payload.getValue().get("activationLink").toString())
                 .isEqualTo("https://pigse.example.com/activate?token=atok");
+        // El correo anuncia la misma vigencia que fija TokenService: 7 dias.
+        assertThat(payload.getValue().get("ttlMinutes")).isEqualTo(7L * 24 * 60);
     }
 
     @Test
