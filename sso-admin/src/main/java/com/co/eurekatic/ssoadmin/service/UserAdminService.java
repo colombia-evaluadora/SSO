@@ -436,7 +436,8 @@ public class UserAdminService {
      * exigiria responder igual en ambos casos y es una decision de producto,
      * no tecnica.
      *
-     * <p>La busqueda va por {@code findByEmail} y no cargando la tabla entera:
+     * <p>La busqueda va por {@code findByEmailForUpdate} (por email, con la fila
+     * bloqueada; ver el comentario de abajo) y no cargando la tabla entera:
      * es un endpoint publico, y recorrer todos los usuarios en memoria por
      * cada llamada lo convertia en un amplificador de carga gratuito.
      *
@@ -445,7 +446,11 @@ public class UserAdminService {
      */
     @Transactional
     public ForgotPasswordResponse forgotPassword(String email, String appName) {
-        Optional<User> encontrado = userRepository.findByEmail(email);
+        // Con la fila bloqueada: issueRestoreToken reutiliza el token vigente
+        // para que los enlaces de correos anteriores sigan sirviendo, y dos
+        // pedidos simultaneos no deben terminar con dos tokens distintos (el
+        // segundo pisaria al primero). Ver TokenService#issueRestoreToken.
+        Optional<User> encontrado = userRepository.findByEmailForUpdate(email);
 
         if (encontrado.isEmpty()) {
             throw new NotFoundException("User", email);

@@ -1,7 +1,7 @@
 -- V540 — Informes: boletín de notas del periodo (Evaluativo), por capas.
 --
 -- Qué hace: (1) núcleos compartidos de los boletines -- encabezado
--- institucional, foto y firmas por rol (rector, auxiliar administrativo) --;
+-- institucional, foto y firmas (rector por rol, secretaria por el puntero) --;
 -- (2) el núcleo del boletín de notas (primaria a media): consolidado por
 -- periodos, detalle con logros y comportamientos del periodo consolidado
 -- (Regla 81), con la original si hubo Habilitación (Regla 68); (3) su
@@ -87,7 +87,7 @@ AS $function$
 $function$;
 
 COMMENT ON FUNCTION academico_test.fn_informe_boletin_firmante_interno(BIGINT, BIGINT, VARCHAR)
-    IS 'INTERNO: nombre y documento ("CC: ...") de quien firma un boletin con un rol (TROL.CODIGO: RECTOR, AUXILIAR_ADMINISTRATIVO): el usuario con ese rol en una sede del establecimiento, la sede del grupo primero. Sin gate.';
+    IS 'INTERNO: nombre y documento ("CC: ...") de quien firma un boletin con un rol (TROL.CODIGO, p. ej. RECTOR): el usuario con ese rol en una sede del establecimiento, la sede del grupo primero. Sin gate.';
 
 CREATE OR REPLACE FUNCTION academico_test.fn_informe_boletin_rector_interno(
     p_pk_ee   BIGINT,
@@ -102,6 +102,33 @@ $function$;
 
 COMMENT ON FUNCTION academico_test.fn_informe_boletin_rector_interno(BIGINT, BIGINT)
     IS 'INTERNO: nombre y documento ("CC: ...") del rector que firma un boletin (fn_informe_boletin_firmante_interno con RECTOR). Sin gate. La usan los dos boletines.';
+
+CREATE OR REPLACE FUNCTION academico_test.fn_informe_boletin_secretaria_interno(
+    p_pk_ee BIGINT
+)
+RETURNS TABLE(nombre character varying, documento character varying)
+LANGUAGE sql
+STABLE
+AS $function$
+    -- Por el puntero del establecimiento, no por rol: su rol (jefe de sistema)
+    -- lo comparten otros funcionarios y la firma saldria con otro nombre.
+    SELECT NULLIF(TRIM(CONCAT_WS(' ', u.PRIMER_APELLIDO, u.SEGUNDO_APELLIDO,
+                                      u.PRIMER_NOMBRE,   u.SEGUNDO_NOMBRE)), '')::VARCHAR,
+           CASE WHEN NULLIF(TRIM(u.IDENTIFICACION), '') IS NOT NULL
+                THEN CONCAT_WS(' ', td.VALOR || ':', TRIM(u.IDENTIFICACION))
+           END::VARCHAR
+      FROM academico_test.TESTABLECIMIENTO e
+      JOIN academico_test.TFUNCIONARIO f
+        ON f.PK_TFUNCIONARIO = e.FK_TFUNCIONARIO_SECRETARIA AND f.ACTIVE = TRUE
+      JOIN academico_test.TUSUARIO u
+        ON u.PK_TUSUARIO = f.FK_TUSUARIO AND u.ACTIVE = TRUE
+      LEFT JOIN academico_test.TLISTA_VALOR td
+             ON td.PK_LISTA_VALOR = u.FK_TLV_TIPO_DOCUMENTO
+     WHERE e.PK_ESTABLECIMIENTO = p_pk_ee;
+$function$;
+
+COMMENT ON FUNCTION academico_test.fn_informe_boletin_secretaria_interno(BIGINT)
+    IS 'INTERNO: nombre y documento ("CC: ...") de la secretaria que firma un boletin: la de TESTABLECIMIENTO.FK_TFUNCIONARIO_SECRETARIA. Sin gate.';
 
 CREATE OR REPLACE FUNCTION academico_test.fn_informe_boletin_director_interno(
     p_fk_tgrupo BIGINT
@@ -532,8 +559,7 @@ AS $function$
       LEFT JOIN filas f ON f.mat = e.fk_tmatricula
       LEFT JOIN resumen rs ON rs.mat = e.fk_tmatricula
       LEFT JOIN LATERAL academico_test.fn_informe_boletin_rector_interno(c.pk_ee, c.pk_sede) r ON TRUE
-      LEFT JOIN LATERAL academico_test.fn_informe_boletin_firmante_interno(
-                    c.pk_ee, c.pk_sede, 'AUXILIAR_ADMINISTRATIVO') ax ON TRUE
+      LEFT JOIN LATERAL academico_test.fn_informe_boletin_secretaria_interno(c.pk_ee) ax ON TRUE
       LEFT JOIN LATERAL academico_test.fn_informe_boletin_director_interno(p_fk_tgrupo) di ON TRUE
      ORDER BY e.estudiante, e.fk_tmatricula, f.seccion,
               f.area_orden NULLS LAST, f.area_nombre, f.area, f.rango,
@@ -541,7 +567,7 @@ AS $function$
 $function$;
 
 COMMENT ON FUNCTION academico_test.fn_informe_boletin_notas_interno(BIGINT, BIGINT, BIGINT[])
-    IS 'INTERNO: los datos del boletin de notas de un periodo (primaria, secundaria y media): por estudiante, un flujo de filas que la plantilla pinta en orden. SECCION 1 = consolidado: una fila por (AREA o ASIGNATURA del plan del grado, periodo del año hasta el pedido) con PERIODO_ORDEN, PERIODO_ABREVIACION, NOTA y NOTA_ORIGINAL (antes de recuperar, Regla 68); la plantilla la pivota, asi que la cantidad de periodos no esta fija; SECCION 2 = detalle del periodo pedido (AREA y ASIGNATURA con nota, desempeño, PIA = INFLUENCIA, I.H. = INTENSIDAD, I.I./I.J. de TASIGNATURA_NOTA y DOCENTES de TDOCENTE_ASIGNATURA; debajo, filas LOGRO: por criterio de unidad con actividades calificadas en el periodo, la nota del estudiante y el INDICADOR del nivel de la escala en que cae, o la descripcion del criterio); SECCION 3 = COMPORTAMIENTO del periodo (TCOMPORTAMIENTO_CALIFICADO: fecha, tipo, codigo - nombre, observacion, funcionario); SECCION 4 = ESCALA, un nivel por fila (ASIGNATURA_NOMBRE el nombre, TEXTO el rango en la nota del colegio), tantos como tenga la escala. ORDEN es la posicion de la fila dentro de su seccion. La nota del area sigue CRITERIO_AREA (1 por influencia, 2 por intensidad, 3 promedio) y APROBADAS/REPROBADAS/SIN_CALIFICAR cuentan AREAS contra fn_grado_desempeno_minimo. Solo estudiantes no cualitativos con el periodo CONSOLIDADO (Regla 81); solo notas guardadas. Cabecera, foto y firmas (rector, auxiliar administrativo, director de grupo) se repiten en cada fila. Sin gate: lo aplica fn_informe_boletin_notas.';
+    IS 'INTERNO: los datos del boletin de notas de un periodo (primaria, secundaria y media): por estudiante, un flujo de filas que la plantilla pinta en orden. SECCION 1 = consolidado: una fila por (AREA o ASIGNATURA del plan del grado, periodo del año hasta el pedido) con PERIODO_ORDEN, PERIODO_ABREVIACION, NOTA y NOTA_ORIGINAL (antes de recuperar, Regla 68); la plantilla la pivota, asi que la cantidad de periodos no esta fija; SECCION 2 = detalle del periodo pedido (AREA y ASIGNATURA con nota, desempeño, PIA = INFLUENCIA, I.H. = INTENSIDAD, I.I./I.J. de TASIGNATURA_NOTA y DOCENTES de TDOCENTE_ASIGNATURA; debajo, filas LOGRO: por criterio de unidad con actividades calificadas en el periodo, la nota del estudiante y el INDICADOR del nivel de la escala en que cae, o la descripcion del criterio); SECCION 3 = COMPORTAMIENTO del periodo (TCOMPORTAMIENTO_CALIFICADO: fecha, tipo, codigo - nombre, observacion, funcionario); SECCION 4 = ESCALA, un nivel por fila (ASIGNATURA_NOMBRE el nombre, TEXTO el rango en la nota del colegio), tantos como tenga la escala. ORDEN es la posicion de la fila dentro de su seccion. La nota del area sigue CRITERIO_AREA (1 por influencia, 2 por intensidad, 3 promedio) y APROBADAS/REPROBADAS/SIN_CALIFICAR cuentan AREAS contra fn_grado_desempeno_minimo. Solo estudiantes no cualitativos con el periodo CONSOLIDADO (Regla 81); solo notas guardadas. Cabecera, foto y firmas (rector, secretaria en AUXILIAR_*, director de grupo) se repiten en cada fila. Sin gate: lo aplica fn_informe_boletin_notas.';
 
 -- ============================================================ wrapper
 CREATE FUNCTION academico_test.fn_informe_boletin_notas(

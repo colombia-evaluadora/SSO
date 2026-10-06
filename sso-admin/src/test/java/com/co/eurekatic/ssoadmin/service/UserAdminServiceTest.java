@@ -318,7 +318,7 @@ class UserAdminServiceTest {
 
     @Test
     void forgotPasswordFailsWhenEmailUnknown() {
-        when(userRepository.findByEmail("nobody@example.com")).thenReturn(Optional.empty());
+        when(userRepository.findByEmailForUpdate("nobody@example.com")).thenReturn(Optional.empty());
 
         // 404 a pedido del equipo: el front le dice al usuario que esa
         // dirección no está registrada en vez de mostrar una confirmación
@@ -338,7 +338,7 @@ class UserAdminServiceTest {
     void forgotPasswordIssuesTokenAndEmailsWhenKnown() {
         User u = new User();
         u.setEmail("alice@example.com");
-        when(userRepository.findByEmail("alice@example.com")).thenReturn(Optional.of(u));
+        when(userRepository.findByEmailForUpdate("alice@example.com")).thenReturn(Optional.of(u));
         when(tokenService.issueRestoreToken(u)).thenReturn("rtok");
         when(userRepository.save(u)).thenReturn(u);
 
@@ -381,7 +381,7 @@ class UserAdminServiceTest {
     void forgotPasswordResponseNeverCarriesTheResetToken() {
         User u = new User();
         u.setEmail("alice@example.com");
-        when(userRepository.findByEmail("alice@example.com")).thenReturn(Optional.of(u));
+        when(userRepository.findByEmailForUpdate("alice@example.com")).thenReturn(Optional.of(u));
         when(tokenService.issueRestoreToken(u)).thenReturn("rtok-secreto");
         when(userRepository.save(u)).thenReturn(u);
 
@@ -538,7 +538,7 @@ class UserAdminServiceTest {
         com.co.eurekatic.common.entity.App app = new com.co.eurekatic.common.entity.App();
         app.setName("COLOMBIA-EVALUADORA");
         app.setLaunchUrl("https://colombia-evaluadora.example.com");
-        when(userRepository.findByEmail("alice@example.com")).thenReturn(Optional.of(u));
+        when(userRepository.findByEmailForUpdate("alice@example.com")).thenReturn(Optional.of(u));
         when(appRepository.findByName("COLOMBIA-EVALUADORA"))
                 .thenReturn(Optional.of(app));
         when(tokenService.issueRestoreToken(u)).thenReturn("rtok");
@@ -571,7 +571,7 @@ class UserAdminServiceTest {
         com.co.eurekatic.common.entity.App app = new com.co.eurekatic.common.entity.App();
         app.setName("COLOMBIA-EVALUADORA");
         app.setLaunchUrl("https://colombia-evaluadora.example.com/");
-        when(userRepository.findByEmail("alice@example.com")).thenReturn(Optional.of(u));
+        when(userRepository.findByEmailForUpdate("alice@example.com")).thenReturn(Optional.of(u));
         when(appRepository.findByName("COLOMBIA-EVALUADORA"))
                 .thenReturn(Optional.of(app));
         when(tokenService.issueRestoreToken(u)).thenReturn("rtok");
@@ -597,7 +597,7 @@ class UserAdminServiceTest {
         com.co.eurekatic.common.entity.App app = new com.co.eurekatic.common.entity.App();
         app.setName("SSO-ADMIN");
         app.setLaunchUrl("/admin"); // SSO console uses a relative path
-        when(userRepository.findByEmail("alice@example.com")).thenReturn(Optional.of(u));
+        when(userRepository.findByEmailForUpdate("alice@example.com")).thenReturn(Optional.of(u));
         when(appRepository.findByName("SSO-ADMIN")).thenReturn(Optional.of(app));
         when(tokenService.issueRestoreToken(u)).thenReturn("rtok");
         when(userRepository.save(u)).thenReturn(u);
@@ -621,7 +621,7 @@ class UserAdminServiceTest {
     void forgotPasswordFallsBackWhenAppNotFound() {
         User u = new User();
         u.setEmail("alice@example.com");
-        when(userRepository.findByEmail("alice@example.com")).thenReturn(Optional.of(u));
+        when(userRepository.findByEmailForUpdate("alice@example.com")).thenReturn(Optional.of(u));
         when(appRepository.findByName("GHOST-APP")).thenReturn(Optional.empty());
         when(tokenService.issueRestoreToken(u)).thenReturn("rtok");
         when(userRepository.save(u)).thenReturn(u);

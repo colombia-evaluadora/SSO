@@ -1,7 +1,9 @@
 package com.co.eurekatic.common.repository;
 
 import com.co.eurekatic.common.entity.User;
+import jakarta.persistence.LockModeType;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.stereotype.Repository;
 
@@ -18,6 +20,19 @@ import java.util.Optional;
 public interface UserRepository extends JpaRepository<User, Long> {
 
     Optional<User> findByEmail(String email);
+
+    /**
+     * Igual que {@link #findByEmail} pero con {@code SELECT ... FOR UPDATE}
+     * sobre la fila del usuario hasta el fin de la transaccion. Lo usa
+     * {@code UserAdminService#forgotPassword}, que reutiliza el token de
+     * restauracion vigente: sin el bloqueo, dos pedidos simultaneos de un
+     * usuario sin token generarian dos tokens distintos y el ultimo en guardar
+     * invalidaria el enlace del primer correo. Bloquea una sola fila y solo
+     * durante ese pedido; no lo uses en lecturas comunes.
+     */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT u FROM User u WHERE u.email = :email")
+    Optional<User> findByEmailForUpdate(String email);
 
     Optional<User> findByApiToken(String apiToken);
 
