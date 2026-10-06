@@ -1,7 +1,7 @@
 # Mapa del dominio
 
 **Generado** por `python scripts/migration-analysis mapa` — no editar a mano.
-Estado: 471 migraciones (V1–V546), 1251 funciones vivas, 58 endpoints vivos. Ultima generacion: 2026-10-06.
+Estado: 471 migraciones (V1–V546), 1252 funciones vivas, 58 endpoints vivos. Ultima generacion: 2026-10-06.
 
 Para una **funcion**, la migracion dueña es la que hay que editar: es su ultima escritura viva, no la que la creo.
 
@@ -24,7 +24,7 @@ Las secciones son las categorias funcionales de `scripts/migration-analysis/anal
 - [Referentes curriculares](#referentes) — 68 funcion(es), 1 endpoint(s)
 - [Planeador (unidades, actividades)](#planeador) — 273 funcion(es), 22 endpoint(s)
 - [Auditoría](#auditoria) — 6 funcion(es), 9 endpoint(s)
-- [Periodos académicos](#periodos) — 108 funcion(es), 0 endpoint(s)
+- [Periodos académicos](#periodos) — 109 funcion(es), 0 endpoint(s)
 - [Funcionarios](#funcionarios) — 40 funcion(es), 2 endpoint(s)
 - [Sedes](#sedes) — 29 funcion(es), 0 endpoint(s)
 - [Establecimiento](#establecimiento) — 14 funcion(es), 0 endpoint(s)
@@ -1016,8 +1016,9 @@ Las secciones son las categorias funcionales de `scripts/migration-analysis/anal
 | `academico_test.fn_descanso_agregar_interno` | 4 | V37.2 | V37.3 |
 | `academico_test.fn_descanso_eliminar` | 2 | V37.3 | V75 |
 | `academico_test.fn_descanso_eliminar_interno` | 2 | V37.2 | V37.3 |
+| `academico_test.fn_descanso_validar_activo` | 1 | V37.1 | V37.2 |
 | `academico_test.fn_descanso_validar_dentro_periodo` | 3 | V37.1 | V37.2 |
-| `academico_test.fn_descanso_validar_existe` | 1 | V37.1 | V37.3 |
+| `academico_test.fn_descanso_validar_existe` | 1 | V37.1 | V37.2, V37.3 |
 | `academico_test.fn_descanso_validar_rango` | 2 | V37.1 | V37.2 |
 | `academico_test.fn_descanso_validar_sin_traslape` | 3 | V37.1 | V37.2 |
 | `academico_test.fn_docente_periodo_vigente` | 1 | V250 | V469.4, V497 |
