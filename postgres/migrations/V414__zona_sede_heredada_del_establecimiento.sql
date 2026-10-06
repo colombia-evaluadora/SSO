@@ -7,7 +7,6 @@
 --   fn_est_zona_sede_defecto      que zona lleva la sede automatica
 --   fn_sed_crear / fn_sed_actualizar  (validan)
 --   fn_est_crear                  (la sede automatica hereda)
---   GET /select/:CATEGORIA        (filtro opcional, sin ruta nueva)
 --
 --
 -- LA REGLA
@@ -40,20 +39,6 @@
 --   por PK porque el PK es de esta instalacion; el VALOR es del catalogo.
 --
 --
--- EL SELECT NO NECESITA RUTA NUEVA
---   GET /select/:CATEGORIA es el catalogo generico de TLISTA_VALOR y lo usan
---   unas quince pantallas. Se le agrega un parametro OPCIONAL de query string
---   -- ESTABLECIMIENTO -- en vez de crear un endpoint paralelo:
---
---     GET /select/ZONA                     las 3 opciones, igual que hoy
---     GET /select/ZONA?ESTABLECIMIENTO=877 solo las que ese EE permite
---
---   Sin el parametro la consulta es identica a la anterior, asi que ninguna
---   de las otras pantallas se entera. Y el filtro solo se aplica cuando la
---   categoria es ZONA: mandarlo con cualquier otra no hace nada, en vez de
---   devolver vacio.
---
---
 -- LOS DATOS VIEJOS NO SE TOCAN
 --   Hay 11 sedes que la regla nueva invalidaria (9 "Urbana y Rural" bajo un
 --   EE Urbana, 1 bajo uno Rural, 1 Urbana bajo uno Rural). Se dejan como
@@ -63,7 +48,7 @@
 --   Migrarlas automaticamente seria decidir por el colegio cual es la zona
 --   real de un edificio que no conocemos.
 --
--- Idempotente: CREATE OR REPLACE y ON CONFLICT DO NOTHING. Las cuatro
+-- Idempotente: CREATE OR REPLACE. Las cuatro
 -- funciones nuevas devuelven escalares, asi que no necesitan DROP previo.
 -- ===========================================================================
 
@@ -1071,41 +1056,3 @@ BEGIN
     RETURN v_id_creado;
 END;
 $function$;
-
--- ---------------------------------------------------------------------------
--- 7. GET /select/:CATEGORIA gana un filtro OPCIONAL.
---
---    Se ACTUALIZA la fila existente en vez de insertar una nueva: la ruta y el
---    metodo no cambian, asi que las ~15 pantallas que ya la usan siguen
---    llamandola igual. Sin el parametro, la consulta es equivalente a la
---    anterior.
---
---    El filtro solo muerde cuando la categoria es ZONA. Mandar
---    ESTABLECIMIENTO con cualquier otra categoria no hace nada, en vez de
---    devolver vacio -- un parametro que el front arrastre por error no deberia
---    romper un catalogo que no tiene nada que ver.
---
---    Se toca unicamente la fila del microservicio eval-col, que es la que el
---    front consume (/api/eval-col/select/...). La de pigse apunta a otro
---    esquema y no participa de este flujo.
--- ---------------------------------------------------------------------------
-UPDATE public.query q
-   SET query = 'select lv.pk_lista_valor, lv.nombre, lv.valor, lv.accion
-  from academico_test.tlista_valor lv
- where lv.categoria = UPPER(CAST(:PARAM.CATEGORIA AS VARCHAR))
-   and lv.active
-   -- V414: filtro opcional. Solo aplica a ZONA y solo si llega el
-   -- establecimiento; en cualquier otro caso la condicion es TRUE y la
-   -- respuesta es la de siempre.
-   and (UPPER(CAST(:PARAM.CATEGORIA AS VARCHAR)) <> ''ZONA''
-        OR CAST(:QUERY.ESTABLECIMIENTO AS BIGINT) IS NULL
-        OR lv.valor = ANY (academico_test.fn_est_zonas_sede_permitidas(
-                               CAST(:QUERY.ESTABLECIMIENTO AS BIGINT))))
- order by lv.valor asc',
-       param_types = '{"PARAM.CATEGORIA": "VARCHAR", "QUERY.ESTABLECIMIENTO": "BIGINT"}'::jsonb,
-       detail = 'Catalogo generico de TLISTA_VALOR por categoria. V414 le agrega el parametro OPCIONAL de query string ESTABLECIMIENTO, que solo tiene efecto con la categoria ZONA: filtra las opciones a las que una sede de ese establecimiento puede tener -- Urbana si el EE es Urbana, Rural si es Rural, las dos si es mixto o no declaro zona, y nunca "Urbana y Rural", que queda reservada al establecimiento. Sin el parametro la respuesta es identica a la de siempre, asi que las demas pantallas que usan este catalogo no se ven afectadas; y mandarlo con otra categoria no hace nada en vez de devolver vacio.'
-  FROM public.microservice m
- WHERE m.id_microservice = q.microservice_id
-   AND m.serviceid       = 'eval-col'
-   AND q.path_template   = '/select/:CATEGORIA'
-   AND q.http_method     = 'GET';
