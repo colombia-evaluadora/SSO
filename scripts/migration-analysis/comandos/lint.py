@@ -406,9 +406,6 @@ class FnReporteDuplicada(Regla):
             m = re.match(r"(fn_.+?)_(?:reporte_\w+|exportar)$", short)
             if m and f"{m.group(1)}_listar" in conocidas:
                 listar = f"{m.group(1)}_listar"
-                # Ya reutiliza el listado (o su `_interno`): no hay duplicado.
-                if re.search(rf"\b{listar}(?:_interno)?\s*\(", st.text, re.I):
-                    continue
                 yield self.hallazgo(a, st.line,
                                     f"{short}() duplica a {listar}(): el reporte y la pantalla divergiran en "
                                     f"el WHERE o en el alcance. Reusa el nucleo del listado, partiendolo en "
