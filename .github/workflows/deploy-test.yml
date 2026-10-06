@@ -30,26 +30,18 @@
 #     3. deploy     : rsync de docker-compose.yml + postgres/migrations
 #                     + observability/ + docker/ + scripts/ al servidor,
 #                     escribe /opt/sso/.env desde el secreto TEST_ENV_FILE,
-#                     y luego levanta el stack por SSH en dos modos:
+#                     y luego, por SSH: infra sin dependencia de flyway,
+#                     la fase de migraciones (scripts/flyway-deploy.sh:
+#                     re-aplica las migraciones ya aplicadas que se
+#                     editaron, ANTES de las pendientes; repair; migrate;
+#                     validate) y SOLO SI PASA, los servicios:
 #                       - arranque en frío (nada del tier gateado por
-#                         flyway está corriendo): infra sin dependencia de
-#                         flyway primero, luego flyway migra, y recién
-#                         entonces `up -d` trae auth-center/sso-admin/
-#                         api-gateway/etc. (compose los gatea vía
-#                         depends_on: service_completed_successfully).
+#                         flyway está corriendo): `up -d` completo.
 #                       - redeploy en caliente (esos servicios ya están
-#                         arriba): infra primero igual, y luego se
-#                         recrean con `--no-deps` sólo los contenedores
-#                         cuya imagen cambió — sin esperar a flyway.
-#                     En ambos casos, al final (todo el stack arriba, antes
-#                     del smoke check de api-gateway) corre `flyway migrate`
-#                     + `flyway validate`; si algo falla, repara y reaplica.
-#                     El repair además RE-EJECUTA el SQL de las migraciones
-#                     cuyo checksum cambió (repair solo realinea el historial,
-#                     no re-corre la migración): sin esto, editar un V<n> ya
-#                     aplicado —p.ej. reescribir el cuerpo de una función—
-#                     nunca llegaba al server. Todas las migraciones del repo
-#                     son idempotentes, así que re-aplicarlas es seguro.
+#                         arriba): se recrean con `--no-deps` sólo los
+#                         contenedores cuya imagen cambió.
+#                     Si las migraciones fallan, ningún servicio se recrea:
+#                     nunca queda código nuevo contra un esquema a medias.
 #
 # El gate es `workflow_run` sobre CI (no un push directo) para que
 # nunca se despliegue un commit cuyos tests fallaron. `workflow_dispatch`
