@@ -107,7 +107,7 @@ jobs:
     # tags v*, asi que un release se para aqui hasta que alguien lo aprueba.
     environment: ${{ inputs.environment }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.ref }}
           # Historial completo: el paso "Migraciones editadas" hace git diff
@@ -179,6 +179,34 @@ jobs:
               fi
               echo "::warning::La marca '$BASE' ya no existe en el repo (¿force-push?): solo checksum."
             else
+              # Que lo nuevo y lo editado se QUEDEN, contra lo que este
+              # servidor tiene de verdad y antes de sincronizar nada:
+              #  * nueva (A) pisada por una posterior: entra out-of-order,
+              #    corre la última y revierte lo posterior; el servidor queda
+              #    distinto de una base limpia -> se para.
+              #  * editada (M) pisada: la expansión re-ejecuta la posterior
+              #    detrás, así que el servidor queda igual que una base limpia
+              #    y la edición es código muerto -> aviso (CI lo bloquea en el
+              #    PR, que es donde se corrige).
+              ORDEN_JSON="$(mktemp)"
+              ORDEN_RC=0
+              PYTHONIOENCODING=utf-8 python3 scripts/migration-analysis orden --base "$BASE" --json "$ORDEN_JSON" || ORDEN_RC=$?
+              # rc=1 con JSON = hay hallazgos (se clasifican abajo); rc!=0 sin
+              # JSON = el analizador se cayó, y eso no se deja pasar.
+              if [ "$ORDEN_RC" != 0 ] && ! jq -e 'type == "array"' "$ORDEN_JSON" >/dev/null 2>&1; then
+                echo "::error::el análisis de orden falló (rc=$ORDEN_RC) sin dar resultado"
+                exit 1
+              fi
+              if [ -s "$ORDEN_JSON" ]; then
+                jq -r '.[] | select(.estado == "M")
+                       | "::warning::\(.fichero): \(.objeto) lo redefine V\(.pisada_por); la edición no tendrá efecto"' "$ORDEN_JSON"
+                NUEVAS_PISADAS="$(jq -r '.[] | select(.estado != "M") | "\(.fichero) (\(.objeto), lo redefine V\(.pisada_por))"' "$ORDEN_JSON")"
+                if [ -n "$NUEVAS_PISADAS" ]; then
+                  echo "::error::migraciones nuevas que revertirían lo posterior en este servidor:"
+                  printf '  %s\n' "$NUEVAS_PISADAS"
+                  exit 1
+                fi
+              fi
               CANDIDATES="$(git diff --name-only --diff-filter=AMR "$BASE" HEAD -- postgres/migrations \
                             | grep -E '^postgres/migrations/V[0-9]+(\.[0-9]+)*__[A-Za-z0-9_.-]+\.sql$' \
                             | xargs -r -n1 basename | tr '\n' ' ' || true)"
@@ -345,8 +373,16 @@ jobs:
           # heredoc, que va comillado a propósito
           # para que $DEST, $(...) etc. de las líneas de abajo se evalúen
           # en el servidor y no aquí).
+          #
+          # Todo el cuerpo va dentro de una función que se llama en la última
+          # línea con stdin en /dev/null: bash lee la función ENTERA antes de
+          # ejecutar nada, así que un comando que lea stdin (docker exec -i,
+          # compose run) ya no puede tragarse el resto del heredoc. Pasó con
+          # la fase de migraciones: el deploy salía en verde tras flyway sin
+          # recrear servicios ni escribir la marca.
           ssh -i ~/.ssh/deploy_key "$DEST" "CHANGED_SERVICES='$CHANGED_SERVICES' REAPPLY_CANDIDATES='$REAPPLY_CANDIDATES' DEPLOY_SHA='$DEPLOY_SHA' bash -s" <<'EOF'
           set -euo pipefail
+          deploy_remoto() {
           cd /opt/sso
           # El .env lo acaba de escribir el paso anterior desde el
           # secreto TEST_ENV_FILE. Si no está, ese paso falló y no
@@ -392,12 +428,18 @@ jobs:
 
           ./scripts/sso-stack.sh pull --quiet --ignore-buildable
 
+          # En paralelo: en serie eran ~5 s por imagen (≈1 min en un release
+          # de 13). Cada pull escribe a su propio log y se espera a TODOS: uno
+          # que falle tumba el deploy igual que antes, con su salida.
+          PULL_LOGS="$(mktemp -d)"
+          PULL_PIDS=""
           for svc in $CHANGED_SERVICES; do
             if [ "$svc" = "query-service" ]; then
               continue
             fi
             echo "=== pre-pulling ${IMAGE_PREFIX_VAL}/${svc}:${IMAGE_TAG_VAL} (compose ignora este pull por --ignore-buildable, se hace a mano) ==="
-            docker pull "${IMAGE_PREFIX_VAL}/${svc}:${IMAGE_TAG_VAL}"
+            docker pull -q "${IMAGE_PREFIX_VAL}/${svc}:${IMAGE_TAG_VAL}" > "$PULL_LOGS/$svc.log" 2>&1 &
+            PULL_PIDS="$PULL_PIDS $!:$svc"
           done
 
           # `query-service` NO es un servicio de docker-compose.yml (se
@@ -420,7 +462,19 @@ jobs:
           # en docker-compose.yml, así que la imagen pulleada aquí es
           # exactamente la que provisioner le pide a Docker más tarde.
           echo "=== pre-pulling ${IMAGE_PREFIX_VAL}/query-service:${IMAGE_TAG_VAL} (provisionado on-demand, fuera de docker-compose.yml) ==="
-          docker pull "${IMAGE_PREFIX_VAL}/query-service:${IMAGE_TAG_VAL}"
+          docker pull -q "${IMAGE_PREFIX_VAL}/query-service:${IMAGE_TAG_VAL}" > "$PULL_LOGS/query-service.log" 2>&1 &
+          PULL_PIDS="$PULL_PIDS $!:query-service"
+
+          PULL_FAIL=""
+          for p in $PULL_PIDS; do
+            wait "${p%%:*}" || PULL_FAIL="$PULL_FAIL ${p#*:}"
+          done
+          if [ -n "$PULL_FAIL" ]; then
+            for s in $PULL_FAIL; do echo "--- pull $s ---"; cat "$PULL_LOGS/$s.log"; done
+            echo "::error::falló el pull de:$PULL_FAIL"
+            exit 1
+          fi
+          rm -rf "$PULL_LOGS"
 
           # ─── Servicios gateados por flyway vs. servicios independientes ───
           #
@@ -434,10 +488,19 @@ jobs:
           #   GATED_SERVICES   → arrastran flyway transitivamente
           #                       (auth-center/sso-admin lo declaran
           #                       directo; api-gateway lo hereda de ambos).
-          #   INFRA_SERVICES   → no dependen de flyway. Se levantan
-          #                       siempre primero, gate o no gate.
+          #   INFRA_SERVICES   → imágenes de terceros que no leen el esquema
+          #                       de la aplicación. Se levantan antes de
+          #                       migrar, gate o no gate.
+          #   APP_SERVICES     → imágenes propias sin depends_on:flyway. Van
+          #                       DESPUÉS de las migraciones, igual que las
+          #                       gateadas: antes estaban en INFRA y se
+          #                       recreaban con código nuevo contra el
+          #                       esquema viejo (y si flyway fallaba se
+          #                       quedaban así), y la fase de migraciones
+          #                       esperaba ~40 s a que eureka quedara healthy.
           GATED_SERVICES="api-gateway auth-center cdc-capture cdc-pg-slot-init notification-service sso-admin"
-          INFRA_SERVICES="cdc-clickhouse cdc-worker eurekaserver file-service mailhog provisioner rabbitmq redis reporting-service ai-control-service tsesion-web-gc alloy grafana loki mimir tempo"
+          INFRA_SERVICES="cdc-clickhouse mailhog rabbitmq redis tsesion-web-gc alloy grafana loki mimir tempo"
+          APP_SERVICES="cdc-worker eurekaserver file-service provisioner reporting-service ai-control-service"
 
           # Filtra una lista de servicios contra el grafo ACTIVO de compose
           # (respeta COMPOSE_PROFILES ya resuelto por sso-stack.sh: si
@@ -535,7 +598,7 @@ jobs:
                FLYWAY_CMD="docker compose run --rm -T flyway -connectRetries=60" \
                PSQL_CMD="docker exec -i sso-postgres psql -U $PG_USER -d $FW_DB" \
                REAPPLY_CANDIDATES="$REAPPLY_CANDIDATES" \
-               ./scripts/flyway-deploy.sh; then
+               ./scripts/flyway-deploy.sh </dev/null; then
             echo "::error::falló la fase de migraciones; NO se recreó ningún servicio (siguen en la versión anterior)."
             dump_logs
             exit 1
@@ -570,6 +633,13 @@ jobs:
           else
             echo "=== redeploy en caliente: ya corriendo → $RUNNING_GATED ==="
             echo "=== migraciones ya aplicadas; se recrean sólo los servicios que cambiaron ==="
+            # Los propios no gateados que no estén corriendo (servicio nuevo,
+            # contenedor caído) se arrancan sin recrear los que ya corren; los
+            # que cambiaron de imagen los recrea el --no-deps de abajo.
+            APP_TO_START="$(filter_active $APP_SERVICES)"
+            if [ -n "$APP_TO_START" ]; then
+              ./scripts/sso-stack.sh up -d --no-recreate $APP_TO_START
+            fi
             RECREATE="$(filter_active $CHANGED_SERVICES)"
             if [ -n "$RECREATE" ]; then
               echo "Recreando: $RECREATE"
@@ -582,7 +652,18 @@ jobs:
           # Limpia capas de imágenes viejas para no llenar el disco
           # del Linode con cada deploy.
           docker image prune -f
+          echo "=== deploy remoto completo ==="
+          }
+          deploy_remoto </dev/null
           EOF
+
+          # El script remoto terminó entero: la marca es la del commit que
+          # se despliega. Si algo lo cortara a medias sin fallar, aquí se ve.
+          DEPLOYED_REF="$(ssh -i ~/.ssh/deploy_key "$DEST" 'cat /opt/sso/.flyway-deployed-ref 2>/dev/null || true' | tr -d '[:space:]')"
+          if [ "$DEPLOYED_REF" != "$DEPLOY_SHA" ]; then
+            echo "::error::La marca del servidor ('${DEPLOYED_REF:-<vacía>}') no es el commit desplegado ($DEPLOY_SHA): el script remoto no llegó al final."
+            exit 1
+          fi
 
       - name: ClickHouse migrations
         # Flyway (arriba) sólo migra sso-postgres. Los ALTER de
@@ -596,13 +677,17 @@ jobs:
         # versionar, trackear lo ya aplicado, fallar fuerte ante drift)
         # en cada deploy, a todo ambiente, así que un ALTER nuevo nunca
         # vuelve a quedar aplicado en dev/test y olvidado en producción.
+        env:
+          DEST: ${{ secrets.SSH_TARGET }}
         run: |
-          ssh -i ~/.ssh/deploy_key "${{ secrets.SSH_TARGET }}" \
+          ssh -i ~/.ssh/deploy_key "$DEST" \
             'cd /opt/sso && ./scripts/clickhouse-migrate.sh'
 
       - name: Smoke check (gateway health)
+        env:
+          DEST: ${{ secrets.SSH_TARGET }}
         run: |
-          ssh -i ~/.ssh/deploy_key "${{ secrets.SSH_TARGET }}" bash -s <<'EOF'
+          ssh -i ~/.ssh/deploy_key "$DEST" bash -s <<'EOF'
           set -euo pipefail
           # El gateway es el último en levantar (depende de auth-center
           # healthy); 5 min de margen cubre el arranque frío de las JVMs.
