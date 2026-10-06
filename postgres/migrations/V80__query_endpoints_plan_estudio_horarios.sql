@@ -454,3 +454,41 @@ SELECT r.id_role, q.id_query
    AND q.path_template = '/plan-asignaturas/bulk-delete'
    AND q.http_method   = 'POST'
 ON CONFLICT DO NOTHING;
+
+-- ---------------------------------------------------------------------------
+-- 12. GET /plan-asignaturas/:ID/restricciones-eliminar  ->  fn_plan_eliminar_restricciones
+-- (antes V286). Hermano de "PUT /plan-asignaturas/:ID/eliminar": mismo :ID
+-- (PK_TASIGNATURA_PLAN), mismos roles.
+-- ---------------------------------------------------------------------------
+INSERT INTO public.query
+    (uuid, query, type, public_end, captcha, microservice_id, path_template,
+     execution_mode, http_method, param_types, out_param_names, detail, action,
+     style)
+SELECT
+    'q-v301pln-restrelim',
+    'SELECT *
+FROM academico_test.fn_plan_eliminar_restricciones(
+    CAST(:PARAM.ID AS BIGINT),
+    public.fn_get_academico_usuario_id(:CONTEXT.USER_ID::BIGINT)
+);',
+    'postgres', false, false,
+    m.id_microservice,
+    '/plan-asignaturas/:ID/restricciones-eliminar', 'SELECT', 'GET',
+    '{"PARAM.ID": "BIGINT"}'::jsonb,
+    NULL,
+    NULL,
+    NULL, NULL
+  FROM public.microservice m
+ WHERE m.serviceid = 'eval-col'
+ON CONFLICT (microservice_id, path_template, http_method)
+    WHERE path_template IS NOT NULL DO NOTHING;
+
+INSERT INTO public.role_query (role_id, query_id)
+SELECT r.id_role, q.id_query
+  FROM public.query q
+  JOIN public.microservice m ON m.id_microservice = q.microservice_id
+  JOIN public.role r ON r.name IN ('CEVAL-AUXILIAR_ADMINISTRATIVO', 'CEVAL-COORDINADOR', 'CEVAL-DIRECTOR_ENTE_TERRITORIAL', 'CEVAL-JEFE_SISTEMA_ENTE_TERRITORIAL', 'CEVAL-JEFE_SISTEMA_ESTABLECIMIENTO', 'CEVAL-RECTOR', 'CEVAL-SUPER_ADMINISTRADOR', 'SSO-ADMIN')
+ WHERE m.serviceid     = 'eval-col'
+   AND q.path_template = '/plan-asignaturas/:ID/restricciones-eliminar'
+   AND q.http_method   = 'GET'
+ON CONFLICT DO NOTHING;
