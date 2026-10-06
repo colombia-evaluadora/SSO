@@ -1,7 +1,7 @@
 # Mapa del dominio
 
 **Generado** por `python scripts/migration-analysis mapa` — no editar a mano.
-Estado: 471 migraciones (V1–V546), 1250 funciones vivas, 58 endpoints vivos. Ultima generacion: 2026-10-06.
+Estado: 471 migraciones (V1–V546), 1251 funciones vivas, 58 endpoints vivos. Ultima generacion: 2026-10-06.
 
 Para una **funcion**, la migracion dueña es la que hay que editar: es su ultima escritura viva, no la que la creo.
 
@@ -24,7 +24,7 @@ Las secciones son las categorias funcionales de `scripts/migration-analysis/anal
 - [Referentes curriculares](#referentes) — 68 funcion(es), 1 endpoint(s)
 - [Planeador (unidades, actividades)](#planeador) — 273 funcion(es), 22 endpoint(s)
 - [Auditoría](#auditoria) — 6 funcion(es), 9 endpoint(s)
-- [Periodos académicos](#periodos) — 107 funcion(es), 0 endpoint(s)
+- [Periodos académicos](#periodos) — 108 funcion(es), 0 endpoint(s)
 - [Funcionarios](#funcionarios) — 40 funcion(es), 2 endpoint(s)
 - [Sedes](#sedes) — 29 funcion(es), 0 endpoint(s)
 - [Establecimiento](#establecimiento) — 14 funcion(es), 0 endpoint(s)
@@ -1073,6 +1073,7 @@ Las secciones son las categorias funcionales de `scripts/migration-analysis/anal
 | `academico_test.fn_periodo_listar_interno` | 11 | V37.2 | V37.3 |
 | `academico_test.fn_periodo_puede_ver` | 2 | V29 | V37.3, V38.3, V39.3, V40.4, V41.4, V42.3… |
 | `academico_test.fn_periodo_sede` | 1 | V29 | V37.3, V38.3, V39.3, V40, V40.3, V40.4… |
+| `academico_test.fn_periodo_sede_puede_ver` | 2 | V43.3 | — |
 | `academico_test.fn_periodo_sedes_listar` | 1 | V37.3 | — |
 | `academico_test.fn_periodo_sedes_listar_interno` | 3 | V37.2 | V37.3 |
 | `academico_test.fn_periodo_soft_delete` | 2 | V37.3 | V75 |
@@ -1194,7 +1195,7 @@ Las secciones son las categorias funcionales de `scripts/migration-analysis/anal
 | `academico_test.fn_usuario_es_aprobador_sede` | 2 | V496.20 | — |
 | `academico_test.fn_usuario_sedes_aprobador` | 1 | V496.18 | V496.20 |
 | `academico_test.fn_usuario_sedes_coordinador` | 1 | V496.18 | V496.22 |
-| `academico_test.fn_usuario_sedes_jornadas_accesibles` | 1 | V29 | V40, V40.4, V51, V116, V140, V297… |
+| `academico_test.fn_usuario_sedes_jornadas_accesibles` | 1 | V29 | V40, V40.4, V43.3, V51, V116, V140… |
 | `academico_test.fn_usuario_sedes_lectura` | 1 | V29 | V52, V116, V224, V244, V251, V396… |
 | `academico_test.fn_usuario_sedes_por_rol` | 2 | V496.18 | — |
 
@@ -1255,7 +1256,7 @@ Las secciones son las categorias funcionales de `scripts/migration-analysis/anal
 | `academico_test.fn_upsert_menu_interno` | 10 | V113 | — |
 | `academico_test.fn_usu_actualizar` | 19 | V179 | — |
 | `academico_test.fn_usuario_permisos_menu` | 1 | V303 | V29, V127 |
-| `academico_test.fn_usuario_puede_en_menu` | 3 | V29 | V40, V51, V52, V53, V116, V140… |
+| `academico_test.fn_usuario_puede_en_menu` | 3 | V29 | V40, V43.3, V51, V52, V53, V116… |
 
 <a id="permisos"></a>
 
@@ -1278,7 +1279,7 @@ Las secciones son las categorias funcionales de `scripts/migration-analysis/anal
 | `academico_test.fn_solicitud_aprobacion_roles_ee` | 0 | V496.18 | — |
 | `academico_test.fn_sync_trol_to_public_role` | 0 | V113 | — |
 | `academico_test.fn_trol_validar_activo` | 1 | V498 | — |
-| `academico_test.fn_usuario_categoria_rol_nivel` | 1 | V302 | V40, V51, V52, V53, V116, V136… |
+| `academico_test.fn_usuario_categoria_rol_nivel` | 1 | V302 | V40, V43.3, V51, V52, V53, V116… |
 | `academico_test.fn_usuario_ee_por_rol` | 2 | V496.18 | — |
 
 <a id="academico"></a>
@@ -1488,7 +1489,7 @@ Las secciones son las categorias funcionales de `scripts/migration-analysis/anal
 | `academico_test.fn_tlv_solicitud_tipo_pk` | 1 | V496.18 | V469.3, V496.19, V496.23, V536, V537 |
 | `academico_test.fn_usu_buscar_por_documento` | 3 | V51 | V93 |
 | `academico_test.fn_usu_crear` | 15 | V51 | — |
-| `academico_test.fn_usuario_ee_accesibles` | 1 | V29 | V40, V51, V116, V140, V179, V233… |
+| `academico_test.fn_usuario_ee_accesibles` | 1 | V29 | V40, V43.3, V51, V116, V140, V179… |
 | `academico_test.fn_usuario_ee_lectura` | 1 | V29 | V52, V53, V116 |
 | `academico_test.fn_usuario_es_docente_puro` | 1 | V29 | V224, V407, V480, V481, V492.1, V496.1… |
 | `academico_test.fn_usuario_otros_usos` | 3 | V162 | V160, V161 |
