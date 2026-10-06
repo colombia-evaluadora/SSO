@@ -224,3 +224,41 @@ SELECT r.id_role, q.id_query
    AND q.path_template = '/periodos/:PERIODO_ID/niveles/:NIVEL_ID/escala'
    AND q.http_method   = 'PUT'
 ON CONFLICT DO NOTHING;
+
+-- ---------------------------------------------------------------------------
+-- 6. POST /escalas/bulk-delete  ->  fn_escala_nivel_bulk_soft_delete
+-- (antes V128; se aplico a mano en el servidor de test. CACHEABLE y
+-- CACHE_TTL_SECONDS nacen en V110: aqui toman su default, false y 60.)
+-- ---------------------------------------------------------------------------
+INSERT INTO public.query
+    (uuid, query, type, public_end, captcha, microservice_id, path_template,
+     execution_mode, http_method, param_types, out_param_names, detail, action,
+     style)
+SELECT
+    'q-msp2s4x0-kdbqdoyv',
+    'SELECT * FROM academico_test.fn_escala_nivel_bulk_soft_delete(
+    CAST(:BODY.PERIODO_ACADEMICO_ID AS BIGINT),
+    CAST(:BODY.IDS AS BIGINT[]),
+    public.fn_get_academico_usuario_id(:CONTEXT.USER_ID::BIGINT)
+);',
+    'postgres', false, false,
+    m.id_microservice,
+    '/escalas/bulk-delete', 'SELECT', 'POST',
+    '{"BODY.IDS": "BIGINT[]", "BODY.PERIODO_ACADEMICO_ID": "BIGINT"}'::jsonb,
+    NULL,
+    NULL,
+    NULL, NULL
+  FROM public.microservice m
+ WHERE m.serviceid = 'eval-col'
+ON CONFLICT (microservice_id, path_template, http_method)
+    WHERE path_template IS NOT NULL DO NOTHING;
+
+INSERT INTO public.role_query (role_id, query_id)
+SELECT r.id_role, q.id_query
+  FROM public.query q
+  JOIN public.microservice m ON m.id_microservice = q.microservice_id
+  JOIN public.role r ON r.name IN ('CEVAL-AUXILIAR_ADMINISTRATIVO', 'CEVAL-COORDINADOR', 'CEVAL-DIRECTOR_ENTE_TERRITORIAL', 'CEVAL-JEFE_SISTEMA_ENTE_TERRITORIAL', 'CEVAL-JEFE_SISTEMA_ESTABLECIMIENTO', 'CEVAL-RECTOR', 'CEVAL-SUPER_ADMINISTRADOR', 'SSO-ADMIN')
+ WHERE m.serviceid     = 'eval-col'
+   AND q.path_template = '/escalas/bulk-delete'
+   AND q.http_method   = 'POST'
+ON CONFLICT DO NOTHING;
