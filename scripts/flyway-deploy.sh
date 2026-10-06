@@ -46,6 +46,13 @@ REAPPLY_CANDIDATES="${REAPPLY_CANDIDATES:-}"
 HISTORY_TABLE="${HISTORY_TABLE:-public.flyway_schema_history}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
+# Nada aquí lee del stdin heredado. En el servidor el deploy entero llega por
+# `ssh ... bash -s <<EOF`: un `docker exec -i` o un `docker compose run` que lo
+# lea se come el resto del script y el deploy acaba en silencio y en verde,
+# sin recrear servicios ni escribir la marca. La re-aplicación le da a psql su
+# propio stdin con una tubería explícita.
+exec </dev/null
+
 fw()   { eval "$FLYWAY_CMD" '"$@"'; }
 psqlq() { eval "$PSQL_CMD" -v ON_ERROR_STOP=1 -X '"$@"'; }
 

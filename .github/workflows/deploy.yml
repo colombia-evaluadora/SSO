@@ -345,8 +345,16 @@ jobs:
           # heredoc, que va comillado a propósito
           # para que $DEST, $(...) etc. de las líneas de abajo se evalúen
           # en el servidor y no aquí).
+          #
+          # Todo el cuerpo va dentro de una función que se llama en la última
+          # línea con stdin en /dev/null: bash lee la función ENTERA antes de
+          # ejecutar nada, así que un comando que lea stdin (docker exec -i,
+          # compose run) ya no puede tragarse el resto del heredoc. Pasó con
+          # la fase de migraciones: el deploy salía en verde tras flyway sin
+          # recrear servicios ni escribir la marca.
           ssh -i ~/.ssh/deploy_key "$DEST" "CHANGED_SERVICES='$CHANGED_SERVICES' REAPPLY_CANDIDATES='$REAPPLY_CANDIDATES' DEPLOY_SHA='$DEPLOY_SHA' bash -s" <<'EOF'
           set -euo pipefail
+          deploy_remoto() {
           cd /opt/sso
           # El .env lo acaba de escribir el paso anterior desde el
           # secreto TEST_ENV_FILE. Si no está, ese paso falló y no
@@ -535,7 +543,7 @@ jobs:
                FLYWAY_CMD="docker compose run --rm -T flyway -connectRetries=60" \
                PSQL_CMD="docker exec -i sso-postgres psql -U $PG_USER -d $FW_DB" \
                REAPPLY_CANDIDATES="$REAPPLY_CANDIDATES" \
-               ./scripts/flyway-deploy.sh; then
+               ./scripts/flyway-deploy.sh </dev/null; then
             echo "::error::falló la fase de migraciones; NO se recreó ningún servicio (siguen en la versión anterior)."
             dump_logs
             exit 1
@@ -582,7 +590,18 @@ jobs:
           # Limpia capas de imágenes viejas para no llenar el disco
           # del Linode con cada deploy.
           docker image prune -f
+          echo "=== deploy remoto completo ==="
+          }
+          deploy_remoto </dev/null
           EOF
+
+          # El script remoto terminó entero: la marca es la del commit que
+          # se despliega. Si algo lo cortara a medias sin fallar, aquí se ve.
+          DEPLOYED_REF="$(ssh -i ~/.ssh/deploy_key "$DEST" 'cat /opt/sso/.flyway-deployed-ref 2>/dev/null || true' | tr -d '[:space:]')"
+          if [ "$DEPLOYED_REF" != "$DEPLOY_SHA" ]; then
+            echo "::error::La marca del servidor ('${DEPLOYED_REF:-<vacía>}') no es el commit desplegado ($DEPLOY_SHA): el script remoto no llegó al final."
+            exit 1
+          fi
 
       - name: ClickHouse migrations
         # Flyway (arriba) sólo migra sso-postgres. Los ALTER de

@@ -41,6 +41,12 @@ Un workflow nuevo o con cambios en permisos, triggers o acciones de terceros
   release con `reapply_since`. Si tocas ese paso, ten presente que es lo que
   hace viable editar migraciones ya aplicadas
   (la regla de "editar, no duplicar" del `CLAUDE.md` raíz depende de él).
+- **El cuerpo remoto de `deploy.yml` va por `ssh ... bash -s <<'EOF'`, envuelto
+  en la función `deploy_remoto` y llamado con `</dev/null`.** Cualquier comando
+  que lea stdin (`docker exec -i`, `docker compose run`) se come el resto del
+  heredoc y el deploy sale en verde sin recrear servicios. Al final el runner
+  comprueba que `/opt/sso/.flyway-deployed-ref` es el commit desplegado: no
+  quites ninguna de las dos cosas.
 - **El orden de migraciones se compara con `sort -V`**, no lexicográfico: `V9` va
   antes que `V10`, y con `sort` a secas no.
 - **`deploy-test.yml` bloquea una migración que nace pisada.** El paso *Orden de
