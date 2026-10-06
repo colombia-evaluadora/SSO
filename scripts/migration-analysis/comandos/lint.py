@@ -99,12 +99,16 @@ class Contexto:
 
 
 def live_arities(model: dict | None) -> dict[str, dict[int, str]]:
-    """{funcion: {aridad viva: version que la definio}} segun el analizador."""
+    """{schema.funcion: {aridad viva: version que la definio}} segun el analizador.
+
+    Con schema: `pigse.fn_est_crear` y `academico_test.fn_est_crear` son
+    funciones distintas, y por nombre corto parecian una sola cambiando de
+    aridad (falso FIRMA-SIN-DROP en V414)."""
     out: dict[str, dict[int, str]] = {}
     for key, writes in (model or {}).get("chains", {}).items():
         if not key.startswith("function:"):
             continue
-        short = key.split(":", 1)[1].rsplit(".", 1)[-1].lower()
+        short = key.split(":", 1)[1].lower()
         for w in writes:
             if w.get("status") == "live" and w.get("effect") == "full":
                 params = w.get("extra", {}).get("params")
@@ -232,24 +236,26 @@ class FirmaSinDrop(Regla):
     codigo, severidad = "FIRMA-SIN-DROP", "error"
 
     def revisar(self, a, ctx):
-        dropped = {m.group(1).rsplit(".", 1)[-1].lower()
+        # Por nombre cualificado; un DROP sin schema cubre cualquier schema.
+        dropped = {m.group(1).lower()
                    for m in re.finditer(r"DROP\s+FUNCTION\s+(?:IF\s+EXISTS\s+)?([\w.]+)", a.raw, re.I)}
         for st in a.stmts:
             m = RE_CREATE_FN.search(st.text)
             if not m:
                 continue
-            short = m.group(1).rsplit(".", 1)[-1].lower()
+            fn = m.group(1).lower()
+            short = fn.rsplit(".", 1)[-1]
             close = sqlscan.match_paren(st.text, m.end() - 1)
             if not close or close < 0:
                 continue
             n_new = len(sqlscan.parse_params(st.text[m.end():close]))
             # Solo cuentan las firmas vivas que vienen de OTRA migracion: si este
             # mismo archivo define la funcion dos veces, no es una colision.
-            known = {n for n, v in ctx.arities.get(short, {}).items() if v != a.version}
-            if not known or n_new in known or short in dropped:
+            known = {n for n, v in ctx.arities.get(fn, {}).items() if v != a.version}
+            if not known or n_new in known or fn in dropped or short in dropped:
                 continue
             yield self.hallazgo(a, st.line,
-                                f"{short} pasa de {sorted(known)} a {n_new} parametros sin DROP FUNCTION "
+                                f"{fn} pasa de {sorted(known)} a {n_new} parametros sin DROP FUNCTION "
                                 f"IF EXISTS: PostgreSQL dejara las dos sobrecargas vivas")
 
 

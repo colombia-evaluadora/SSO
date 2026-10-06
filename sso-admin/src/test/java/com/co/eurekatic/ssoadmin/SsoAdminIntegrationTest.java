@@ -750,6 +750,58 @@ class SsoAdminIntegrationTest {
         assertThat(passwordEncoder.matches("Newpass1!", after.getPassword())).isTrue();
     }
 
+    @Test
+    void forgotPasswordTwiceKeepsTheFirstLinkValid() throws Exception {
+        // Regresion: cada pedido sobrescribia el unico token del usuario y el
+        // enlace del primer correo quedaba como "Enlace invalido". Ahora el
+        // segundo pedido reutiliza el token vigente (con la fila bloqueada) y
+        // ambos correos llevan el mismo enlace.
+        User u = new User();
+        u.setEmail("dave@example.com");
+        u.setFullName("Dave");
+        u.setPassword(passwordEncoder.encode("oldpass1"));
+        u.setEnabled(true);
+        u.setActive(true);
+        userRepository.save(u);
+
+        for (int i = 0; i < 2; i++) {
+            client.get().uri(uri -> uri.path("/forgotPassword")
+                            .queryParam("email", "dave@example.com")
+                            .build())
+                    .exchange()
+                    .expectStatus().isOk();
+        }
+
+        @SuppressWarnings("unchecked")
+        org.mockito.ArgumentCaptor<Map<String, Object>> payload =
+                org.mockito.ArgumentCaptor.forClass(Map.class);
+        org.mockito.Mockito.verify(notificationPublisherMock, org.mockito.Mockito.times(2))
+                .publish(
+                        org.mockito.ArgumentMatchers.eq("email"),
+                        any(),
+                        org.mockito.ArgumentMatchers.eq("dave@example.com"),
+                        org.mockito.ArgumentMatchers.eq("password-reset"),
+                        payload.capture(),
+                        any(),
+                        any());
+
+        String primero = extractToken(payload.getAllValues().get(0).get("resetLink").toString());
+        String segundo = extractToken(payload.getAllValues().get(1).get("resetLink").toString());
+        assertThat(segundo).isEqualTo(primero);
+
+        // El enlace del PRIMER correo sigue sirviendo para restaurar...
+        client.post().uri("/restorePassword")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(mapper.writeValueAsString(Map.of(
+                        "token", primero,
+                        "password", "Newpass1!")))
+                .exchange()
+                .expectStatus().isOk();
+
+        // ...y sigue siendo de un solo uso.
+        assertThat(userRepository.findByEmail("dave@example.com").orElseThrow().getTokenRestore()).isNull();
+    }
+
     /** Pulls the {@code token=...} query string out of the
      * {@code resetLink} URL produced by UserAdminService.forgotPassword
      * when wrapping the restore token in the notification payload. */

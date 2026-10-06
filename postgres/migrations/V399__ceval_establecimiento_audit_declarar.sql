@@ -27,7 +27,7 @@ DECLARE
     v_perm_result          RECORD;
     c_fk_tlv_jornada_defecto CONSTANT BIGINT := 51900;
     c_fk_trol_rector         CONSTANT BIGINT := 7;
-    c_fk_trol_secretaria     CONSTANT BIGINT := 9;
+    c_fk_trol_secretaria     CONSTANT BIGINT := 8;
     -- REV5 -- PK_TSEDE_USUARIO del permiso por defecto que hay que quitar
     -- a quien PIERDE el puesto de rector/secretaria (reusado entre los dos
     -- bloques de abajo).

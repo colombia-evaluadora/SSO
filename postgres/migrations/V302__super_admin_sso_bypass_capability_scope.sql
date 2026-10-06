@@ -250,7 +250,7 @@ BEGIN
                        AND e.ACTIVE       = TRUE
                   )
             UNION
-            SELECT prefix, 'AUXILIAR_ADMINISTRATIVO'
+            SELECT prefix, 'JEFE_SISTEMA_ESTABLECIMIENTO'
               FROM (VALUES ('CEVAL'), ('PIGSE')) AS pr(prefix)
              WHERE EXISTS (
                     SELECT 1
@@ -321,7 +321,7 @@ BEGIN
                                AND e.ACTIVE       = TRUE
                           )
                     UNION
-                    SELECT prefix, 'AUXILIAR_ADMINISTRATIVO'
+                    SELECT prefix, 'JEFE_SISTEMA_ESTABLECIMIENTO'
                       FROM (VALUES ('CEVAL'), ('PIGSE')) AS pr(prefix)
                      WHERE EXISTS (
                             SELECT 1
