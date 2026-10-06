@@ -41,6 +41,12 @@ Un workflow nuevo o con cambios en permisos, triggers o acciones de terceros
   release con `reapply_since`. Si tocas ese paso, ten presente que es lo que
   hace viable editar migraciones ya aplicadas
   (la regla de "editar, no duplicar" del `CLAUDE.md` raíz depende de él).
+  El plan de re-aplicación sale del runner ya expandido; lo que el checksum
+  delata fuera de él es **drift**: se avisa y se re-aplica igual, no se para.
+  Antes de tocar el servidor, `orden` corre contra su base real: una **nueva**
+  pisada por una posterior para el deploy (revertiría lo posterior); una
+  **editada** pisada solo avisa (la expansión deja el servidor igual que una
+  base limpia).
 - **El cuerpo remoto de `deploy.yml` va por `ssh ... bash -s <<'EOF'`, envuelto
   en la función `deploy_remoto` y llamado con `</dev/null`.** Cualquier comando
   que lea stdin (`docker exec -i`, `docker compose run`) se come el resto del

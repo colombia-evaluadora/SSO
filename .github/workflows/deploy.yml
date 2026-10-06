@@ -179,6 +179,34 @@ jobs:
               fi
               echo "::warning::La marca '$BASE' ya no existe en el repo (¿force-push?): solo checksum."
             else
+              # Que lo nuevo y lo editado se QUEDEN, contra lo que este
+              # servidor tiene de verdad y antes de sincronizar nada:
+              #  * nueva (A) pisada por una posterior: entra out-of-order,
+              #    corre la última y revierte lo posterior; el servidor queda
+              #    distinto de una base limpia -> se para.
+              #  * editada (M) pisada: la expansión re-ejecuta la posterior
+              #    detrás, así que el servidor queda igual que una base limpia
+              #    y la edición es código muerto -> aviso (CI lo bloquea en el
+              #    PR, que es donde se corrige).
+              ORDEN_JSON="$(mktemp)"
+              ORDEN_RC=0
+              PYTHONIOENCODING=utf-8 python3 scripts/migration-analysis orden --base "$BASE" --json "$ORDEN_JSON" || ORDEN_RC=$?
+              # rc=1 con JSON = hay hallazgos (se clasifican abajo); rc!=0 sin
+              # JSON = el analizador se cayó, y eso no se deja pasar.
+              if [ "$ORDEN_RC" != 0 ] && ! jq -e 'type == "array"' "$ORDEN_JSON" >/dev/null 2>&1; then
+                echo "::error::el análisis de orden falló (rc=$ORDEN_RC) sin dar resultado"
+                exit 1
+              fi
+              if [ -s "$ORDEN_JSON" ]; then
+                jq -r '.[] | select(.estado == "M")
+                       | "::warning::\(.fichero): \(.objeto) lo redefine V\(.pisada_por); la edición no tendrá efecto"' "$ORDEN_JSON"
+                NUEVAS_PISADAS="$(jq -r '.[] | select(.estado != "M") | "\(.fichero) (\(.objeto), lo redefine V\(.pisada_por))"' "$ORDEN_JSON")"
+                if [ -n "$NUEVAS_PISADAS" ]; then
+                  echo "::error::migraciones nuevas que revertirían lo posterior en este servidor:"
+                  printf '  %s\n' "$NUEVAS_PISADAS"
+                  exit 1
+                fi
+              fi
               CANDIDATES="$(git diff --name-only --diff-filter=AMR "$BASE" HEAD -- postgres/migrations \
                             | grep -E '^postgres/migrations/V[0-9]+(\.[0-9]+)*__[A-Za-z0-9_.-]+\.sql$' \
                             | xargs -r -n1 basename | tr '\n' ' ' || true)"

@@ -16,9 +16,11 @@
 #      La (b) sola no basta: un `flyway repair` previo ya realineó los
 #      checksums y la migración editada deja de verse como cambiada aunque
 #      su SQL nuevo nunca se haya ejecutado (release v1.1.57).
-#   2. Las expande con scripts/migration-reapply-set.py: re-ejecutar un V<n>
-#      viejo pisa lo que una migración posterior redefinió, así que esas
-#      posteriores se re-ejecutan detrás.
+#   2. (a) llega ya expandida por el análisis estático del runner
+#      (scripts/migration-reapply-set.py: re-ejecutar un V<n> viejo pisa lo
+#      que una posterior redefinió, así que esas se re-ejecutan detrás). Lo
+#      que (b) delata fuera de (a) es drift: se avisa, se expande aquí y se
+#      re-aplica igual.
 #   3. Re-ejecuta todo ese SQL, en orden de versión y en UNA transacción
 #      (si una falla no queda nada a medias), ANTES de aplicar las pendientes:
 #      una migración nueva puede usar lo que la edición añadió (V540 llama a
@@ -105,31 +107,49 @@ else
 fi
 is_applied() { printf '%s\n' "$APPLIED" | grep -xF -- "$1" >/dev/null; }
 
-REQUESTED=""
-for tok in $REAPPLY_CANDIDATES $CHECKSUM_FILES; do
+# El plan del runner (REAPPLY_CANDIDATES) ya viene expandido por el análisis
+# estático; aquí solo se cruza con lo aplicado. Lo que el checksum delata y el
+# plan no trae es DRIFT (editada en el servidor, o desplegada sin marca): se
+# re-aplica igual, para que el servidor quede como el repo, pero se avisa y
+# se expande aquí, que es el único sitio donde se conoce.
+in_list() { printf '%s\n' $2 | grep -xF -- "$1" >/dev/null; }
+PLAN_FILES=""
+for tok in $REAPPLY_CANDIDATES; do
+  f="$(file_of "$(version_of "$tok")")"
+  [ -n "$f" ] && PLAN_FILES="$PLAN_FILES $f"
+done
+DRIFT=""
+for tok in $CHECKSUM_FILES; do
   v="$(version_of "$tok")"
   f="$(file_of "$v")"
   if [ -z "$f" ]; then
     echo "::warning::V$v no está en $MIGRATIONS_DIR; se omite"
     continue
   fi
-  is_applied "$v" && REQUESTED="$REQUESTED $f"
+  in_list "$f" "$PLAN_FILES" || DRIFT="$DRIFT $f"
 done
 
 REAPPLY=""
-if [ -n "${REQUESTED// /}" ]; then
-  echo "=== [2/5] expandiendo con las posteriores que redefinen lo mismo ==="
-  if command -v python3 >/dev/null 2>&1 && [ -f "$SCRIPT_DIR/migration-reapply-set.py" ]; then
-    EXPANDED="$(python3 "$SCRIPT_DIR/migration-reapply-set.py" $REQUESTED)"
-  else
-    echo "::warning::sin python3: se re-aplican solo las cambiadas, sin las posteriores que redefinen sus objetos"
-    EXPANDED="$(printf '%s\n' $REQUESTED)"
+for f in $PLAN_FILES; do
+  is_applied "$(version_of "$f")" && REAPPLY="$REAPPLY $f"
+done
+if [ -n "${DRIFT// /}" ]; then
+  echo "::warning::drift: checksum cambiado fuera del plan del diff:$DRIFT (se re-aplican)"
+  echo "=== [2/5] expandiendo el drift con las posteriores que redefinen lo mismo ==="
+  # Un python3 que existe pero falla (alias roto, módulo ausente) no debe
+  # tumbar el deploy: se degrada igual que sin python3.
+  if ! EXPANDED="$(python3 "$SCRIPT_DIR/migration-reapply-set.py" $DRIFT 2>/dev/null)" \
+     || [ -z "${EXPANDED// /}" ]; then
+    echo "::warning::sin python3 utilizable: el drift se re-aplica sin las posteriores que redefinen sus objetos"
+    EXPANDED="$(printf '%s\n' $DRIFT)"
   fi
   for f in $EXPANDED; do
     is_applied "$(version_of "$f")" && REAPPLY="$REAPPLY $f"
   done
-  REAPPLY="$(printf '%s\n' $REAPPLY | sort_by_version | tr '\n' ' ')"
+else
+  echo "=== [2/5] sin drift: el plan del diff es completo ==="
 fi
+REAPPLY="$(printf '%s\n' $REAPPLY | sort_by_version | tr '\n' ' ')"
 
 if [ -n "${REAPPLY// /}" ]; then
   echo "=== [3/5] re-aplicando (una transacción, antes de las pendientes) ==="
@@ -153,8 +173,12 @@ else
   echo "=== [3/5] nada que re-aplicar ==="
 fi
 
-echo "=== [4/5] repair (solo si la validación sin pendientes falla) ==="
-if fw validate -outOfOrder=true '-ignoreMigrationPatterns=*:pending,*:future' >/dev/null 2>&1; then
+echo "=== [4/5] repair ==="
+# Con checksums cambiados el repair hace falta seguro: no se pregunta antes.
+# Sin ellos se sondea, por si hay ficheros borrados del repo.
+if [ -n "${CHECKSUM_FILES// /}" ]; then
+  fw repair
+elif fw validate -outOfOrder=true '-ignoreMigrationPatterns=*:pending,*:future' >/dev/null 2>&1; then
   echo "historial consistente: sin repair"
 else
   fw repair
@@ -163,4 +187,11 @@ fi
 echo "=== [5/5] migrate + validate ==="
 fw -outOfOrder=true migrate
 fw validate -outOfOrder=true
+
+# Qué cambió en este deploy, para el log: las editadas re-aplicadas y las
+# nuevas que acaba de aplicar migrate.
+AFTER="$(psqlq -At -c "SELECT version FROM $HISTORY_TABLE WHERE success AND version IS NOT NULL")"
+NUEVAS="$(comm -13 <(printf '%s\n' $APPLIED | sort -u) <(printf '%s\n' $AFTER | sort -u) | sort -V | sed 's/^/V/' | tr '\n' ' ')"
+echo "Re-aplicadas (editadas): ${REAPPLY:-<ninguna>}"
+echo "Aplicadas por primera vez (nuevas): ${NUEVAS:-<ninguna>}"
 echo "flyway OK: el esquema coincide con $MIGRATIONS_DIR"
