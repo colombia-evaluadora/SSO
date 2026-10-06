@@ -1,7 +1,7 @@
 # Mapa del dominio
 
 **Generado** por `python scripts/migration-analysis mapa` — no editar a mano.
-Estado: 462 migraciones (V1–V546), 1025 funciones vivas, 58 endpoints vivos. Ultima generacion: 2026-10-05.
+Estado: 471 migraciones (V1–V546), 1250 funciones vivas, 58 endpoints vivos. Ultima generacion: 2026-10-06.
 
 Para una **funcion**, la migracion dueña es la que hay que editar: es su ultima escritura viva, no la que la creo.
 
@@ -15,22 +15,22 @@ Las secciones son las categorias funcionales de `scripts/migration-analysis/anal
 
 - [PIGSE](#pigse) — 85 funcion(es), 21 endpoint(s)
 - [Prematrícula](#prematricula) — 16 funcion(es), 0 endpoint(s)
-- [Matrícula](#matricula) — 60 funcion(es), 0 endpoint(s)
-- [Informes](#informes) — 49 funcion(es), 0 endpoint(s)
+- [Matrícula](#matricula) — 63 funcion(es), 0 endpoint(s)
+- [Informes](#informes) — 50 funcion(es), 0 endpoint(s)
 - [Observaciones](#observaciones) — 30 funcion(es), 0 endpoint(s)
-- [Asistencias](#asistencias) — 59 funcion(es), 1 endpoint(s)
+- [Asistencias](#asistencias) — 71 funcion(es), 1 endpoint(s)
 - [Planilla de calificación](#planilla) — 33 funcion(es), 0 endpoint(s)
-- [Calificación con instrumentos](#calificacion) — 89 funcion(es), 1 endpoint(s)
+- [Calificación con instrumentos](#calificacion) — 118 funcion(es), 1 endpoint(s)
 - [Referentes curriculares](#referentes) — 68 funcion(es), 1 endpoint(s)
 - [Planeador (unidades, actividades)](#planeador) — 273 funcion(es), 22 endpoint(s)
 - [Auditoría](#auditoria) — 6 funcion(es), 9 endpoint(s)
-- [Periodos académicos](#periodos) — 43 funcion(es), 0 endpoint(s)
-- [Funcionarios](#funcionarios) — 27 funcion(es), 2 endpoint(s)
-- [Sedes](#sedes) — 28 funcion(es), 0 endpoint(s)
+- [Periodos académicos](#periodos) — 107 funcion(es), 0 endpoint(s)
+- [Funcionarios](#funcionarios) — 40 funcion(es), 2 endpoint(s)
+- [Sedes](#sedes) — 29 funcion(es), 0 endpoint(s)
 - [Establecimiento](#establecimiento) — 14 funcion(es), 0 endpoint(s)
 - [Menús](#menus) — 27 funcion(es), 1 endpoint(s)
 - [Permisos](#permisos) — 17 funcion(es), 0 endpoint(s)
-- [Estructura académica](#academico) — 68 funcion(es), 0 endpoint(s)
+- [Estructura académica](#academico) — 170 funcion(es), 0 endpoint(s)
 - [Plataforma SSO](#plataforma) — 33 funcion(es), 0 endpoint(s)
 
 <a id="pigse"></a>
@@ -184,6 +184,8 @@ Las secciones son las categorias funcionales de `scripts/migration-analysis/anal
 | `academico_test.fn_estudiante_actualizar` | 15 | V177 | — |
 | `academico_test.fn_estudiante_crear` | 12 | V160 | V415 |
 | `academico_test.fn_estudiante_dependencias_bloqueantes` | 2 | V162 | V160 |
+| `academico_test.fn_grado_validar_sin_matriculas` | 1 | V43.1 | — |
+| `academico_test.fn_grupo_validar_sin_matriculas` | 1 | V43.1 | — |
 | `academico_test.fn_matricula_actualizar` | 9 | V177 | — |
 | `academico_test.fn_matricula_archivo_actualizar` | 5 | V177 | — |
 | `academico_test.fn_matricula_archivo_actualizar_lote` | 11 | V177 | — |
@@ -235,6 +237,7 @@ Las secciones son las categorias funcionales de `scripts/migration-analysis/anal
 | `academico_test.fn_matricula_valor_forzar_no_editable` | 0 | V159 | — |
 | `academico_test.fn_padre_actualizar` | 23 | V177 | — |
 | `academico_test.fn_periodo_resolver_matricula` | 4 | V415 | V127 |
+| `academico_test.fn_periodo_validar_limite_matricula` | 3 | V37.1 | — |
 | `academico_test.fn_usu_autocompletar_por_documento` | 2 | V51 | V93 |
 | `academico_test.fn_usu_tiene_otros_vinculos` | 1 | V51 | V300 |
 | `academico_test.fn_usuario_administrado_crear` | 10 | V30 | V219 |
@@ -261,6 +264,7 @@ Las secciones son las categorias funcionales de `scripts/migration-analysis/anal
 | `academico_test.fn_informe_boletin_preescolar` | 4 | V541 | V466 |
 | `academico_test.fn_informe_boletin_preescolar_interno` | 3 | V541 | — |
 | `academico_test.fn_informe_boletin_rector_interno` | 2 | V540 | V541 |
+| `academico_test.fn_informe_boletin_secretaria_interno` | 1 | V540 | — |
 | `academico_test.fn_informe_cambios_pendientes` | 3 | V537 | V342, V539 |
 | `academico_test.fn_informe_desactualizado` | 3 | V496.20 | V496.21 |
 | `academico_test.fn_informe_desactualizado_interno` | 2 | V496.19 | V496.20 |
@@ -395,11 +399,23 @@ Las secciones son las categorias funcionales de `scripts/migration-analysis/anal
 | `academico_test.fn_asistencia_validar_fecha_programada` | 4 | V136 | V138 |
 | `academico_test.fn_asistencia_validar_periodo_abierto` | 2 | V136 | V138 |
 | `academico_test.fn_asistencia_validar_tipo` | 1 | V136 | V137, V496.6, V496.19 |
-| `academico_test.fn_enfasis_actualizar` | 3 | V40 | V77 |
-| `academico_test.fn_enfasis_desde_seleccion` | 3 | V40 | — |
-| `academico_test.fn_enfasis_resolver` | 4 | V40 | V77 |
-| `academico_test.fn_enfasis_soft_delete` | 2 | V40 | V77 |
-| `academico_test.fn_especialidad_enfasis_listar` | 2 | V40 | V77 |
+| `academico_test.fn_enfasis_actualizar` | 3 | V40.4 | V77 |
+| `academico_test.fn_enfasis_actualizar_interno` | 3 | V40.3 | V40.4 |
+| `academico_test.fn_enfasis_desde_seleccion` | 3 | V40.3 | — |
+| `academico_test.fn_enfasis_eliminar_interno` | 2 | V40.3 | V40.4 |
+| `academico_test.fn_enfasis_gate_escritura` | 3 | V40.4 | — |
+| `academico_test.fn_enfasis_resolver` | 4 | V40.4 | V77 |
+| `academico_test.fn_enfasis_resolver_interno` | 4 | V40.3 | V40.4 |
+| `academico_test.fn_enfasis_soft_delete` | 2 | V40.4 | V77 |
+| `academico_test.fn_enfasis_validar_existe_activo` | 1 | V40.2 | V40.3, V40.4 |
+| `academico_test.fn_enfasis_validar_nombre_no_vacio` | 1 | V40.2 | V40.3 |
+| `academico_test.fn_enfasis_validar_periodo_activo` | 1 | V40.2 | V40.3, V40.4 |
+| `academico_test.fn_enfasis_validar_seleccion` | 2 | V40.2 | V40.3 |
+| `academico_test.fn_enfasis_validar_sin_asignaturas` | 1 | V40.2 | V40.3 |
+| `academico_test.fn_enfasis_validar_unico` | 3 | V40.2 | V40.3 |
+| `academico_test.fn_especialidad_enfasis_listar` | 2 | V40.4 | V77 |
+| `academico_test.fn_especialidad_enfasis_listar_interno` | 2 | V40.3 | V40.4 |
+| `academico_test.fn_grupo_validar_sin_asistencia` | 1 | V43.1 | — |
 | `academico_test.fn_solicitud_aprobacion_aprobar_interno` | 3 | V496.19 | V496.20, V536 |
 
 <a id="planilla"></a>
@@ -515,25 +531,54 @@ Las secciones son las categorias funcionales de `scripts/migration-analysis/anal
 | `academico_test.fn_actividad_validar_rubrica_captura` | 2 | V496.5 | V496.6 |
 | `academico_test.fn_actividad_validar_rubrica_definicion` | 3 | V496.5 | — |
 | `academico_test.fn_actividad_validar_rubrica_nivel` | 3 | V496.5 | V496.6 |
+| `academico_test.fn_area_validar_sin_calificaciones` | 1 | V40.2 | — |
 | `academico_test.fn_asignatura_nota_requerida_periodo` | 3 | V496.24 | V428, V536 |
+| `academico_test.fn_criterio_eval_validar_escala_del_periodo` | 2 | V41.2 | — |
+| `academico_test.fn_criterio_eval_validar_valoracion_activa` | 1 | V41.2 | — |
 | `academico_test.fn_criterio_evaluacion_desempeno_sin_calificar` | 1 | V408 | V496.19, V496.23 |
 | `academico_test.fn_criterio_evaluacion_nota_final_editable` | 1 | V408 | V496.19 |
 | `academico_test.fn_criterio_evaluacion_nota_redondear` | 2 | V496.5 | V496.19 |
-| `academico_test.fn_escala_bulk_delete` | 2 | V42 | — |
-| `academico_test.fn_escala_eliminar` | 2 | V42 | V78 |
-| `academico_test.fn_escala_guardar_bulk` | 4 | V42 | V78 |
-| `academico_test.fn_escala_listar` | 7 | V42 | V78, V135 |
-| `academico_test.fn_escala_nivel_bulk_soft_delete` | 3 | V128 | — |
-| `academico_test.fn_escala_nivel_soft_delete` | 3 | V42 | V78, V128 |
-| `academico_test.fn_escala_propagar` | 3 | V42 | V41 |
+| `academico_test.fn_escala_bulk_delete` | 2 | V42.3 | — |
+| `academico_test.fn_escala_cascada_eliminar_interno` | 4 | V42.2 | V42.3 |
+| `academico_test.fn_escala_descripcion` | 2 | V42.1 | — |
+| `academico_test.fn_escala_eliminar` | 2 | V42.3 | V78 |
+| `academico_test.fn_escala_guardar_bulk` | 4 | V42.3 | V78 |
+| `academico_test.fn_escala_guardar_bulk_interno` | 4 | V42.2 | V42.3 |
+| `academico_test.fn_escala_listar` | 7 | V42.3 | V78, V135 |
+| `academico_test.fn_escala_listar_interno` | 6 | V42.2 | V42.3 |
+| `academico_test.fn_escala_nivel_bulk_soft_delete` | 3 | V42.3 | V78 |
+| `academico_test.fn_escala_nivel_soft_delete` | 3 | V42.3 | V78 |
+| `academico_test.fn_escala_propagar` | 3 | V42.2 | V41.3 |
+| `academico_test.fn_escala_validar_activa` | 1 | V42.1 | V42.3 |
+| `academico_test.fn_escala_validar_equivalente` | 4 | V42.1 | — |
+| `academico_test.fn_escala_validar_existe` | 1 | V42.1 | V42.3 |
+| `academico_test.fn_escala_validar_formato` | 5 | V42.1 | — |
+| `academico_test.fn_escala_validar_icono` | 2 | V42.1 | V42.2 |
+| `academico_test.fn_escala_validar_lote` | 3 | V42.1 | V42.2 |
+| `academico_test.fn_escala_validar_minima_maxima` | 3 | V42.1 | — |
+| `academico_test.fn_escala_validar_nivel_existe` | 1 | V42.1 | V42.2 |
+| `academico_test.fn_escala_validar_nivel_tiene_escala` | 2 | V42.1 | V42.3 |
+| `academico_test.fn_escala_validar_no_es_maestra` | 2 | V42.1 | V42.2 |
+| `academico_test.fn_escala_validar_nombres_unicos` | 1 | V42.1 | — |
+| `academico_test.fn_escala_validar_sin_bandas_en_uso` | 2 | V42.1 | V42.2 |
+| `academico_test.fn_escala_validar_tipo_valoracion` | 1 | V42.1 | V42.2 |
 | `academico_test.fn_escala_valoracion_banda` | 2 | V428 | V474 |
-| `academico_test.fn_escala_valoracion_bulk_delete` | 2 | V42 | V78 |
+| `academico_test.fn_escala_valoracion_bulk_delete` | 2 | V42.3 | V78 |
+| `academico_test.fn_escala_valoracion_eliminar_interno` | 2 | V42.2 | V42.3 |
+| `academico_test.fn_escala_valoracion_validar_activa` | 1 | V42.1 | V42.3 |
+| `academico_test.fn_escala_valoracion_validar_existe` | 1 | V42.1 | V42.3 |
+| `academico_test.fn_escala_valoracion_validar_sin_uso` | 1 | V42.1 | V42.2 |
 | `academico_test.fn_escala_variantes_permitidas` | 1 | V458 | — |
 | `academico_test.fn_grado_escala_aplicable` | 1 | V428 | V474, V540 |
+| `academico_test.fn_grupo_validar_sin_calificaciones` | 1 | V43.1 | — |
 | `academico_test.fn_instrumento_nombre` | 1 | V214.2 | V479, V496.3 |
 | `academico_test.fn_instrumento_permitido_por_tipo_evaluacion` | 2 | V458 | V214.2, V496.5 |
 | `academico_test.fn_nota_homologar` | 3 | V428 | V469.3, V490, V496.6, V496.24, V536, V537… |
 | `academico_test.fn_nota_redondear` | 3 | V496.5 | — |
+| `academico_test.fn_periodo_eval_validar_sin_calificaciones` | 1 | V39.1 | V39.2 |
+| `academico_test.fn_plan_validar_criterio_nota` | 1 | V44.1 | V44.2 |
+| `academico_test.fn_plan_validar_formato_calificacion` | 1 | V44.1 | V44.2 |
+| `academico_test.fn_subject_validar_sin_calificaciones` | 1 | V40.2 | — |
 | `academico_test.fn_tactividad_nota_estado_default` | 0 | V496.5 | — |
 | `academico_test.fn_tactividad_nota_finalizacion` | 0 | V224 | — |
 | `academico_test.fn_unidad_escala_aplicable` | 1 | V455 | V492.1 |
@@ -555,7 +600,7 @@ Las secciones son las categorias funcionales de `scripts/migration-analysis/anal
 | `academico_test.fn_actividad_referente_tipo_evaluacion` | 1 | V479 | V214.2, V496.5 |
 | `academico_test.fn_actividad_validar_referente_calificable` | 1 | V496.5 | V496.6 |
 | `academico_test.fn_actividad_validar_unidad_referente_vigente` | 2 | V496.1 | — |
-| `academico_test.fn_nodo_curricular_listar` | 1 | V38 | V76 |
+| `academico_test.fn_nodo_curricular_listar` | 1 | V38.3 | V76 |
 | `academico_test.fn_refcurr_actualizar` | 18 | V214.3 | V214 |
 | `academico_test.fn_refcurr_actualizar_interno` | 18 | V214.3 | — |
 | `academico_test.fn_refcurr_areas_listar` | 2 | V213 | V214 |
@@ -945,7 +990,7 @@ Las secciones son las categorias funcionales de `scripts/migration-analysis/anal
 | Funcion | Params | Migracion dueña | La usan |
 |---|---|---|---|
 | `academico_test.fn_audit_ctx` | 0 | V184 | V88, V256, V261, V276, V283, V378 |
-| `academico_test.fn_audit_declarar` | 5 | V66 | V37, V38, V39, V40, V41, V42… |
+| `academico_test.fn_audit_declarar` | 5 | V66 | V37.2, V37.3, V38.3, V39.3, V40.4, V41.4… |
 | `academico_test.fn_cdc_asegurar_auditoria` | 2 | V283 | V496.1, V496.18 |
 | `academico_test.fn_cdc_evento_tabla_nueva` | 0 | V283 | — |
 | `academico_test.fn_grado_grupo_etiqueta` | 3 | V224 | V251, V452, V481, V490, V526, V528… |
@@ -958,48 +1003,112 @@ Las secciones son las categorias funcionales de `scripts/migration-analysis/anal
 | Funcion | Params | Migracion dueña | La usan |
 |---|---|---|---|
 | `academico_test.fn_anio_lectivo_numero` | 1 | V417 | V537, V540 |
+| `academico_test.fn_area_validar_sin_criterio_promocion` | 1 | V40.2 | — |
+| `academico_test.fn_asignacion_validar_periodo_activo` | 1 | V46.1 | V46.3 |
+| `academico_test.fn_asignacion_validar_periodo_existe` | 1 | V46.1 | V46.3 |
 | `academico_test.fn_asignatura_notas_periodo_interno` | 4 | V496.23 | — |
 | `academico_test.fn_asignatura_periodos_ponderar` | 2 | V496.24 | — |
-| `academico_test.fn_descanso_agregar` | 4 | V37 | V75 |
-| `academico_test.fn_descanso_eliminar` | 2 | V37 | V75 |
+| `academico_test.fn_criterio_prom_validar_area_del_periodo` | 2 | V38.1 | — |
+| `academico_test.fn_criterio_prom_validar_asignatura_del_periodo` | 2 | V38.1 | — |
+| `academico_test.fn_criterio_prom_validar_periodo_existe` | 1 | V38.1 | V38.3 |
+| `academico_test.fn_criterio_prom_validar_periodo_informado` | 1 | V38.1 | V38.3 |
+| `academico_test.fn_descanso_agregar` | 4 | V37.3 | V75 |
+| `academico_test.fn_descanso_agregar_interno` | 4 | V37.2 | V37.3 |
+| `academico_test.fn_descanso_eliminar` | 2 | V37.3 | V75 |
+| `academico_test.fn_descanso_eliminar_interno` | 2 | V37.2 | V37.3 |
+| `academico_test.fn_descanso_validar_dentro_periodo` | 3 | V37.1 | V37.2 |
+| `academico_test.fn_descanso_validar_existe` | 1 | V37.1 | V37.3 |
+| `academico_test.fn_descanso_validar_rango` | 2 | V37.1 | V37.2 |
+| `academico_test.fn_descanso_validar_sin_traslape` | 3 | V37.1 | V37.2 |
 | `academico_test.fn_docente_periodo_vigente` | 1 | V250 | V469.4, V497 |
+| `academico_test.fn_grado_validar_periodo` | 1 | V43.1 | V43.2 |
 | `academico_test.fn_grupo_periodo` | 1 | V40 | V136, V137, V138, V140, V469.2, V469.3… |
-| `academico_test.fn_periodo_actualizar` | 15 | V37 | V75 |
-| `academico_test.fn_periodo_anos_lectivos_listar` | 1 | V191 | V75 |
-| `academico_test.fn_periodo_anteriores_por_sede` | 3 | V37 | V75 |
-| `academico_test.fn_periodo_areas_asignaturas_listar` | 2 | V40 | V77 |
-| `academico_test.fn_periodo_bulk_delete` | 2 | V37 | V75 |
-| `academico_test.fn_periodo_crear` | 14 | V81 | V75 |
-| `academico_test.fn_periodo_detalle` | 2 | V37 | V75 |
-| `academico_test.fn_periodo_establecimiento` | 1 | V29 | V39, V40, V41, V42, V43, V44… |
-| `academico_test.fn_periodo_eval_actualizar` | 9 | V39 | V76 |
-| `academico_test.fn_periodo_eval_bulk_delete` | 2 | V39 | V76 |
-| `academico_test.fn_periodo_eval_crear` | 9 | V39 | V76 |
-| `academico_test.fn_periodo_eval_detalle` | 2 | V39 | V76 |
-| `academico_test.fn_periodo_eval_listar` | 7 | V39 | V76, V124 |
-| `academico_test.fn_periodo_eval_soft_delete` | 2 | V39 | V76 |
-| `academico_test.fn_periodo_eval_validar` | 8 | V39 | — |
+| `academico_test.fn_periodo_actualizar` | 15 | V37.3 | V75 |
+| `academico_test.fn_periodo_actualizar_interno` | 15 | V37.2 | V37.3 |
+| `academico_test.fn_periodo_ano_lectivo_asegurar_interno` | 3 | V37.2 | — |
+| `academico_test.fn_periodo_anos_lectivos_listar` | 1 | V37.3 | V75 |
+| `academico_test.fn_periodo_anos_lectivos_listar_interno` | 3 | V37.2 | V37.3 |
+| `academico_test.fn_periodo_anteriores_por_sede` | 3 | V37.3 | V75 |
+| `academico_test.fn_periodo_anteriores_por_sede_interno` | 2 | V37.2 | V37.3 |
+| `academico_test.fn_periodo_areas_asignaturas_listar` | 2 | V40.4 | V77 |
+| `academico_test.fn_periodo_areas_asignaturas_listar_interno` | 1 | V40.3 | V40.4 |
+| `academico_test.fn_periodo_bulk_delete` | 2 | V37.3 | V75 |
+| `academico_test.fn_periodo_crear` | 14 | V37.3 | V75 |
+| `academico_test.fn_periodo_crear_interno` | 14 | V37.2 | V37.3 |
+| `academico_test.fn_periodo_detalle` | 2 | V37.3 | V75 |
+| `academico_test.fn_periodo_detalle_interno` | 1 | V37.2 | V37.3 |
+| `academico_test.fn_periodo_eliminar_interno` | 2 | V37.2 | V37.3 |
+| `academico_test.fn_periodo_establecimiento` | 1 | V29 | V37.3, V38.3, V39.3, V40, V40.4, V41.4… |
+| `academico_test.fn_periodo_eval_actualizar` | 9 | V39.3 | V76 |
+| `academico_test.fn_periodo_eval_actualizar_interno` | 9 | V39.2 | V39.3 |
+| `academico_test.fn_periodo_eval_bulk_delete` | 2 | V39.3 | V76 |
+| `academico_test.fn_periodo_eval_crear` | 9 | V39.3 | V76 |
+| `academico_test.fn_periodo_eval_crear_interno` | 9 | V39.2 | V39.3 |
+| `academico_test.fn_periodo_eval_detalle` | 2 | V39.3 | V76 |
+| `academico_test.fn_periodo_eval_detalle_interno` | 1 | V39.2 | V39.3 |
+| `academico_test.fn_periodo_eval_eliminar_interno` | 2 | V39.2 | V39.3 |
+| `academico_test.fn_periodo_eval_listar` | 7 | V39.3 | V76, V124 |
+| `academico_test.fn_periodo_eval_listar_interno` | 6 | V39.2 | V39.3 |
+| `academico_test.fn_periodo_eval_soft_delete` | 2 | V39.3 | V76 |
+| `academico_test.fn_periodo_eval_validar` | 8 | V39.1 | V39.2 |
+| `academico_test.fn_periodo_eval_validar_activo` | 1 | V39.1 | V39.3 |
+| `academico_test.fn_periodo_eval_validar_campos` | 7 | V39.1 | V39.2 |
+| `academico_test.fn_periodo_eval_validar_dentro_periodo` | 3 | V39.1 | — |
+| `academico_test.fn_periodo_eval_validar_existe` | 1 | V39.1 | V39.3 |
+| `academico_test.fn_periodo_eval_validar_fechas` | 2 | V39.1 | V39.2 |
+| `academico_test.fn_periodo_eval_validar_periodo_academico` | 1 | V39.1 | — |
+| `academico_test.fn_periodo_eval_validar_porcentaje` | 1 | V39.1 | — |
+| `academico_test.fn_periodo_eval_validar_sin_solape` | 4 | V39.1 | — |
+| `academico_test.fn_periodo_eval_validar_suma_pesos` | 3 | V39.1 | — |
+| `academico_test.fn_periodo_eval_validar_unico` | 4 | V39.1 | — |
 | `academico_test.fn_periodo_evaluacion_admite_refuerzo` | 1 | V496.18 | — |
 | `academico_test.fn_periodo_evaluacion_calificable` | 1 | V496.18 | — |
 | `academico_test.fn_periodo_evaluacion_listar` | 5 | V469.4 | V469.5 |
 | `academico_test.fn_periodo_evaluacion_listar_interno` | 2 | V469.3 | V469.4 |
-| `academico_test.fn_periodo_gate_escritura` | 5 | V29 | V37, V38, V39, V40, V41, V42… |
-| `academico_test.fn_periodo_jornada` | 1 | V29 | V37, V38, V39, V40, V41, V42… |
-| `academico_test.fn_periodo_jornadas_listar` | 2 | V191 | — |
-| `academico_test.fn_periodo_listar` | 11 | V37 | V75, V124 |
-| `academico_test.fn_periodo_puede_ver` | 2 | V29 | V37, V38, V39, V40, V41, V42… |
-| `academico_test.fn_periodo_sede` | 1 | V29 | V37, V38, V39, V40, V41, V42… |
-| `academico_test.fn_periodo_sedes_listar` | 1 | V191 | — |
-| `academico_test.fn_periodo_soft_delete` | 2 | V37 | V75 |
-| `academico_test.fn_periodo_usuario_establecimientos` | 1 | V37 | V191 |
-| `academico_test.fn_periodo_usuario_global` | 1 | V37 | V191 |
+| `academico_test.fn_periodo_gate_escritura` | 5 | V29 | V37.3, V38.3, V39.3, V40.4, V41.4, V42.3… |
+| `academico_test.fn_periodo_jornada` | 1 | V29 | V37.3, V38.3, V39.3, V40.4, V41.4, V42.3… |
+| `academico_test.fn_periodo_jornadas_listar` | 2 | V37.3 | — |
+| `academico_test.fn_periodo_jornadas_listar_interno` | 4 | V37.2 | V37.3 |
+| `academico_test.fn_periodo_listar` | 11 | V37.3 | V75, V124 |
+| `academico_test.fn_periodo_listar_interno` | 11 | V37.2 | V37.3 |
+| `academico_test.fn_periodo_puede_ver` | 2 | V29 | V37.3, V38.3, V39.3, V40.4, V41.4, V42.3… |
+| `academico_test.fn_periodo_sede` | 1 | V29 | V37.3, V38.3, V39.3, V40, V40.3, V40.4… |
+| `academico_test.fn_periodo_sedes_listar` | 1 | V37.3 | — |
+| `academico_test.fn_periodo_sedes_listar_interno` | 3 | V37.2 | V37.3 |
+| `academico_test.fn_periodo_soft_delete` | 2 | V37.3 | V75 |
+| `academico_test.fn_periodo_usuario_establecimientos` | 1 | V37 | V37.3 |
+| `academico_test.fn_periodo_usuario_global` | 1 | V37 | V37.3 |
 | `academico_test.fn_periodo_usuario_puede_ver` | 2 | V37 | V250, V270, V350, V351, V415, V469.4… |
-| `academico_test.fn_periodo_usuario_sedes` | 1 | V37 | V191 |
+| `academico_test.fn_periodo_usuario_sedes` | 1 | V37 | V37.3 |
+| `academico_test.fn_periodo_validar` | 5 | V37.1 | V37.2 |
+| `academico_test.fn_periodo_validar_activo` | 1 | V37.1 | V37.3 |
+| `academico_test.fn_periodo_validar_anterior` | 2 | V37.1 | V37.2 |
+| `academico_test.fn_periodo_validar_anterior_distinto` | 2 | V37.1 | V37.2 |
+| `academico_test.fn_periodo_validar_campos` | 8 | V37.1 | V37.2, V37.3 |
+| `academico_test.fn_periodo_validar_descansos` | 4 | V37.1 | V37.2 |
+| `academico_test.fn_periodo_validar_descansos_en_horario` | 3 | V37.1 | V37.2 |
+| `academico_test.fn_periodo_validar_descansos_pares` | 2 | V37.1 | — |
+| `academico_test.fn_periodo_validar_estado` | 1 | V37.1 | V37.2 |
+| `academico_test.fn_periodo_validar_existe` | 1 | V37.1 | V37.3 |
+| `academico_test.fn_periodo_validar_fechas` | 2 | V37.1 | — |
+| `academico_test.fn_periodo_validar_horario` | 2 | V37.1 | — |
+| `academico_test.fn_periodo_validar_jornada` | 1 | V37.1 | V37.2 |
+| `academico_test.fn_periodo_validar_sede` | 1 | V37.1 | V37.2, V37.3 |
+| `academico_test.fn_periodo_validar_sede_mismo_establecimiento` | 2 | V37.1 | V37.2 |
+| `academico_test.fn_periodo_validar_sin_dependientes` | 1 | V37.1 | V37.2 |
+| `academico_test.fn_periodo_validar_unico_jornada` | 4 | V37.1 | V37.2 |
+| `academico_test.fn_plan_actualizar` | 11 | V44.3 | V80 |
+| `academico_test.fn_plan_agregar` | 11 | V44.3 | V80 |
+| `academico_test.fn_plan_eliminar` | 2 | V44.3 | V80 |
+| `academico_test.fn_plan_listar` | 7 | V44.3 | V80 |
+| `academico_test.fn_plan_obtener` | 2 | V44.3 | V80 |
+| `academico_test.fn_plan_soft_delete` | 2 | V44.3 | V80 |
 | `academico_test.fn_sede_tiene_periodos` | 1 | V162 | V127 |
 | `academico_test.fn_solicitud_aprobacion_aprobar` | 3 | V496.20 | V496.21 |
 | `academico_test.fn_solicitud_aprobacion_assert_aprobador` | 2 | V496.20 | — |
 | `academico_test.fn_solicitud_aprobacion_rechazar` | 3 | V496.20 | V496.21 |
-| `academico_test.fn_subject_periodo_listar` | 7 | V40 | V77 |
+| `academico_test.fn_subject_periodo_listar` | 7 | V40.4 | V77 |
+| `academico_test.fn_subject_periodo_listar_interno` | 6 | V40.3 | V40.4 |
 
 <a id="funcionarios"></a>
 
@@ -1012,13 +1121,22 @@ Las secciones son las categorias funcionales de `scripts/migration-analysis/anal
 
 | Funcion | Params | Migracion dueña | La usan |
 |---|---|---|---|
-| `academico_test.fn_asignacion_docente` | 3 | V46 | V92 |
-| `academico_test.fn_asignacion_docente_listar` | 8 | V264 | V92 |
-| `academico_test.fn_asignacion_guardar` | 4 | V46 | V92 |
-| `academico_test.fn_asignacion_pool` | 4 | V287 | V92 |
-| `academico_test.fn_asignacion_reporte_listar` | 9 | V190 | V135 |
+| `academico_test.fn_asignacion_docente` | 3 | V46.3 | V92 |
+| `academico_test.fn_asignacion_docente_interno` | 2 | V46.2 | V46.3 |
+| `academico_test.fn_asignacion_docente_listar` | 8 | V46.3 | V92 |
+| `academico_test.fn_asignacion_guardar` | 4 | V46.3 | V92 |
+| `academico_test.fn_asignacion_guardar_interno` | 4 | V46.2 | V46.3 |
+| `academico_test.fn_asignacion_pool` | 4 | V46.3 | V92 |
+| `academico_test.fn_asignacion_reporte_listar` | 9 | V46.3 | V135 |
+| `academico_test.fn_asignacion_reporte_listar_interno` | 8 | V46.2 | V46.3 |
+| `academico_test.fn_asignacion_validar_asignatura_del_grupo` | 3 | V46.1 | — |
+| `academico_test.fn_asignacion_validar_formato` | 1 | V46.1 | V46.2 |
+| `academico_test.fn_asignacion_validar_funcionario` | 1 | V46.1 | V46.2 |
+| `academico_test.fn_asignacion_validar_no_duplicada` | 4 | V46.1 | — |
+| `academico_test.fn_asignacion_validar_par` | 4 | V46.1 | V46.2 |
+| `academico_test.fn_asignacion_validar_sin_otro_docente` | 4 | V46.1 | — |
 | `academico_test.fn_assert_permiso_funcionario` | 3 | V29 | V51, V72, V199, V300 |
-| `academico_test.fn_docente_director_grupo_sync` | 4 | V285 | — |
+| `academico_test.fn_docente_director_grupo_sync` | 4 | V43.2 | V44.2 |
 | `academico_test.fn_fun_activo_por_usuario` | 1 | V51 | V93 |
 | `academico_test.fn_fun_actualizar` | 42 | V72 | V93 |
 | `academico_test.fn_fun_baja_establecimiento` | 2 | V300 | V51, V93 |
@@ -1033,7 +1151,11 @@ Las secciones son las categorias funcionales de `scripts/migration-analysis/anal
 | `academico_test.fn_funcionario_archivo_crear` | 5 | V443 | V445 |
 | `academico_test.fn_funcionario_archivo_eliminar` | 2 | V443 | V445 |
 | `academico_test.fn_funcionario_archivo_listar` | 2 | V443 | — |
-| `academico_test.fn_funcionario_sede_listar` | 3 | V43 | V79 |
+| `academico_test.fn_funcionario_sede_listar` | 3 | V43.3 | V79 |
+| `academico_test.fn_grupo_validar_sin_asignaciones` | 1 | V43.1 | — |
+| `academico_test.fn_plan_validar_renglon_removible` | 1 | V44.1 | V44.2 |
+| `academico_test.fn_plan_validar_renglon_sin_asignaciones` | 1 | V44.1 | — |
+| `academico_test.fn_plan_validar_sin_asignaciones` | 1 | V44.1 | V44.2 |
 | `academico_test.fn_sed_listar_paginado` | 7 | V116 | V95 |
 | `academico_test.fn_usu_empleado_buscar_por_pk` | 2 | V444 | V93 |
 | `academico_test.fn_usu_empleados_contar` | 6 | V116 | — |
@@ -1052,6 +1174,7 @@ Las secciones son las categorias funcionales de `scripts/migration-analysis/anal
 | `academico_test.fn_est_zonas_sede_permitidas` | 1 | V414 | V442 |
 | `academico_test.fn_est_zonas_sede_texto` | 1 | V414 | — |
 | `academico_test.fn_grupo_jornada` | 1 | V40 | V136, V138, V140, V496.20, V507, V535… |
+| `academico_test.fn_grupo_validar_director_sede` | 2 | V43.1 | — |
 | `academico_test.fn_jornadas_activas_por_sede` | 2 | V162 | V127 |
 | `academico_test.fn_rol_alcance_sede` | 1 | V489 | V535 |
 | `academico_test.fn_sed_actualizar` | 11 | V414 | V95 |
@@ -1071,7 +1194,7 @@ Las secciones son las categorias funcionales de `scripts/migration-analysis/anal
 | `academico_test.fn_usuario_es_aprobador_sede` | 2 | V496.20 | — |
 | `academico_test.fn_usuario_sedes_aprobador` | 1 | V496.18 | V496.20 |
 | `academico_test.fn_usuario_sedes_coordinador` | 1 | V496.18 | V496.22 |
-| `academico_test.fn_usuario_sedes_jornadas_accesibles` | 1 | V29 | V40, V51, V116, V140, V297, V300… |
+| `academico_test.fn_usuario_sedes_jornadas_accesibles` | 1 | V29 | V40, V40.4, V51, V116, V140, V297… |
 | `academico_test.fn_usuario_sedes_lectura` | 1 | V29 | V52, V116, V224, V244, V251, V396… |
 | `academico_test.fn_usuario_sedes_por_rol` | 2 | V496.18 | — |
 
@@ -1141,12 +1264,12 @@ Las secciones son las categorias funcionales de `scripts/migration-analysis/anal
 | Funcion | Params | Migracion dueña | La usan |
 |---|---|---|---|
 | `academico_test.fn_add_trol` | 4 | V113 | V119 |
-| `academico_test.fn_assert_permiso_seccion` | 6 | V29 | V37, V39, V40, V51, V111, V138… |
+| `academico_test.fn_assert_permiso_seccion` | 6 | V29 | V37.3, V39.3, V40, V51, V111, V138… |
 | `academico_test.fn_assert_rango_rol` | 2 | V298 | V29, V51, V297 |
 | `academico_test.fn_assert_rango_rol_otorgable` | 2 | V298 | V111, V297 |
 | `academico_test.fn_assert_superadmin` | 1 | V113 | V115, V119, V498 |
 | `academico_test.fn_cat_roles_listar` | 1 | V304 | V119 |
-| `academico_test.fn_grupo_director_rol_sync_interno` | 5 | V285 | — |
+| `academico_test.fn_grupo_director_rol_sync_interno` | 5 | V43.2 | — |
 | `academico_test.fn_list_roles` | 1 | V113 | V126 |
 | `academico_test.fn_rol_categoria_nivel` | 1 | V29 | V297, V298, V300, V302, V489, V535 |
 | `academico_test.fn_sincronizar_rol_publico` | 1 | V302 | V150, V300, V301, V399, V414 |
@@ -1164,72 +1287,174 @@ Las secciones son las categorias funcionales de `scripts/migration-analysis/anal
 
 | Funcion | Params | Migracion dueña | La usan |
 |---|---|---|---|
-| `academico_test.fn_area_actualizar` | 6 | V40 | V77 |
-| `academico_test.fn_area_asignatura_listar` | 1 | V40 | V77, V214 |
-| `academico_test.fn_area_bulk_delete` | 2 | V40 | — |
-| `academico_test.fn_area_crear` | 6 | V40 | V77 |
-| `academico_test.fn_area_listar` | 7 | V40 | V77 |
-| `academico_test.fn_area_soft_delete` | 2 | V40 | V77 |
-| `academico_test.fn_area_subject_reporte_listar` | 8 | V188 | V135 |
+| `academico_test.fn_area_actualizar` | 6 | V40.4 | V77 |
+| `academico_test.fn_area_actualizar_interno` | 6 | V40.3 | V40.4 |
+| `academico_test.fn_area_asignatura_listar` | 1 | V40.4 | V77, V214 |
+| `academico_test.fn_area_bulk_delete` | 2 | V40.4 | — |
+| `academico_test.fn_area_crear` | 6 | V40.4 | V77 |
+| `academico_test.fn_area_crear_interno` | 6 | V40.3 | V40.4 |
+| `academico_test.fn_area_eliminar_interno` | 2 | V40.3 | V40.4 |
+| `academico_test.fn_area_listar` | 7 | V40.4 | V77 |
+| `academico_test.fn_area_listar_interno` | 7 | V40.3 | V40.4 |
+| `academico_test.fn_area_soft_delete` | 2 | V40.4 | V77 |
+| `academico_test.fn_area_subject_reporte_listar` | 8 | V40.4 | V135 |
+| `academico_test.fn_area_validar` | 5 | V40.2 | V40.3 |
+| `academico_test.fn_area_validar_area_general` | 1 | V40.2 | — |
+| `academico_test.fn_area_validar_campos` | 4 | V40.2 | V40.3 |
+| `academico_test.fn_area_validar_codigo_no_vacio` | 1 | V40.2 | V40.3 |
+| `academico_test.fn_area_validar_eliminable` | 1 | V40.2 | V40.3 |
+| `academico_test.fn_area_validar_existe_activa` | 1 | V40.2 | V40.3, V40.4 |
+| `academico_test.fn_area_validar_nombre_no_vacio` | 1 | V40.2 | V40.3 |
+| `academico_test.fn_area_validar_sin_asignaturas` | 1 | V40.2 | — |
+| `academico_test.fn_area_validar_unico` | 4 | V40.2 | — |
 | `academico_test.fn_asignatura_criterio_evaluacion_vigente` | 2 | V239 | V227, V408, V428, V455, V496.1, V496.2… |
 | `academico_test.fn_asignatura_grado_ponderacion_disponible` | 3 | V239 | V248 |
 | `academico_test.fn_asignatura_plan_elemento_calculo` | 1 | V239 | V333, V492.1, V496.23 |
 | `academico_test.fn_asignatura_plan_vigente` | 2 | V239 | V333, V496.23 |
 | `academico_test.fn_asignatura_plan_vigente_por_grado` | 2 | V239 | V492.1 |
 | `academico_test.fn_asignatura_tipo_evaluacion` | 2 | V428 | V536 |
-| `academico_test.fn_criterio_eval_actualizar` | 14 | V41 | V76 |
-| `academico_test.fn_criterio_eval_obtener` | 2 | V41 | V76 |
+| `academico_test.fn_criterio_eval_actualizar` | 14 | V41.4 | V76 |
+| `academico_test.fn_criterio_eval_actualizar_interno` | 14 | V41.3 | V41.4 |
+| `academico_test.fn_criterio_eval_obtener` | 2 | V41.4 | V76 |
+| `academico_test.fn_criterio_eval_obtener_interno` | 1 | V41.3 | V41.4 |
+| `academico_test.fn_criterio_eval_validar` | 11 | V41.2 | V41.3 |
+| `academico_test.fn_criterio_eval_validar_catalogo` | 3 | V41.2 | — |
+| `academico_test.fn_criterio_eval_validar_existe` | 1 | V41.2 | V41.4 |
+| `academico_test.fn_criterio_eval_validar_valor_activo` | 1 | V41.2 | — |
 | `academico_test.fn_criterio_evaluacion_formato` | 1 | V227 | V428, V455, V474, V496.1, V496.2, V496.5… |
 | `academico_test.fn_criterio_evaluacion_porcentaje_inicial` | 1 | V239 | V227, V408, V496.18, V496.19, V496.23 |
-| `academico_test.fn_criterio_prom_guardar` | 13 | V38 | V43, V76 |
-| `academico_test.fn_criterio_prom_obtener` | 3 | V38 | V43, V76 |
+| `academico_test.fn_criterio_prom_guardar` | 13 | V38.3 | V43.3, V76 |
+| `academico_test.fn_criterio_prom_guardar_interno` | 13 | V38.2 | V38.3 |
+| `academico_test.fn_criterio_prom_obtener` | 3 | V38.3 | V43.3, V76 |
+| `academico_test.fn_criterio_prom_obtener_interno` | 2 | V38.2 | V38.3 |
+| `academico_test.fn_criterio_prom_validar_no_negativos` | 6 | V38.1 | V38.2 |
+| `academico_test.fn_criterio_prom_validar_nodo_obligatorias` | 1 | V38.1 | — |
+| `academico_test.fn_criterio_prom_validar_obligatoria` | 4 | V38.1 | V38.2 |
+| `academico_test.fn_criterio_prom_validar_obligatoria_no_repetida` | 3 | V38.1 | — |
 | `academico_test.fn_docente_grado_asignatura_listar` | 4 | V497 | V248, V497 |
 | `academico_test.fn_docente_grado_asignatura_listar_interno` | 3 | V497 | — |
-| `academico_test.fn_docente_grado_directores_sync` | 3 | V285 | — |
+| `academico_test.fn_docente_grado_directores_sync` | 3 | V44.2 | — |
 | `academico_test.fn_docente_grupos_listar` | 3 | V250 | V248 |
-| `academico_test.fn_grade_config_guardar` | 4 | V43 | V79 |
-| `academico_test.fn_grade_config_obtener` | 2 | V43 | V79 |
-| `academico_test.fn_grado_actualizar` | 6 | V43 | V79 |
-| `academico_test.fn_grado_bulk_delete` | 2 | V43 | V79 |
-| `academico_test.fn_grado_crear` | 5 | V43 | V79 |
+| `academico_test.fn_grade_config_guardar` | 4 | V43.3 | V79 |
+| `academico_test.fn_grade_config_obtener` | 2 | V43.3 | V79 |
+| `academico_test.fn_grado_actualizar` | 6 | V43.3 | V79 |
+| `academico_test.fn_grado_actualizar_interno` | 6 | V43.2 | V43.3 |
+| `academico_test.fn_grado_bulk_delete` | 2 | V43.3 | V79 |
+| `academico_test.fn_grado_catalogo_resolver` | 1 | V43.1 | V43.2, V43.3 |
+| `academico_test.fn_grado_crear` | 5 | V43.3 | V79 |
+| `academico_test.fn_grado_crear_interno` | 5 | V43.2 | V43.3 |
 | `academico_test.fn_grado_desempeno_minimo` | 1 | V334 | V428, V490, V496.2, V496.24, V536, V537… |
-| `academico_test.fn_grado_es_preescolar` | 1 | V285 | V286, V287, V437 |
-| `academico_test.fn_grado_grupo_reporte_listar` | 5 | V187 | V135 |
-| `academico_test.fn_grado_listar` | 7 | V43 | V79 |
-| `academico_test.fn_grado_obtener` | 2 | V43 | V79 |
-| `academico_test.fn_grado_soft_delete` | 2 | V43 | V79 |
-| `academico_test.fn_grupo_actualizar` | 6 | V285 | V79 |
-| `academico_test.fn_grupo_bulk_delete` | 2 | V43 | V79 |
-| `academico_test.fn_grupo_crear` | 6 | V285 | V79 |
-| `academico_test.fn_grupo_listar` | 7 | V43 | V79 |
-| `academico_test.fn_grupo_obtener` | 2 | V43 | V79 |
-| `academico_test.fn_grupo_soft_delete` | 2 | V43 | V79 |
-| `academico_test.fn_horario_asignaturas` | 2 | V45 | V80 |
-| `academico_test.fn_horario_calcular_bloques` | 1 | V45 | V437, V460 |
-| `academico_test.fn_horario_guardar` | 3 | V45 | V43, V80 |
-| `academico_test.fn_horario_listar` | 3 | V45 | V43, V80 |
-| `academico_test.fn_horario_preescolar_autogenerar` | 2 | V437 | — |
-| `academico_test.fn_nivel_ensenanza_listar` | 1 | V43 | V79, V214 |
+| `academico_test.fn_grado_eliminar_interno` | 2 | V43.2 | V43.3 |
+| `academico_test.fn_grado_es_preescolar` | 1 | V43.2 | V44.2, V45.2, V46.3 |
+| `academico_test.fn_grado_grupo_reporte_listar` | 5 | V43.3 | V135 |
+| `academico_test.fn_grado_listar` | 7 | V43.3 | V79 |
+| `academico_test.fn_grado_listar_interno` | 6 | V43.2 | V43.3, V44.3 |
+| `academico_test.fn_grado_obtener` | 2 | V43.3 | V79 |
+| `academico_test.fn_grado_obtener_interno` | 1 | V43.2 | V43.3 |
+| `academico_test.fn_grado_soft_delete` | 2 | V43.3 | V79 |
+| `academico_test.fn_grado_validar_activo` | 1 | V43.1 | V43.3 |
+| `academico_test.fn_grado_validar_campos` | 3 | V43.1 | V43.2 |
+| `academico_test.fn_grado_validar_catalogo` | 1 | V43.1 | V43.2 |
+| `academico_test.fn_grado_validar_eliminable` | 1 | V43.1 | V43.2 |
+| `academico_test.fn_grado_validar_existe` | 1 | V43.1 | V43.3 |
+| `academico_test.fn_grado_validar_grado_siguiente` | 1 | V43.1 | V43.2 |
+| `academico_test.fn_grado_validar_nivel` | 1 | V43.1 | V43.2 |
+| `academico_test.fn_grado_validar_nombre_no_vacio` | 1 | V43.1 | V43.2 |
+| `academico_test.fn_grado_validar_sin_grupos` | 1 | V43.1 | — |
+| `academico_test.fn_grado_validar_sin_horarios` | 1 | V43.1 | — |
+| `academico_test.fn_grado_validar_sin_plan` | 1 | V43.1 | — |
+| `academico_test.fn_grado_validar_unico` | 4 | V43.1 | V43.2 |
+| `academico_test.fn_grupo_actualizar` | 6 | V43.3 | V79 |
+| `academico_test.fn_grupo_actualizar_interno` | 6 | V43.2 | V43.3 |
+| `academico_test.fn_grupo_bulk_delete` | 2 | V43.3 | V79 |
+| `academico_test.fn_grupo_crear` | 6 | V43.3 | V79 |
+| `academico_test.fn_grupo_crear_interno` | 6 | V43.2 | V43.3 |
+| `academico_test.fn_grupo_eliminar_interno` | 2 | V43.2 | V43.3 |
+| `academico_test.fn_grupo_listar` | 7 | V43.3 | V79 |
+| `academico_test.fn_grupo_listar_interno` | 6 | V43.2 | V43.3 |
+| `academico_test.fn_grupo_obtener` | 2 | V43.3 | V79 |
+| `academico_test.fn_grupo_obtener_interno` | 1 | V43.2 | V43.3 |
+| `academico_test.fn_grupo_soft_delete` | 2 | V43.3 | V79 |
+| `academico_test.fn_grupo_validar_activo` | 1 | V43.1 | V43.3 |
+| `academico_test.fn_grupo_validar_campos` | 4 | V43.1 | V43.2 |
+| `academico_test.fn_grupo_validar_capacidad` | 1 | V43.1 | V43.2 |
+| `academico_test.fn_grupo_validar_director_asignable` | 2 | V43.1 | V43.2 |
+| `academico_test.fn_grupo_validar_director_habilitado` | 1 | V43.1 | — |
+| `academico_test.fn_grupo_validar_eliminable` | 1 | V43.1 | V43.2 |
+| `academico_test.fn_grupo_validar_existe` | 1 | V43.1 | V43.3 |
+| `academico_test.fn_grupo_validar_grado` | 1 | V43.1 | V43.2 |
+| `academico_test.fn_grupo_validar_nombre_no_vacio` | 1 | V43.1 | V43.2 |
+| `academico_test.fn_grupo_validar_nombre_unico` | 4 | V43.1 | V43.2 |
+| `academico_test.fn_grupo_validar_sin_horarios` | 1 | V43.1 | — |
+| `academico_test.fn_horario_asignaturas` | 2 | V45.3 | V80 |
+| `academico_test.fn_horario_asignaturas_interno` | 1 | V45.2 | V45.3 |
+| `academico_test.fn_horario_calcular_bloques` | 1 | V45.2 | V460 |
+| `academico_test.fn_horario_guardar` | 3 | V45.3 | V43.3, V80 |
+| `academico_test.fn_horario_guardar_interno` | 3 | V45.2 | V45.3 |
+| `academico_test.fn_horario_listar` | 3 | V45.3 | V43.3, V80 |
+| `academico_test.fn_horario_listar_interno` | 2 | V45.2 | V45.3 |
+| `academico_test.fn_horario_preescolar_autogenerar` | 2 | V45.2 | — |
+| `academico_test.fn_horario_validar_bloque_rango` | 2 | V45.1 | — |
+| `academico_test.fn_horario_validar_celda` | 6 | V45.1 | V45.2 |
+| `academico_test.fn_horario_validar_celda_campos` | 4 | V45.1 | — |
+| `academico_test.fn_horario_validar_dia` | 1 | V45.1 | — |
+| `academico_test.fn_horario_validar_grado_activo` | 1 | V45.1 | V45.2, V45.3 |
+| `academico_test.fn_horario_validar_grado_existe` | 1 | V45.1 | V45.2, V45.3 |
+| `academico_test.fn_horario_validar_grupo_del_grado` | 2 | V45.1 | — |
+| `academico_test.fn_horario_validar_plan_item` | 2 | V45.1 | — |
+| `academico_test.fn_nivel_ensenanza_listar` | 1 | V43.3 | V79, V214 |
 | `academico_test.fn_personalizar_asignatura_crear` | 2 | V214.3 | — |
 | `academico_test.fn_personalizar_asignatura_eliminar` | 2 | V214.3 | — |
 | `academico_test.fn_personalizar_asignatura_listar` | 3 | V214.3 | — |
 | `academico_test.fn_personalizar_asignatura_pk` | 1 | V214.3 | — |
-| `academico_test.fn_plan_actualizar` | 11 | V285 | V80 |
-| `academico_test.fn_plan_agregar` | 11 | V285 | V80 |
-| `academico_test.fn_plan_asignatura_bulk_delete` | 2 | V44 | V80 |
-| `academico_test.fn_plan_asignaturas_disponibles_listar` | 3 | V44 | V80 |
-| `academico_test.fn_plan_eliminar` | 2 | V285 | V44, V80 |
-| `academico_test.fn_plan_eliminar_restricciones` | 2 | V286 | — |
-| `academico_test.fn_plan_listar` | 7 | V44 | V80 |
-| `academico_test.fn_plan_obtener` | 2 | V44 | V80 |
-| `academico_test.fn_plan_reporte_listar` | 7 | V186 | V135 |
-| `academico_test.fn_plan_soft_delete` | 2 | V44 | V80 |
-| `academico_test.fn_subject_actualizar` | 8 | V40 | V77 |
-| `academico_test.fn_subject_crear` | 8 | V40 | V77 |
-| `academico_test.fn_subject_guardar_bulk` | 3 | V40 | V77 |
-| `academico_test.fn_subject_listar` | 2 | V40 | V77 |
-| `academico_test.fn_subject_soft_delete` | 2 | V40 | V77 |
-| `academico_test.fn_tg_horario_preescolar_autogenerar` | 0 | V437 | — |
+| `academico_test.fn_plan_actualizar_interno` | 11 | V44.2 | V44.3 |
+| `academico_test.fn_plan_agregar_interno` | 11 | V44.2 | V44.3 |
+| `academico_test.fn_plan_asignatura_bulk_delete` | 2 | V44.3 | V80 |
+| `academico_test.fn_plan_asignaturas_disponibles_listar` | 3 | V44.3 | V80 |
+| `academico_test.fn_plan_asignaturas_disponibles_listar_interno` | 2 | V44.2 | V44.3 |
+| `academico_test.fn_plan_eliminar_interno` | 2 | V44.2 | V44.3 |
+| `academico_test.fn_plan_eliminar_restricciones` | 2 | V44.3 | V80 |
+| `academico_test.fn_plan_eliminar_restricciones_interno` | 1 | V44.2 | V44.3 |
+| `academico_test.fn_plan_grado_eliminar_interno` | 2 | V44.2 | V44.3 |
+| `academico_test.fn_plan_listar_interno` | 6 | V44.2 | V44.3 |
+| `academico_test.fn_plan_obtener_interno` | 1 | V44.2 | V44.3 |
+| `academico_test.fn_plan_reporte_listar` | 7 | V44.3 | V135 |
+| `academico_test.fn_plan_validar_asignatura` | 1 | V44.1 | V44.2 |
+| `academico_test.fn_plan_validar_asignatura_unica` | 3 | V44.1 | V44.2 |
+| `academico_test.fn_plan_validar_campos` | 2 | V44.1 | V44.2 |
+| `academico_test.fn_plan_validar_creditos` | 1 | V44.1 | — |
+| `academico_test.fn_plan_validar_existe_para_grado` | 1 | V44.1 | V44.2, V44.3 |
+| `academico_test.fn_plan_validar_grado` | 1 | V44.1 | V44.2 |
+| `academico_test.fn_plan_validar_influencia_area` | 1 | V44.1 | — |
+| `academico_test.fn_plan_validar_intensidad_horaria` | 1 | V44.1 | — |
+| `academico_test.fn_plan_validar_renglon_activo` | 1 | V44.1 | V44.2, V44.3 |
+| `academico_test.fn_plan_validar_renglon_existe` | 1 | V44.1 | V44.3 |
+| `academico_test.fn_plan_validar_renglon_sin_horarios` | 1 | V44.1 | — |
+| `academico_test.fn_plan_validar_valores` | 3 | V44.1 | V44.2 |
+| `academico_test.fn_subject_actualizar` | 8 | V40.4 | V77 |
+| `academico_test.fn_subject_actualizar_interno` | 8 | V40.3 | V40.4 |
+| `academico_test.fn_subject_crear` | 8 | V40.4 | V77 |
+| `academico_test.fn_subject_crear_interno` | 8 | V40.3 | V40.4 |
+| `academico_test.fn_subject_eliminar_interno` | 2 | V40.3 | V40.4 |
+| `academico_test.fn_subject_guardar_bulk` | 3 | V40.4 | V77 |
+| `academico_test.fn_subject_guardar_bulk_interno` | 3 | V40.3 | V40.4 |
+| `academico_test.fn_subject_listar` | 2 | V40.4 | V77 |
+| `academico_test.fn_subject_listar_interno` | 2 | V40.3 | V40.4 |
+| `academico_test.fn_subject_soft_delete` | 2 | V40.4 | V77 |
+| `academico_test.fn_subject_validar` | 4 | V40.2 | V40.3 |
+| `academico_test.fn_subject_validar_abreviacion_no_vacia` | 1 | V40.2 | V40.3 |
+| `academico_test.fn_subject_validar_area_activa` | 1 | V40.2 | V40.3, V40.4 |
+| `academico_test.fn_subject_validar_asignatura_general` | 1 | V40.2 | V40.3 |
+| `academico_test.fn_subject_validar_campos` | 3 | V40.2 | V40.3 |
+| `academico_test.fn_subject_validar_color` | 2 | V40.2 | V40.3 |
+| `academico_test.fn_subject_validar_eliminable` | 1 | V40.2 | V40.3 |
+| `academico_test.fn_subject_validar_existe_activa` | 1 | V40.2 | V40.3, V40.4 |
+| `academico_test.fn_subject_validar_nombre_no_vacio` | 1 | V40.2 | V40.3 |
+| `academico_test.fn_subject_validar_sin_docentes` | 1 | V40.2 | — |
+| `academico_test.fn_subject_validar_sin_horarios` | 1 | V40.2 | — |
+| `academico_test.fn_subject_validar_sin_plan` | 1 | V40.2 | — |
+| `academico_test.fn_subject_validar_unico` | 4 | V40.2 | V40.3 |
+| `academico_test.fn_tg_horario_preescolar_autogenerar` | 0 | V45.2 | — |
 | `academico_test.fn_usuario_grupos_dirigidos` | 1 | V489 | V136, V140, V490, V535, V537, V542 |
 | `academico_test.fn_usuario_solo_sus_grupos` | 3 | V535 | V136, V140, V490, V537, V542 |
 
@@ -1264,7 +1489,7 @@ Las secciones son las categorias funcionales de `scripts/migration-analysis/anal
 | `academico_test.fn_usu_buscar_por_documento` | 3 | V51 | V93 |
 | `academico_test.fn_usu_crear` | 15 | V51 | — |
 | `academico_test.fn_usuario_ee_accesibles` | 1 | V29 | V40, V51, V116, V140, V179, V233… |
-| `academico_test.fn_usuario_ee_lectura` | 1 | V29 | V40, V52, V53, V116 |
+| `academico_test.fn_usuario_ee_lectura` | 1 | V29 | V52, V53, V116 |
 | `academico_test.fn_usuario_es_docente_puro` | 1 | V29 | V224, V407, V480, V481, V492.1, V496.1… |
 | `academico_test.fn_usuario_otros_usos` | 3 | V162 | V160, V161 |
 | `academico_test.fn_usuario_peso_categoria` | 1 | V298 | — |

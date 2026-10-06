@@ -69,7 +69,7 @@ no-ops por el `ON CONFLICT`.
 | `V119__query_endpoints_catalogos_menus_roles` | 9 | V58, V59 | Catálogos específicos, menús, roles, planes |
 | `V126__query_endpoints_menus_roles_trol` | 5 | V113 | CRUD de menús, listado de roles sobre TROL |
 | `V127__query_endpoints_matricula_y_periodos` | 12 | V162, V166, V180, V185, V200 | Matrícula directa, su configuración, utilidades de periodo |
-| `V128__fn_escala_nivel_bulk_soft_delete` | 1 fn + 1 | — (la función es drift) | `fn_escala_nivel_bulk_soft_delete` + `POST /escalas/bulk-delete` |
+| `V78` (antes V128) | 1 fn + 1 | — (la función es drift; hoy en V42.3) | `fn_escala_nivel_bulk_soft_delete` + `POST /escalas/bulk-delete` |
 | `V129__drift_query_endpoints_y_endpoint` | 12 + 2 | — (SQL inline / otras ramas) | Drift suelto de `public.query` + las 2 filas que faltaban en `public.endpoint` |
 
 El `+3` de V93 y el `+1` de V95 son los **4 endpoints que V51/V52 dejaron
