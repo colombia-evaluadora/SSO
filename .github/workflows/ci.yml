@@ -194,6 +194,8 @@ jobs:
             migrations:
               - 'postgres/migrations/**'
               - '.github/scripts/check-flyway-migrations.sh'
+              - 'scripts/flyway-deploy.sh'
+              - 'scripts/migration-reapply-set.py'
               - '.github/workflows/ci.yml'
 
   # ───────── Migraciones Flyway: choque de versión + idempotencia ─────────
@@ -277,6 +279,122 @@ jobs:
           .github/scripts/check-flyway-migrations.sh \
             "${{ steps.target.outputs.ref }}" \
             localhost 5432 flyway_ci flyway_ci flyway_ci
+
+  # ───────── Migraciones: subida desde el último release ─────────
+  #
+  # Reproduce lo que hace el deploy sobre un servidor real, no sobre una base
+  # vacía: base en el estado del último tag v*, `flyway repair` con los
+  # ficheros nuevos (como quedó producción tras v1.1.57: el checksum ya no
+  # delata las migraciones editadas) y luego scripts/flyway-deploy.sh, el
+  # mismo que corre deploy.yml. Atrapa una editada que no es re-ejecutable
+  # sobre su versión vieja, o una pendiente que necesita lo que la edición
+  # añadió (V540 -> fn_grado_escala_aplicable de V428). Al final compara el
+  # esquema con una base limpia migrada desde HEAD: re-aplicar en otro orden
+  # dejaría las mismas funciones con otro cuerpo, sin un solo error.
+  #
+  # Dos puntos de partida: el último tag (el deploy normal) y el quinto más
+  # reciente (un servidor que se saltó releases fallidos, como producción
+  # entre v1.1.55 y v1.1.58, con más migraciones editadas por medio).
+  flyway-upgrade:
+    name: flyway-upgrade (tag -${{ matrix.tags_atras }})
+    runs-on: ubuntu-latest
+    needs: [changes]
+    if: needs.changes.outputs.migrations == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        tags_atras: [1, 5]
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: flyway_ci
+          POSTGRES_PASSWORD: flyway_ci
+          POSTGRES_DB: flyway_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U flyway_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      PGHOST: localhost
+      PGUSER: flyway_ci
+      PGPASSWORD: flyway_ci
+      FW: >-
+        docker run --rm --network host
+        -v ${{ github.workspace }}/postgres/migrations:/flyway/sql:ro
+        flyway/flyway:11-alpine -user=flyway_ci -password=flyway_ci -connectRetries=10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Instalar cliente psql
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends postgresql-client
+
+      - name: Base en el estado de un release anterior
+        id: base
+        run: |
+          set -euo pipefail
+          BASE="$(git tag --list 'v*' --sort=-v:refname | sed -n '${{ matrix.tags_atras }}p')"
+          [ -n "$BASE" ] || BASE="$(git tag --list 'v*' --sort=-v:refname | tail -1)"
+          echo "Release de partida: $BASE"
+          echo "ref=$BASE" >> "$GITHUB_OUTPUT"
+          mkdir -p /tmp/base
+          git archive "$BASE" postgres/migrations | tar -x -C /tmp/base
+          docker run --rm --network host -v /tmp/base/postgres/migrations:/flyway/sql:ro \
+            flyway/flyway:11-alpine -url=jdbc:postgresql://localhost:5432/flyway_ci \
+            -user=flyway_ci -password=flyway_ci -connectRetries=10 migrate
+          $FW -url=jdbc:postgresql://localhost:5432/flyway_ci repair
+
+      - name: Fase de migraciones del deploy (scripts/flyway-deploy.sh)
+        env:
+          BASE: ${{ steps.base.outputs.ref }}
+        run: |
+          set -euo pipefail
+          export MIGRATIONS_DIR="$PWD/postgres/migrations"
+          export FLYWAY_CMD="$FW -url=jdbc:postgresql://localhost:5432/flyway_ci"
+          export PSQL_CMD="psql -d flyway_ci"
+          # El mismo cálculo que el paso "Migraciones editadas" de deploy.yml.
+          REAPPLY_CANDIDATES="$(git diff --name-only --diff-filter=AMR "$BASE" HEAD -- postgres/migrations \
+            | grep -E '^postgres/migrations/V[0-9]+(\.[0-9]+)*__[A-Za-z0-9_.-]+\.sql$' \
+            | xargs -r -n1 basename | tr '\n' ' ' || true)"
+          export REAPPLY_CANDIDATES
+          bash scripts/flyway-deploy.sh
+
+      - name: Mismo esquema que una base limpia
+        run: |
+          set -euo pipefail
+          psql -d flyway_ci -c 'CREATE DATABASE limpia'
+          $FW -url=jdbc:postgresql://localhost:5432/limpia migrate > /dev/null
+          snapshot() {
+            psql -d "$1" -AtX <<'SQL'
+          SELECT 'fn '||n.nspname||'.'||p.proname||'('||pg_get_function_identity_arguments(p.oid)||') '||md5(pg_get_functiondef(p.oid))
+            FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+           WHERE n.nspname NOT IN ('pg_catalog','information_schema') AND n.nspname NOT LIKE 'pg\_%' AND p.prokind IN ('f','p');
+          SELECT 'view '||schemaname||'.'||viewname||' '||md5(definition)
+            FROM pg_views WHERE schemaname NOT IN ('pg_catalog','information_schema');
+          SELECT 'col '||table_schema||'.'||table_name||'.'||column_name||' '||data_type
+            FROM information_schema.columns WHERE table_schema NOT IN ('pg_catalog','information_schema');
+          SELECT 'query '||coalesce(type,'')||' '||http_method||' '||coalesce(path_template,'')||' '||md5(query)||' '||param_types::text
+            FROM public.query;
+          SQL
+          }
+          snapshot flyway_ci | sort > /tmp/subida.txt
+          snapshot limpia    | sort > /tmp/limpia.txt
+          # Lo que está en la limpia y falta (o difiere) en la subida. Lo que
+          # sobra en la subida (objetos de migraciones borradas) no cuenta.
+          FALTA="$(comm -13 /tmp/subida.txt /tmp/limpia.txt)"
+          if [ -n "$FALTA" ]; then
+            echo "::error::La subida desde ${{ steps.base.outputs.ref }} no deja el mismo esquema que una base limpia:"
+            printf '%s\n' "$FALTA" | head -50
+            exit 1
+          fi
+          echo "Esquema idéntico a una base limpia ($(wc -l < /tmp/limpia.txt) objetos comparados)."
 
   # ───────── Backend: common (compilación + unit tests) ─────────
   maven-common:
@@ -731,6 +849,7 @@ jobs:
     needs:
       - changes
       - flyway-migrations
+      - flyway-upgrade
       - maven-common
       - maven-auth-center
       - maven-sso-admin
@@ -762,6 +881,7 @@ jobs:
           for r in \
             '${{ needs.changes.result }}' \
             '${{ needs.flyway-migrations.result }}' \
+            '${{ needs.flyway-upgrade.result }}' \
             '${{ needs.maven-common.result }}' \
             '${{ needs.maven-auth-center.result }}' \
             '${{ needs.maven-sso-admin.result }}' \

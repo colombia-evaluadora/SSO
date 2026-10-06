@@ -45,6 +45,20 @@ on:
         description: 'Tag ya existente a re-desplegar (p.ej. v1.2.3)'
         required: true
         type: string
+      reapply_since:
+        description: >-
+          Tag del ultimo release que se desplego BIEN en produccion. Se
+          re-aplican (antes de las pendientes) las migraciones ya aplicadas
+          que cambiaron desde ahi. Solo hace falta mientras el servidor no
+          tenga /opt/sso/.flyway-deployed-ref (primer release con esto).
+        required: false
+        type: string
+        default: ''
+      reapply:
+        description: 'Versiones extra a re-aplicar, separadas por comas (V428,V223). Normalmente vacio.'
+        required: false
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -182,4 +196,8 @@ jobs:
       image_tag: ${{ needs.version.outputs.tag }}
       # Todos: un release despliega el stack completo, no un delta.
       changed_services: ${{ needs.version.outputs.services }}
+      # Solo llegan por workflow_dispatch; en un push de tag van vacios y
+      # deploy.yml usa la marca del servidor (/opt/sso/.flyway-deployed-ref).
+      reapply_since: ${{ inputs.reapply_since || '' }}
+      reapply: ${{ inputs.reapply || '' }}
     secrets: inherit
