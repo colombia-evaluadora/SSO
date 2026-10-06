@@ -55,12 +55,33 @@ public class TokenService {
     }
 
     /**
-     * Issues a new restore-password token and persists it (with
-     * its expiry) on the user's {@code tokenRestore} column.
-     * Caller is responsible for saving the user.
+     * Emite el token de restauracion de contrasena y lo deja (con su
+     * vencimiento) en {@code tokenRestore}. El llamador guarda al usuario.
+     *
+     * <p><b>Si el usuario ya tiene un token vigente se reutiliza</b> (mismo
+     * valor) y solo se renueva su vencimiento a ahora + TTL. Antes cada pedido
+     * generaba un UUID nuevo y, como hay una sola columna por usuario, el
+     * enlace de cualquier correo anterior pasaba a "Enlace invalido": quien
+     * pedia el correo dos veces y abria el primero no podia restaurar. Solo se
+     * genera uno nuevo si no hay token o ya vencio.
+     *
+     * <p>El resto del contrato no cambia: el token sigue siendo de un solo
+     * uso ({@link #consumeRestoreToken} lo borra al guardar la contrasena) y
+     * el TTL sigue siendo {@link #RESTORE_TTL_MINUTES}. Es exclusivo del flujo
+     * de restauracion: la activacion de cuenta usa
+     * {@link #issueActivationToken}, que sigue rotando el token.
+     *
+     * <p>Concurrencia: la reutilizacion depende de leer el token actual, asi
+     * que el llamador debe cargar al usuario con la fila bloqueada
+     * ({@code UserRepository#findByEmailForUpdate}); si no, dos pedidos
+     * simultaneos sobre un usuario sin token generarian dos UUID distintos y
+     * el enlace del primer correo se perderia.
      */
     public String issueRestoreToken(User user) {
-        String token = generate();
+        String vigente = user.getTokenRestore();
+        String token = (vigente != null && !vigente.isBlank() && !isExpired(user.getTokenRestoreExpiresAt()))
+                ? vigente
+                : generate();
         user.setTokenRestore(token);
         user.setTokenRestoreExpiresAt(Instant.now().plus(RESTORE_TTL_MINUTES, ChronoUnit.MINUTES));
         return token;
