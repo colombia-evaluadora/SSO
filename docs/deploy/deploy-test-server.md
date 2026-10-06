@@ -251,16 +251,17 @@ cambió) — ver `CONTRIBUTING.md` §3.3.
 - **Arranque en frío vs. redeploy en caliente**: si ningún servicio
   gateado por flyway (`api-gateway`, `auth-center`, `cdc-capture`,
   `cdc-pg-slot-init`, `notification-service`, `sso-admin`) está
-  corriendo, `deploy.yml` levanta primero la infraestructura sin
-  dependencia de flyway y espera a que flyway migre antes de subir el
-  resto. Si el stack ya está sano, solo recrea (`--no-deps`) los
-  contenedores cuya imagen cambió — flyway se aplica y valida al
-  final igual, pero sin bloquear el resto del stack.
-- **Migraciones con checksum cambiado**: si editaste el cuerpo de una
-  migración ya aplicada, `flyway repair` realinea el checksum pero NO
-  vuelve a correr su SQL — `deploy.yml` detecta ese caso y reaplica el
-  archivo a mano contra `sso-postgres` (todas las migraciones del repo
-  son idempotentes, así que es seguro).
+  corriendo, `deploy.yml` levanta todo el stack tras migrar. Si el
+  stack ya está sano, solo recrea (`--no-deps`) los contenedores cuya
+  imagen cambió. En los dos casos las migraciones van ANTES de tocar
+  los servicios: si fallan, el deploy sale y el stack sigue en la
+  versión anterior.
+- **Migraciones editadas**: si editaste una migración ya aplicada,
+  `scripts/flyway-deploy.sh` la re-ejecuta (con las posteriores que
+  redefinen sus objetos, en una transacción) ANTES de aplicar las
+  pendientes. Las detecta por `git diff` contra
+  `/opt/sso/.flyway-deployed-ref` y por checksum; `flyway repair` solo
+  realinea el historial, no vuelve a correr el SQL.
 - **Activar CDC-sync en el servidor**: CDC no viene prendido por
   default (prod posture). En el `.env`, `CDC_SYNC_ENABLED=false`
   aplica `docker-compose.cdc-off.yml` como override vía
