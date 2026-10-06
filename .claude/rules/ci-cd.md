@@ -47,6 +47,10 @@ Un workflow nuevo o con cambios en permisos, triggers o acciones de terceros
   heredoc y el deploy sale en verde sin recrear servicios. Al final el runner
   comprueba que `/opt/sso/.flyway-deployed-ref` es el commit desplegado: no
   quites ninguna de las dos cosas.
+- **Antes de migrar solo arranca `INFRA_SERVICES` (imágenes de terceros).** Un
+  servicio con imagen propia va en `GATED_SERVICES` o `APP_SERVICES` y se
+  recrea DESPUÉS de flyway; si lo pones en INFRA vuelve a correr código nuevo
+  contra el esquema viejo cuando una migración falla.
 - **El orden de migraciones se compara con `sort -V`**, no lexicográfico: `V9` va
   antes que `V10`, y con `sort` a secas no.
 - **En CI, `migraciones-estatico` va antes de cualquier job con Postgres**
