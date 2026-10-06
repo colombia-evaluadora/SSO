@@ -4,8 +4,8 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
-import org.testcontainers.containers.PostgreSQLContainer;
-import org.testcontainers.containers.RabbitMQContainer;
+import org.testcontainers.postgresql.PostgreSQLContainer;
+import org.testcontainers.rabbitmq.RabbitMQContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.utility.DockerImageName;
@@ -27,8 +27,8 @@ import org.testcontainers.utility.DockerImageName;
 public abstract class AbstractIntegrationTest {
 
     @Container
-    static final PostgreSQLContainer<?> POSTGRES =
-            new PostgreSQLContainer<>(DockerImageName.parse("postgres:16-alpine"))
+    static final PostgreSQLContainer POSTGRES =
+            new PostgreSQLContainer(DockerImageName.parse("postgres:16-alpine"))
                     .withDatabaseName("sso")
                     .withUsername("sso")
                     .withPassword("change-me-in-prod")
