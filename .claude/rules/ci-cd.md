@@ -49,7 +49,14 @@ Un workflow nuevo o con cambios en permisos, triggers o acciones de terceros
   quites ninguna de las dos cosas.
 - **El orden de migraciones se compara con `sort -V`**, no lexicográfico: `V9` va
   antes que `V10`, y con `sort` a secas no.
-- **`deploy-test.yml` bloquea una migración que nace pisada.** El paso *Orden de
+- **En CI, `migraciones-estatico` va antes de cualquier job con Postgres**
+  (`flyway-migrations` y `flyway-upgrade` dependen de él): `orden` + `lint` sobre
+  el diff y el plan de re-aplicación (`migration-reapply-set.py`) que
+  `flyway-upgrade` usa tal cual. La simulación prueba ese plan; no le pongas un
+  cálculo propio. `flyway-upgrade` solo corre desde los releases de partida
+  (tag -1, tag -5) que tienen migraciones editadas (M/R); sin ninguna queda
+  skipped, porque `flyway-migrations` ya cubre las nuevas.
+- **`ci.yml` y `deploy-test.yml` bloquean una migración que nace pisada.** El paso *Orden de
   las migraciones* (`scripts/migration-analysis/comandos/orden.py`) falla si una migración del
   diff reescribe un objeto que una versión POSTERIOR ya redefine: en una base
   limpia el cambio se pierde y en un servidor que ya pasó de ahí entra
