@@ -89,17 +89,17 @@ tenant es `SEDCARTAUSER2015`.
 | `mensajes` | 563 | `SEDCARTAUSER2015/mensajes/Enviados/1628997.png` |
 | `certificacion` | 203 | `SEDCARTAUSER2015/113001000143/certificacion/PA2022/1705737.pdf` |
 
-Casos raros:
+Casos raros y sin objeto en el bucket:
 
-- **36 filas sin tenant**, por ejemplo
-  `informePeriodo/PA2021/PEPRIMERPERIODO/1397877.pdf`. La muestra revisada no
-  está en el bucket.
-- **9 filas que no son clave**, por ejemplo `12j.pdf_actividad`: nombre de
-  fichero con sufijo y sin carpeta. No existen en el bucket.
-- **1 fila con el prefijo `sistema/`**: `sistema/1096018.pdf`. Sí existe.
+| Caso | Filas | Situación |
+|---|---:|---|
+| `certificacion` (constancias, marzo de 2023) | 203 | La carpeta `certificacion/` no existe en ninguno de los 125 colegios del bucket: nunca se guardaron |
+| Sin tenant: `informePeriodo/PA2021/PEPRIMERPERIODO/<matrícula>.pdf` | 36 | Del boletín de primer periodo de esas matrículas no hay objeto; sí existen el segundo y el tercero en la carpeta del colegio |
+| Nombre en vez de clave: `12j.pdf_actividad` | 9 | Subidas que no terminaron: los PK vecinos existen, estos no |
+| `sistema/1096018.pdf` | 1 | Existe |
 
-Todas pasan igual a `s3://coleva-files/<clave>`. Las que no existen darán 404,
-como en el sistema anterior.
+Todas pasan igual a `s3://coleva-files/<clave>`. Las 248 que no tienen objeto
+responden 404, igual que en el sistema anterior: no hay bytes que mapear.
 
 ### URLs absolutas (465.240)
 
@@ -111,37 +111,44 @@ Todas son virtual-hosted sobre `coleva-files`.
 | `sistema/<tenant>/…` (escudos y recursos del colegio) | 61.637 | `sistema/SEDCARTAUSER2015/000000000001/escudo/250.JPG` |
 | Por sede: `candidato`, `escudo`, `matricula/<pk>`, `documentosAnexos`, `recursoCompartido` | ≈ 33.900 | `SEDCARTAUSER2015/313001028225/matricula/2139323/<uuid>.pdf` |
 | `firmaMecanica` | 383 | `SEDCARTAUSER2015/firmaMecanica/72105.jpeg` |
-| `sistema/icono_perfil.png` (ícono por defecto) | 3 | `sistema/icono_perfil.png`: no existe en el bucket |
+| `sistema/icono_perfil.png` (avatar por defecto) | 3 | No existe con ese nombre: la migración lo reescribe a `sistema/icono_perfilLSV.png`, que es el mismo avatar |
 
 En estas URLs la clave es el path entero, **incluido** el primer segmento
 (`sistema/` o el tenant). Tratarlas como path-style le quitaría ese segmento
 y pediría una clave inexistente.
 
-### ¿Existen los objetos?
+### Validación de la cadena completa
 
-Se tomaron muestras aleatorias de 40 filas por tipo:
+Para cada formato se tomaron hasta 60 filas (todas en los casos raros). Se les
+aplicó la regla de la migración y una réplica de `extraerBucket` /
+`extraerClave` (incluida la decodificación de `%XX` de `URI.getPath`), y se
+comprobó el objeto en el bucket:
 
-| Tipo | Objetos encontrados |
-|---|---:|
-| `informePeriodo` | 40/40 |
-| `informeFinal` | 40/40 |
-| `actividad` | 39/40 |
-| `perfilUsuario` | 40/40 |
-| `sistema/…` | 40/40 |
-
-Faltan casos puntuales: algún boletín de 2019 y los casos raros de arriba.
+| Formato | Filas | Resultado |
+|---|---:|---|
+| Relativas: `informePeriodo`, `informeFinal`, `actividad`, `notificaciones`, `mensajes` | 1.697.043 | 60/60 en cada tipo |
+| Relativas con tildes (`PRIMER_PERIÓDO`) | 440 | 60/60: van por `s3://`, sin pasar por `URI` |
+| Absolutas: `perfilUsuario`, `sistema/<tenant>`, `candidato`, `escudo`, `matricula`, `documentosAnexos`, `recursoCompartido`, `firmaMecanica` | ≈ 465.000 | 60/60 en cada tipo |
+| Absoluta con `%20` en la clave | 1 | 1/1 |
+| `sistema/1096018.pdf` | 1 | 1/1 |
+| Avatar por defecto (ya reescrito) | 3 | Existe |
+| `certificacion`, sin tenant, `*_actividad` | 248 | Sin objeto (ver arriba) |
 
 ## 4. Qué hace la migración
 
 Regla `TARCHIVO` en `db-migrations` (`config/mappings/L4_establecimiento.yaml`):
 
 ```sql
-CASE WHEN TRIM(URLS3) IS NULL OR LOWER(URLS3) LIKE 'http%' OR LOWER(URLS3) LIKE 's3://%'
+CASE WHEN LOWER(URLS3) LIKE '%/sistema/icono_perfil.png'
+     THEN 'https://coleva-files.s3.amazonaws.com/sistema/icono_perfilLSV.png'
+     WHEN TRIM(URLS3) IS NULL OR LOWER(URLS3) LIKE 'http%' OR LOWER(URLS3) LIKE 's3://%'
      THEN TRIM(URLS3)
      ELSE 's3://coleva-files/' || LTRIM(TRIM(URLS3), '/') END
 ```
 
 - Las claves relativas reciben el bucket explícito.
+- El avatar por defecto `sistema/icono_perfil.png` pasa a
+  `sistema/icono_perfilLSV.png`.
 - Las URL absolutas y las nulas pasan igual.
 - Tras cargar, cada archivo se registra en `public.file_reference_location`.
   Sin esa fila el file-service no encuentra el archivo por su id.
