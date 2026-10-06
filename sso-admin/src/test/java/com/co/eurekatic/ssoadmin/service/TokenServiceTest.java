@@ -45,6 +45,79 @@ class TokenServiceTest {
     }
 
     @Test
+    void issueRestoreTokenTwiceReusesTokenAndRenewsExpiry() {
+        // Pedir el correo dos veces no debe invalidar el enlace del primero:
+        // mismo token, vencimiento renovado a ahora + TTL.
+        TokenService svc = new TokenService(userRepository);
+        User u = new User();
+        String primero = svc.issueRestoreToken(u);
+        Instant vencimientoViejo = Instant.now().plus(5, ChronoUnit.MINUTES);
+        u.setTokenRestoreExpiresAt(vencimientoViejo);
+
+        String segundo = svc.issueRestoreToken(u);
+
+        assertThat(segundo).isEqualTo(primero);
+        assertThat(u.getTokenRestore()).isEqualTo(primero);
+        assertThat(u.getTokenRestoreExpiresAt())
+                .isAfter(vencimientoViejo)
+                .isAfter(Instant.now().plus(TokenService.RESTORE_TTL_MINUTES - 1, ChronoUnit.MINUTES));
+    }
+
+    @Test
+    void issueRestoreTokenGeneratesNewTokenWhenExpired() {
+        TokenService svc = new TokenService(userRepository);
+        User u = new User();
+        u.setTokenRestore("vencido");
+        u.setTokenRestoreExpiresAt(Instant.now().minus(1, ChronoUnit.MINUTES));
+
+        String token = svc.issueRestoreToken(u);
+
+        assertThat(token).isNotEqualTo("vencido").hasSize(36);
+        assertThat(u.getTokenRestore()).isEqualTo(token);
+        assertThat(u.getTokenRestoreExpiresAt()).isAfter(Instant.now());
+    }
+
+    @Test
+    void issueRestoreTokenGeneratesNewTokenWhenExpiryMissing() {
+        // Sin vencimiento no se puede afirmar que siga vivo (fail closed,
+        // igual que consumeRestoreToken): se emite uno nuevo.
+        TokenService svc = new TokenService(userRepository);
+        User u = new User();
+        u.setTokenRestore("sin-vencimiento");
+        u.setTokenRestoreExpiresAt(null);
+
+        assertThat(svc.issueRestoreToken(u)).isNotEqualTo("sin-vencimiento");
+    }
+
+    @Test
+    void restoreTokenIsConsumedAfterRestoreAndNextRequestIssuesNewOne() {
+        TokenService svc = new TokenService(userRepository);
+        User u = new User();
+        String token = svc.issueRestoreToken(u);
+        when(userRepository.findByTokenRestore(token)).thenReturn(Optional.of(u));
+
+        svc.consumeRestoreToken(token);
+
+        // Un solo uso: tras restaurar la columna queda vacia...
+        assertThat(u.getTokenRestore()).isNull();
+        assertThat(u.getTokenRestoreExpiresAt()).isNull();
+        // ...y el siguiente pedido no puede revivir el token ya usado.
+        assertThat(svc.issueRestoreToken(u)).isNotEqualTo(token);
+    }
+
+    @Test
+    void issueActivationTokenStillRotatesOnEachCall() {
+        // La reutilizacion es exclusiva del flujo de restauracion.
+        TokenService svc = new TokenService(userRepository);
+        User u = new User();
+
+        String primero = svc.issueActivationToken(u);
+        String segundo = svc.issueActivationToken(u);
+
+        assertThat(segundo).isNotEqualTo(primero);
+    }
+
+    @Test
     void consumeActivationTokenClearsColumnAndReturnsUser() {
         TokenService svc = new TokenService(userRepository);
         User u = new User();
