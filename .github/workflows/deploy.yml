@@ -107,7 +107,7 @@ jobs:
     # tags v*, asi que un release se para aqui hasta que alguien lo aprueba.
     environment: ${{ inputs.environment }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.ref }}
           # Historial completo: el paso "Migraciones editadas" hace git diff
@@ -649,13 +649,17 @@ jobs:
         # versionar, trackear lo ya aplicado, fallar fuerte ante drift)
         # en cada deploy, a todo ambiente, así que un ALTER nuevo nunca
         # vuelve a quedar aplicado en dev/test y olvidado en producción.
+        env:
+          DEST: ${{ secrets.SSH_TARGET }}
         run: |
-          ssh -i ~/.ssh/deploy_key "${{ secrets.SSH_TARGET }}" \
+          ssh -i ~/.ssh/deploy_key "$DEST" \
             'cd /opt/sso && ./scripts/clickhouse-migrate.sh'
 
       - name: Smoke check (gateway health)
+        env:
+          DEST: ${{ secrets.SSH_TARGET }}
         run: |
-          ssh -i ~/.ssh/deploy_key "${{ secrets.SSH_TARGET }}" bash -s <<'EOF'
+          ssh -i ~/.ssh/deploy_key "$DEST" bash -s <<'EOF'
           set -euo pipefail
           # El gateway es el último en levantar (depende de auth-center
           # healthy); 5 min de margen cubre el arranque frío de las JVMs.
