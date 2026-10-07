@@ -28,8 +28,18 @@ import java.util.UUID;
 @Service
 public class TokenService {
 
-    /** Matches the "ttlMinutes": 2880 sent in the activation email payload. */
-    static final long ACTIVATION_TTL_MINUTES = 2 * 24 * 60;
+    /**
+     * Vigencia de la invitacion (enlace de activacion de cuenta nueva):
+     * 7 dias. Es la UNICA fuente del numero: {@code UserAdminService} la
+     * manda como {@code "ttlMinutes"} en el payload del correo
+     * {@code account-activation} (la plantilla de notification-service
+     * la muestra en dias) y deriva de ella el {@code ttlSeconds} de
+     * {@code activationTokenStatus}. Va aparte de
+     * {@link #RESTORE_TTL_MINUTES} a proposito: la invitacion la abre
+     * alguien que no la pidio (un funcionario o rector dado de alta por
+     * un admin) y necesita mas margen que un "olvide mi contrasena".
+     */
+    static final long ACTIVATION_TTL_MINUTES = 7 * 24 * 60;
     /** Matches the "ttlMinutes": 2880 sent in the restore-password email payload. */
     static final long RESTORE_TTL_MINUTES = 2 * 24 * 60;
 

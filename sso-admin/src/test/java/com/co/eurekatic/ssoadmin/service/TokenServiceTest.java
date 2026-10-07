@@ -34,6 +34,30 @@ class TokenServiceTest {
     }
 
     @Test
+    void issueActivationTokenExpiresInSevenDays() {
+        // La invitacion (enlace de activacion) dura una semana.
+        TokenService svc = new TokenService(userRepository);
+        User u = new User();
+        Instant antes = Instant.now();
+
+        svc.issueActivationToken(u);
+
+        assertThat(TokenService.ACTIVATION_TTL_MINUTES).isEqualTo(7 * 24 * 60);
+        assertThat(u.getTokenActivationExpiresAt())
+                .isAfterOrEqualTo(antes.plus(7, ChronoUnit.DAYS))
+                .isBefore(Instant.now().plus(7, ChronoUnit.DAYS).plusSeconds(1));
+    }
+
+    @Test
+    void activationAndRestoreTtlsAreIndependent() {
+        // Alargar la invitacion no debe alargar la recuperacion de
+        // contrasena: esa sigue en 2 dias.
+        assertThat(TokenService.RESTORE_TTL_MINUTES).isEqualTo(2 * 24 * 60);
+        assertThat(TokenService.ACTIVATION_TTL_MINUTES)
+                .isNotEqualTo(TokenService.RESTORE_TTL_MINUTES);
+    }
+
+    @Test
     void issueRestoreTokenStores36CharUuidOnUser() {
         TokenService svc = new TokenService(userRepository);
         User u = new User();

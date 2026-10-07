@@ -11,7 +11,10 @@
     displayName      nombre completo, con el email como respaldo
     email            correo del destinatario
     activationLink   URL completa del formulario, con ?token=... incluido
-    ttlMinutes       minutos de validez del enlace
+    ttlMinutes       minutos de validez del enlace (hoy 10080 = 7 dias,
+                     TokenService.ACTIVATION_TTL_MINUTES). Se muestra en
+                     dias cuando es multiplo exacto de 1440, para no
+                     mostrarle al usuario el numero crudo de minutos.
 
   El <title> es el ASUNTO del correo (TemplateRenderer lo extrae).
 -->
@@ -85,7 +88,7 @@
           </td>
           <td style="padding-left:10px; font-size:13.5px; color:#6b7688;">
             Este enlace estará disponible durante los próximos
-            <span th:text="${ttlMinutes}">60</span> minutos.
+            <span th:text="${ttlMinutes % 1440 == 0 ? (ttlMinutes == 1440 ? '1 día' : (ttlMinutes / 1440) + ' días') : ttlMinutes + ' minutos'}">7 días</span>.
           </td>
         </tr>
       </table>
