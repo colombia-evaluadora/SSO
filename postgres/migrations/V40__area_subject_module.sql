@@ -136,12 +136,16 @@ END $$;
 -- convenios) y, si esta activo, a cada sede activa del establecimiento. La
 -- primera sede se queda la fila original; las demas reciben una copia y sus
 -- usos se reapuntan. Idempotente: solo toca filas con FK_TSEDE NULL.
+-- Una sede puede recibir enfasis de otro establecimiento (convenios,
+-- matriculas cruzadas): si ya tiene uno activo con el mismo nombre se reusa,
+-- y si el codigo esta tomado se le da el siguiente libre de la sede.
 DO $$
 DECLARE
     r        RECORD;
     v_sede   BIGINT;
     v_target BIGINT;
     v_first  BOOLEAN;
+    v_codigo VARCHAR;
 BEGIN
     FOR r IN SELECT * FROM academico_test.TENFASIS WHERE FK_TSEDE IS NULL ORDER BY PK_TENFASIS LOOP
         v_first := TRUE;
@@ -168,17 +172,37 @@ BEGIN
              WHERE u.sede IS NOT NULL
              ORDER BY u.sede
         LOOP
-            IF v_first THEN
-                UPDATE academico_test.TENFASIS SET FK_TSEDE = v_sede WHERE PK_TENFASIS = r.PK_TENFASIS;
-                v_first := FALSE;
-                CONTINUE;
+            v_target := NULL;
+            IF r.ACTIVE THEN
+                SELECT PK_TENFASIS INTO v_target FROM academico_test.TENFASIS
+                 WHERE FK_TSEDE = v_sede AND ACTIVE = TRUE AND PK_TENFASIS <> r.PK_TENFASIS
+                   AND UPPER(TRIM(NOMBRE)) = UPPER(TRIM(r.NOMBRE))
+                 LIMIT 1;
             END IF;
 
-            INSERT INTO academico_test.TENFASIS
-                (CODIGO, NOMBRE, FK_TESPECIALIDAD, FK_TESTABLECIMIENTO, FK_TSEDE, CREATED_BY, ACTIVE)
-            SELECT r.CODIGO, r.NOMBRE, r.FK_TESPECIALIDAD, s.FK_TESTABLECIMIENTO, v_sede, 'enfasis_por_sede', r.ACTIVE
-              FROM academico_test.TSEDE s WHERE s.PK_TSEDE = v_sede
-            RETURNING PK_TENFASIS INTO v_target;
+            IF v_target IS NULL THEN
+                v_codigo := r.CODIGO;
+                IF r.ACTIVE AND EXISTS (SELECT 1 FROM academico_test.TENFASIS
+                                         WHERE FK_TSEDE = v_sede AND ACTIVE = TRUE
+                                           AND CODIGO = r.CODIGO AND PK_TENFASIS <> r.PK_TENFASIS) THEN
+                    SELECT lpad((COALESCE(MAX(CODIGO::int), -1) + 1)::text, 5, '0') INTO v_codigo
+                      FROM academico_test.TENFASIS
+                     WHERE FK_TSEDE = v_sede AND CODIGO ~ '^[0-9]+$';
+                END IF;
+
+                IF v_first THEN
+                    UPDATE academico_test.TENFASIS SET FK_TSEDE = v_sede, CODIGO = v_codigo
+                     WHERE PK_TENFASIS = r.PK_TENFASIS;
+                    v_first := FALSE;
+                    CONTINUE;
+                END IF;
+
+                INSERT INTO academico_test.TENFASIS
+                    (CODIGO, NOMBRE, FK_TESPECIALIDAD, FK_TESTABLECIMIENTO, FK_TSEDE, CREATED_BY, ACTIVE)
+                SELECT v_codigo, r.NOMBRE, r.FK_TESPECIALIDAD, s.FK_TESTABLECIMIENTO, v_sede, 'enfasis_por_sede', r.ACTIVE
+                  FROM academico_test.TSEDE s WHERE s.PK_TSEDE = v_sede
+                RETURNING PK_TENFASIS INTO v_target;
+            END IF;
 
             UPDATE academico_test.TASIGNATURA a SET FK_TENFASIS = v_target
               FROM academico_test.TAREA ar, academico_test.TPERIODO_ACADEMICO pa
@@ -192,12 +216,18 @@ BEGIN
                AND academico_test.fn_periodo_sede(academico_test.fn_grupo_periodo(c.FK_TGRUPO_DESTINO)) = v_sede;
         END LOOP;
 
-        -- Inactivo y sin uso: queda en la primera sede del establecimiento.
+        -- Sin uso, o fusionado en todas sus sedes: queda en la primera sede del
+        -- establecimiento, inactivo si ahi choca con uno activo.
         IF v_first THEN
-            UPDATE academico_test.TENFASIS
-               SET FK_TSEDE = (SELECT min(PK_TSEDE) FROM academico_test.TSEDE
-                                WHERE FK_TESTABLECIMIENTO = r.FK_TESTABLECIMIENTO)
-             WHERE PK_TENFASIS = r.PK_TENFASIS;
+            UPDATE academico_test.TENFASIS t
+               SET FK_TSEDE = x.sede,
+                   ACTIVE = t.ACTIVE AND NOT EXISTS (
+                       SELECT 1 FROM academico_test.TENFASIS o
+                        WHERE o.FK_TSEDE = x.sede AND o.ACTIVE = TRUE AND o.PK_TENFASIS <> t.PK_TENFASIS
+                          AND (o.CODIGO = t.CODIGO OR UPPER(TRIM(o.NOMBRE)) = UPPER(TRIM(t.NOMBRE))))
+              FROM (SELECT min(PK_TSEDE) AS sede FROM academico_test.TSEDE
+                     WHERE FK_TESTABLECIMIENTO = r.FK_TESTABLECIMIENTO) x
+             WHERE t.PK_TENFASIS = r.PK_TENFASIS;
         END IF;
     END LOOP;
 
@@ -209,8 +239,7 @@ BEGIN
     END IF;
 END $$;
 
--- Nombre y codigo unicos por sede, parciales sobre los activos. V71 los
--- salta en una base limpia (IF NOT EXISTS con el mismo nombre).
+-- Nombre y codigo unicos por sede, parciales sobre los activos.
 CREATE UNIQUE INDEX IF NOT EXISTS u_tenfasis_1 ON academico_test.tenfasis (fk_tsede, codigo) WHERE active = true;
 CREATE UNIQUE INDEX IF NOT EXISTS u_tenfasis_2 ON academico_test.tenfasis (fk_tsede, nombre) WHERE active = true;
 
