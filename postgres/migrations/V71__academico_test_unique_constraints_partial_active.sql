@@ -100,10 +100,6 @@ ALTER TABLE academico_test.tdiscapacidad DROP CONSTRAINT IF EXISTS u_tdiscapacid
 CREATE UNIQUE INDEX IF NOT EXISTS u_tdiscapacidad_2 ON academico_test.tdiscapacidad (nombre) WHERE active = true;
 ALTER TABLE academico_test.tencuesta DROP CONSTRAINT IF EXISTS u_tencuesta_1;
 CREATE UNIQUE INDEX IF NOT EXISTS u_tencuesta_1 ON academico_test.tencuesta (fk_establecimiento, titulo) WHERE active = true;
-ALTER TABLE academico_test.tenfasis DROP CONSTRAINT IF EXISTS u_tenfasis_1;
-CREATE UNIQUE INDEX IF NOT EXISTS u_tenfasis_1 ON academico_test.tenfasis (fk_testablecimiento, codigo) WHERE active = true;
-ALTER TABLE academico_test.tenfasis DROP CONSTRAINT IF EXISTS u_tenfasis_2;
-CREATE UNIQUE INDEX IF NOT EXISTS u_tenfasis_2 ON academico_test.tenfasis (fk_testablecimiento, nombre) WHERE active = true;
 ALTER TABLE academico_test.tente DROP CONSTRAINT IF EXISTS u_tente_1;
 CREATE UNIQUE INDEX IF NOT EXISTS u_tente_1 ON academico_test.tente (nit) WHERE active = true;
 ALTER TABLE academico_test.tente DROP CONSTRAINT IF EXISTS u_tente_2;

@@ -239,8 +239,7 @@ BEGIN
     END IF;
 END $$;
 
--- Nombre y codigo unicos por sede, parciales sobre los activos. V71 los
--- salta en una base limpia (IF NOT EXISTS con el mismo nombre).
+-- Nombre y codigo unicos por sede, parciales sobre los activos.
 CREATE UNIQUE INDEX IF NOT EXISTS u_tenfasis_1 ON academico_test.tenfasis (fk_tsede, codigo) WHERE active = true;
 CREATE UNIQUE INDEX IF NOT EXISTS u_tenfasis_2 ON academico_test.tenfasis (fk_tsede, nombre) WHERE active = true;
 
