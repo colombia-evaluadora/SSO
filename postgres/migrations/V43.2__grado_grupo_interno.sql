@@ -244,7 +244,8 @@ BEGIN
     PERFORM academico_test.fn_grupo_validar_capacidad(p_capacidad);
     v_nombre := COALESCE(p_nombre, r.NOMBRE);
     PERFORM academico_test.fn_grupo_validar_nombre_unico(r.FK_TGRADO, r.FK_TLV_JORNADA, v_nombre, p_pk);
-    v_fk_funcionario_final := COALESCE(p_fk_funcionario, r.FK_TFUNCIONARIO);
+    -- Null quita el director del grupo.
+    v_fk_funcionario_final := p_fk_funcionario;
 
     UPDATE academico_test.TGRUPO SET
         NOMBRE = v_nombre,
