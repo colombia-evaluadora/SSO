@@ -52,10 +52,7 @@ ALTER TABLE academico_test.tactividad_recuperacion DROP CONSTRAINT IF EXISTS un_
 CREATE UNIQUE INDEX IF NOT EXISTS un_tac_recuperacion_1 ON academico_test.tactividad_recuperacion (fk_tactividad) WHERE active = true;
 ALTER TABLE academico_test.tactividad_rubrica_evaluacion DROP CONSTRAINT IF EXISTS un_tac_rubrica_eval_1;
 CREATE UNIQUE INDEX IF NOT EXISTS un_tac_rubrica_eval_1 ON academico_test.tactividad_rubrica_evaluacion (fk_tactividad_rubrica_criterio, fk_tactividad_estudiante) WHERE active = true;
-ALTER TABLE academico_test.tactividad_rubrica_nivel DROP CONSTRAINT IF EXISTS un_tac_rubrica_nivel_1;
 CREATE UNIQUE INDEX IF NOT EXISTS un_tac_rubrica_nivel_1 ON academico_test.tactividad_rubrica_nivel (fk_tactividad_rubrica_criterio, ponderacion) WHERE active = true;
-ALTER TABLE academico_test.tano_lectivo DROP CONSTRAINT IF EXISTS u_tano_lectivo_1;
-CREATE UNIQUE INDEX IF NOT EXISTS u_tano_lectivo_1 ON academico_test.tano_lectivo (fk_testablecimiento, nombre) WHERE active = true;
 ALTER TABLE academico_test.taplico_encuesta DROP CONSTRAINT IF EXISTS un_taplico_encuesta_1;
 CREATE UNIQUE INDEX IF NOT EXISTS un_taplico_encuesta_1 ON academico_test.taplico_encuesta (fk_tusuario, fk_tencuesta) WHERE active = true;
 ALTER TABLE academico_test.tarea DROP CONSTRAINT IF EXISTS u_tarea_1;
@@ -183,13 +180,10 @@ CREATE UNIQUE INDEX IF NOT EXISTS u_tsede_1 ON academico_test.tsede (fk_testable
 ALTER TABLE academico_test.tsede DROP CONSTRAINT IF EXISTS u_tsede_2;
 CREATE UNIQUE INDEX IF NOT EXISTS u_tsede_2 ON academico_test.tsede (fk_testablecimiento, consecutivo) WHERE active = true;
 ALTER TABLE academico_test.tsede DROP CONSTRAINT IF EXISTS u_tsede_3;
-CREATE UNIQUE INDEX IF NOT EXISTS u_tsede_3 ON academico_test.tsede (codigo) WHERE active = true;
 ALTER TABLE academico_test.tsede_usuario DROP CONSTRAINT IF EXISTS uk_tsede_usuario_1;
 CREATE UNIQUE INDEX IF NOT EXISTS uk_tsede_usuario_1 ON academico_test.tsede_usuario (fk_tsede, fk_trol, fk_tusuario, fk_tlv_jornada) WHERE active = true;
 ALTER TABLE academico_test.tsede_usuario DROP CONSTRAINT IF EXISTS uk_tsede_usuario_2;
 CREATE UNIQUE INDEX IF NOT EXISTS uk_tsede_usuario_2 ON academico_test.tsede_usuario (fk_tsede, fk_trol, fk_tusuario, orden) WHERE active = true;
-ALTER TABLE academico_test.tunidad DROP CONSTRAINT IF EXISTS un_tunidad_1;
-CREATE UNIQUE INDEX IF NOT EXISTS un_tunidad_1 ON academico_test.tunidad (nombre, fk_tasignatura, fk_tgrado, fk_tperiodo_evaluacion) WHERE active = true;
 ALTER TABLE academico_test.tunidad_nota DROP CONSTRAINT IF EXISTS un_tunidad_nota_1;
 CREATE UNIQUE INDEX IF NOT EXISTS un_tunidad_nota_1 ON academico_test.tunidad_nota (fk_tunidad, fk_tmatricula) WHERE active = true;
 ALTER TABLE academico_test.tusuario DROP CONSTRAINT IF EXISTS u_tusuario_1;
