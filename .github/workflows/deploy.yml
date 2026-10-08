@@ -499,7 +499,7 @@ jobs:
           #                       quedaban así), y la fase de migraciones
           #                       esperaba ~40 s a que eureka quedara healthy.
           GATED_SERVICES="api-gateway auth-center cdc-capture cdc-pg-slot-init notification-service sso-admin"
-          INFRA_SERVICES="cdc-clickhouse mailhog rabbitmq redis tsesion-web-gc alloy grafana loki mimir tempo"
+          INFRA_SERVICES="cdc-clickhouse mailhog rabbitmq redis tsesion-web-gc periodo-eval-estado alloy grafana loki mimir tempo"
           APP_SERVICES="cdc-worker eurekaserver file-service provisioner reporting-service ai-control-service"
 
           # Filtra una lista de servicios contra el grafo ACTIVO de compose

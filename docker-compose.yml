@@ -176,6 +176,33 @@ services:
     # Sin ports ni healthcheck -- es un job silencioso que se
     # autovigila (cron logs a stdout).
 
+  # Estado automatico de los periodos de evaluacion (Calificable /
+  # NO Calificable segun fechas). Mismo patron que tsesion-web-gc;
+  # corre a las 05:05 UTC = 00:05 hora Colombia.
+  periodo-eval-estado:
+    profiles: ["local-only"]
+    image: alpine:3.20
+    container_name: sso-periodo-eval-estado
+    restart: unless-stopped
+    command:
+      - sh
+      - -c
+      - |
+        apk add --no-cache postgresql16-client dcron \
+          && echo "5 5 * * * sh /scripts/periodo-eval-estado.sh 2>&1" | crontab - \
+          && crond -f -d 0 -L /dev/stdout
+    environment:
+      PGHOST: postgres
+      PGPORT: "5432"
+      PGUSER: ${POSTGRES_USER}
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      PGDATABASE: ${POSTGRES_DB}
+    volumes:
+      - ./scripts/periodo-eval-estado.sh:/scripts/periodo-eval-estado.sh:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+
   # ===========================================================================
   # flyway — one-shot schema migrator against Neon. Every Spring service
   # depends_on service_completed_successfully, so the schema is guaranteed
