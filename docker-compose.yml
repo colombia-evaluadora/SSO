@@ -360,6 +360,8 @@ services:
       # Empty default rejects every request (fail-closed posture
       # on the controller side; documented in CacheAdminController).
       SSO_SESSION_USER_ROLES_INVALIDATION_SECRET: ${SSO_SESSION_USER_ROLES_INVALIDATION_SECRET:-}
+      # auth-center -> sso-admin /internal/** (cambio de correo de funcionario).
+      SSO_INTERNAL_TOKEN: ${SSO_INTERNAL_TOKEN}
       # Observability: push OTLP to Alloy
       OTEL_EXPORTER_OTLP_ENDPOINT: "${OTEL_EXPORTER_OTLP_ENDPOINT:-http://alloy:4318}"
       # Interruptor de telemetria: con el perfil de observabilidad

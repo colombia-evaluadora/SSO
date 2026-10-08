@@ -143,6 +143,10 @@ public class SecurityConfig {
                         // /register/pigse/** para caer en la regla de gateway existente
                         // (Path=/api/auth/register/**, StripPrefix=2) sin tocar api-gateway.
                         .requestMatchers(HttpMethod.POST, "/register/pigse/funcionario").access(authCenterAccessManager)
+                        // Cambio de correo de funcionario (CE / PIGSE): mismo gate role_endpoint
+                        // que el alta; roles sembrados en V549 copiando los de /register/*/funcionario.
+                        .requestMatchers(HttpMethod.POST, "/register/cval/funcionario/reactivar-por-cambio-de-correo",
+                                "/register/pigse/funcionario/reactivar-por-cambio-de-correo").access(authCenterAccessManager)
                         .requestMatchers(HttpMethod.POST, "/register/usuario").access(authCenterAccessManager)
                         .requestMatchers(HttpMethod.POST, "/register/account").access(authCenterAccessManager)
                         // /actuator/prometheus is read by the Grafana Alloy
