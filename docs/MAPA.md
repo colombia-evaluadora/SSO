@@ -1,7 +1,7 @@
 # Mapa del dominio
 
 **Generado** por `python scripts/migration-analysis mapa` — no editar a mano.
-Estado: 471 migraciones (V1–V546), 1252 funciones vivas, 58 endpoints vivos. Ultima generacion: 2026-10-06.
+Estado: 480 migraciones (V1–V552), 1259 funciones vivas, 61 endpoints vivos. Ultima generacion: 2026-10-08.
 
 Para una **funcion**, la migracion dueña es la que hay que editar: es su ultima escritura viva, no la que la creo.
 
@@ -15,7 +15,7 @@ Las secciones son las categorias funcionales de `scripts/migration-analysis/anal
 
 - [PIGSE](#pigse) — 85 funcion(es), 21 endpoint(s)
 - [Prematrícula](#prematricula) — 16 funcion(es), 0 endpoint(s)
-- [Matrícula](#matricula) — 63 funcion(es), 0 endpoint(s)
+- [Matrícula](#matricula) — 69 funcion(es), 0 endpoint(s)
 - [Informes](#informes) — 50 funcion(es), 0 endpoint(s)
 - [Observaciones](#observaciones) — 30 funcion(es), 0 endpoint(s)
 - [Asistencias](#asistencias) — 71 funcion(es), 1 endpoint(s)
@@ -24,10 +24,10 @@ Las secciones son las categorias funcionales de `scripts/migration-analysis/anal
 - [Referentes curriculares](#referentes) — 68 funcion(es), 1 endpoint(s)
 - [Planeador (unidades, actividades)](#planeador) — 273 funcion(es), 22 endpoint(s)
 - [Auditoría](#auditoria) — 6 funcion(es), 9 endpoint(s)
-- [Periodos académicos](#periodos) — 109 funcion(es), 0 endpoint(s)
-- [Funcionarios](#funcionarios) — 40 funcion(es), 2 endpoint(s)
-- [Sedes](#sedes) — 29 funcion(es), 0 endpoint(s)
-- [Establecimiento](#establecimiento) — 14 funcion(es), 0 endpoint(s)
+- [Periodos académicos](#periodos) — 110 funcion(es), 0 endpoint(s)
+- [Funcionarios](#funcionarios) — 40 funcion(es), 3 endpoint(s)
+- [Sedes](#sedes) — 29 funcion(es), 1 endpoint(s)
+- [Establecimiento](#establecimiento) — 14 funcion(es), 1 endpoint(s)
 - [Menús](#menus) — 27 funcion(es), 1 endpoint(s)
 - [Permisos](#permisos) — 17 funcion(es), 0 endpoint(s)
 - [Estructura académica](#academico) — 170 funcion(es), 0 endpoint(s)
@@ -101,7 +101,7 @@ Las secciones son las categorias funcionales de `scripts/migration-analysis/anal
 | `pigse.fn_est_actualizar` | 14 | V362 | V258, V360 |
 | `pigse.fn_est_buscar_por_pk` | 2 | V397 | V258 |
 | `pigse.fn_est_crear` | 14 | V394 | V258, V360 |
-| `pigse.fn_est_listar` | 8 | V387 | V258 |
+| `pigse.fn_est_listar` | 8 | V387 | V258, V549 |
 | `pigse.fn_est_soft_delete` | 2 | V257 | V258 |
 | `pigse.fn_est_soft_delete_bulk` | 2 | V392 | V98 |
 | `pigse.fn_est_usuario_crear` | 4 | V257 | V369 |
@@ -111,7 +111,7 @@ Las secciones son las categorias funcionales de `scripts/migration-analysis/anal
 | `pigse.fn_fun_buscar_por_pk` | 2 | V390 | V258 |
 | `pigse.fn_fun_cancelar_pendiente` | 2 | V360 | V93 |
 | `pigse.fn_fun_crear` | 11 | V393 | V258 |
-| `pigse.fn_fun_listar` | 10 | V386 | V258 |
+| `pigse.fn_fun_listar` | 10 | V386 | V258, V549 |
 | `pigse.fn_fun_permisos_actualizar` | 3 | V390 | V370 |
 | `pigse.fn_fun_soft_delete` | 2 | V370 | V258 |
 | `pigse.fn_gestion_documental_excepcion_eliminar` | 3 | V522 | — |
@@ -125,7 +125,7 @@ Las secciones son las categorias funcionales de `scripts/migration-analysis/anal
 | `pigse.fn_sed_actualizar` | 11 | V370 | V95 |
 | `pigse.fn_sed_buscar_por_pk` | 2 | V370 | V95 |
 | `pigse.fn_sed_crear` | 11 | V370 | V394 |
-| `pigse.fn_sed_listar` | 8 | V386 | V370 |
+| `pigse.fn_sed_listar` | 8 | V386 | V370, V549 |
 | `pigse.fn_sed_soft_delete` | 2 | V370 | V95 |
 | `pigse.fn_sed_soft_delete_bulk` | 2 | V370 | V95 |
 | `pigse.fn_sede_usuario_crear` | 8 | V370 | V390 |
@@ -196,11 +196,17 @@ Las secciones son las categorias funcionales de `scripts/migration-analysis/anal
 | `academico_test.fn_matricula_campo_sync_no_editable` | 0 | V159 | — |
 | `academico_test.fn_matricula_config_actualizar` | 3 | V159 | — |
 | `academico_test.fn_matricula_config_crear` | 2 | V159 | — |
-| `academico_test.fn_matricula_config_crear_interno` | 2 | V159 | V180, V181, V182 |
-| `academico_test.fn_matricula_config_editar_campo` | 4 | V180 | V127 |
-| `academico_test.fn_matricula_config_ee_solicitante` | 1 | V180 | V181, V182, V362, V496.22 |
-| `academico_test.fn_matricula_config_obtener` | 1 | V182 | V127 |
+| `academico_test.fn_matricula_config_crear_interno` | 2 | V159 | V180, V181, V182, V543 |
+| `academico_test.fn_matricula_config_editar_campo` | 5 | V544 | V127, V545 |
+| `academico_test.fn_matricula_config_editar_campo_interno` | 5 | V543 | V544 |
+| `academico_test.fn_matricula_config_ee_solicitante` | 1 | V180 | V181, V182, V362, V496.22, V544 |
+| `academico_test.fn_matricula_config_establecimiento` | 2 | V544 | — |
+| `academico_test.fn_matricula_config_obtener` | 2 | V544 | V127, V545 |
+| `academico_test.fn_matricula_config_obtener_interno` | 2 | V543 | V544 |
 | `academico_test.fn_matricula_config_trg_establecimiento` | 0 | V159 | — |
+| `academico_test.fn_matricula_config_validar_cambio` | 2 | V543 | V544 |
+| `academico_test.fn_matricula_config_validar_campo_editable` | 1 | V543 | V544 |
+| `academico_test.fn_matricula_config_validar_establecimiento` | 1 | V543 | V544 |
 | `academico_test.fn_matricula_corregir_lote` | 3 | V178 | V129, V179 |
 | `academico_test.fn_matricula_crear` | 7 | V163 | V415 |
 | `academico_test.fn_matricula_cupo_ocupado` | 2 | V145 | V178, V205, V350, V351 |
@@ -1050,6 +1056,7 @@ Las secciones son las categorias funcionales de `scripts/migration-analysis/anal
 | `academico_test.fn_periodo_eval_eliminar_interno` | 2 | V39.2 | V39.3 |
 | `academico_test.fn_periodo_eval_listar` | 7 | V39.3 | V76, V124 |
 | `academico_test.fn_periodo_eval_listar_interno` | 6 | V39.2 | V39.3 |
+| `academico_test.fn_periodo_eval_sincronizar_estado_interno` | 1 | V39.2 | — |
 | `academico_test.fn_periodo_eval_soft_delete` | 2 | V39.3 | V76 |
 | `academico_test.fn_periodo_eval_validar` | 8 | V39.1 | V39.2 |
 | `academico_test.fn_periodo_eval_validar_activo` | 1 | V39.1 | V39.3 |
@@ -1120,6 +1127,7 @@ Las secciones son las categorias funcionales de `scripts/migration-analysis/anal
 |---|---|---|---|
 | `/funcionario/:ID/filtros-permiso` | GET | V199 | `fn_assert_permiso_funcionario` (V370), `fn_get_academico_usuario_id` (V299) |
 | `/funcionario/:ID/filtros-permiso` | PUT | V199 | `fn_assert_permiso_funcionario` (V370), `fn_get_academico_usuario_id` (V299) |
+| `/funcionarios/reporte` | POST | V549 | `fn_est_listar` (V387), `fn_fun_listar` (V386), `fn_sed_listar` (V386)… |
 
 | Funcion | Params | Migracion dueña | La usan |
 |---|---|---|---|
@@ -1168,6 +1176,10 @@ Las secciones son las categorias funcionales de `scripts/migration-analysis/anal
 
 ## Sedes
 
+| Endpoint | Verbo | Migraciones que la tocan | Funciones que invocan (aprox.) |
+|---|---|---|---|
+| `/sedes/reporte` | POST | V549 | `fn_est_listar` (V387), `fn_fun_listar` (V386), `fn_sed_listar` (V386)… |
+
 | Funcion | Params | Migracion dueña | La usan |
 |---|---|---|---|
 | `academico_test.fn_es_super_admin` | 1 | V37 | — |
@@ -1203,6 +1215,10 @@ Las secciones son las categorias funcionales de `scripts/migration-analysis/anal
 <a id="establecimiento"></a>
 
 ## Establecimiento
+
+| Endpoint | Verbo | Migraciones que la tocan | Funciones que invocan (aprox.) |
+|---|---|---|---|
+| `/establecimientos/reporte` | POST | V549 | `fn_est_listar` (V387), `fn_fun_listar` (V386), `fn_sed_listar` (V386)… |
 
 | Funcion | Params | Migracion dueña | La usan |
 |---|---|---|---|
