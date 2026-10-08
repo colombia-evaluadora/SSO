@@ -813,6 +813,79 @@ class UserAdminServiceTest {
         verify(userRepository, never()).save(any());
     }
 
+    /* ============ estado de cuenta / reenvio por correo ============ */
+
+    @Test
+    void accountStatusByEmailsDerivesStatusAndNormalizes() {
+        User activo = activeUser("a@example.com");
+        User pendiente = activeUser("p@example.com");
+        pendiente.setEnabled(false);
+        User inactivo = activeUser("i@example.com");
+        inactivo.setActive(false);
+        when(userRepository.findByEmail("a@example.com")).thenReturn(Optional.of(activo));
+        when(userRepository.findByEmail("P@Example.com")).thenReturn(Optional.empty());
+        when(userRepository.findByEmail("p@example.com")).thenReturn(Optional.of(pendiente));
+        when(userRepository.findByEmail("i@example.com")).thenReturn(Optional.of(inactivo));
+        when(userRepository.findByEmail("x@example.com")).thenReturn(Optional.empty());
+
+        var out = service.accountStatusByEmails(List.of(
+                "​a@example.com ", " P@Example.com ", "i@example.com", "x@example.com"));
+
+        assertThat(out).extracting(com.co.eurekatic.ssoadmin.dto.AccountStatusResponse::estado)
+                .containsExactly("ACTIVE", "PENDING_ACTIVATION", "INACTIVE", "NOT_FOUND");
+        assertThat(out.get(0).correo()).isEqualTo("​a@example.com ");
+    }
+
+    @Test
+    void accountStatusByEmailsRejectsTooMany() {
+        List<String> muchos = java.util.Collections.nCopies(201, "a@example.com");
+        assertThatThrownBy(() -> service.accountStatusByEmails(muchos))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void resendActivationByEmailSendsWhenPending() {
+        User u = activeUser("p@example.com");
+        u.setEnabled(false);
+        when(userRepository.findByEmail("p@example.com")).thenReturn(Optional.of(u));
+        when(userRepository.save(any(User.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        service.resendActivationByEmail(" p@example.com﻿", "COLOMBIA-EVALUADORA");
+
+        verify(tokenService).issueActivationToken(u);
+        verify(events).publish(eq("email"), eq("9"), eq("p@example.com"),
+                eq("account-activation"), any(), any(), eq("COLOMBIA-EVALUADORA"));
+    }
+
+    @Test
+    void resendActivationByEmailRejectsActive() {
+        when(userRepository.findByEmail("a@example.com")).thenReturn(Optional.of(activeUser("a@example.com")));
+
+        assertThatThrownBy(() -> service.resendActivationByEmail("a@example.com", "PIGSE"))
+                .isInstanceOf(com.co.eurekatic.ssoadmin.exception.InvalidUserStateException.class)
+                .hasMessage("La cuenta ya está activa; usa restablecer contraseña.");
+        verify(userRepository, never()).save(any());
+    }
+
+    @Test
+    void resendActivationByEmailRejectsInactive() {
+        User u = activeUser("i@example.com");
+        u.setActive(false);
+        when(userRepository.findByEmail("i@example.com")).thenReturn(Optional.of(u));
+
+        assertThatThrownBy(() -> service.resendActivationByEmail("i@example.com", "PIGSE"))
+                .isInstanceOf(com.co.eurekatic.ssoadmin.exception.InvalidUserStateException.class);
+        verify(userRepository, never()).save(any());
+    }
+
+    @Test
+    void resendActivationByEmailNotFound() {
+        when(userRepository.findByEmail("x@example.com")).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> service.resendActivationByEmail("x@example.com", "PIGSE"))
+                .isInstanceOf(com.co.eurekatic.ssoadmin.exception.NotFoundException.class);
+    }
+
     @Test
     void reactivateAfterEmailChangeStripsInvisibleCharacters() {
         User u = activeUser("nuevo@example.com");

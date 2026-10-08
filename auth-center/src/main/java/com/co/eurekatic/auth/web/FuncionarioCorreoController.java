@@ -2,6 +2,10 @@ package com.co.eurekatic.auth.web;
 
 import com.co.eurekatic.auth.client.SsoAdminInternalClient;
 import com.co.eurekatic.auth.web.dto.CambioCorreoFuncionarioRequest;
+import com.co.eurekatic.auth.web.dto.EstadoCuentaFuncionarioRequest;
+import com.co.eurekatic.auth.web.dto.EstadoCuentaFuncionarioResponse;
+import com.co.eurekatic.auth.web.dto.ReenviarActivacionFuncionarioRequest;
+import java.util.List;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -43,5 +47,35 @@ public class FuncionarioCorreoController {
     @ResponseStatus(HttpStatus.NO_CONTENT)
     public void reactivarPigse(@Valid @RequestBody CambioCorreoFuncionarioRequest req) {
         ssoAdmin.reactivateAfterEmailChange(req.correoAnterior(), req.correoNuevo(), APP_PIGSE);
+    }
+
+    /*
+     * Estado de cuenta y reenvio de activacion desde la tabla de funcionarios.
+     * Mismo gate role_endpoint (V552 copia los roles de reactivar). El estado
+     * no depende de la app; el reenvio usa la app de la RUTA para el enlace.
+     */
+
+    @PostMapping("/register/cval/funcionario/estado-cuenta")
+    public List<EstadoCuentaFuncionarioResponse> estadoCuentaCval(
+            @Valid @RequestBody EstadoCuentaFuncionarioRequest req) {
+        return ssoAdmin.accountStatus(req.correos());
+    }
+
+    @PostMapping("/register/pigse/funcionario/estado-cuenta")
+    public List<EstadoCuentaFuncionarioResponse> estadoCuentaPigse(
+            @Valid @RequestBody EstadoCuentaFuncionarioRequest req) {
+        return ssoAdmin.accountStatus(req.correos());
+    }
+
+    @PostMapping("/register/cval/funcionario/reenviar-activacion")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void reenviarActivacionCval(@Valid @RequestBody ReenviarActivacionFuncionarioRequest req) {
+        ssoAdmin.resendActivation(req.correo(), APP_CVAL);
+    }
+
+    @PostMapping("/register/pigse/funcionario/reenviar-activacion")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void reenviarActivacionPigse(@Valid @RequestBody ReenviarActivacionFuncionarioRequest req) {
+        ssoAdmin.resendActivation(req.correo(), APP_PIGSE);
     }
 }

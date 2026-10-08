@@ -1,6 +1,9 @@
 package com.co.eurekatic.ssoadmin.controller.internal;
 
+import com.co.eurekatic.ssoadmin.dto.AccountStatusRequest;
+import com.co.eurekatic.ssoadmin.dto.AccountStatusResponse;
 import com.co.eurekatic.ssoadmin.dto.EmailChangeReactivationRequest;
+import com.co.eurekatic.ssoadmin.dto.ResendActivationByEmailRequest;
 import com.co.eurekatic.ssoadmin.service.UserAdminService;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
@@ -10,6 +13,8 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
+
+import java.util.List;
 
 /**
  * Superficie interna (servicio a servicio) para el cambio de correo de un
@@ -40,5 +45,19 @@ public class InternalFuncionarioController {
     public void reactivateAfterEmailChange(@Valid @RequestBody EmailChangeReactivationRequest req,
                                            @RequestParam("app") String app) {
         service.reactivateAfterEmailChange(req, app);
+    }
+
+    /** Estado de cuenta por correo para la tabla de funcionarios (CE / PIGSE). */
+    @PostMapping("/funcionario/estado-cuenta")
+    public List<AccountStatusResponse> accountStatus(@Valid @RequestBody AccountStatusRequest req) {
+        return service.accountStatusByEmails(req.correos());
+    }
+
+    /** Reenvia la activacion SOLO si la cuenta sigue en PENDING_ACTIVATION (404 / 409 si no). */
+    @PostMapping("/funcionario/reenviar-activacion")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void resendActivation(@Valid @RequestBody ResendActivationByEmailRequest req,
+                                 @RequestParam("app") String app) {
+        service.resendActivationByEmail(req.correo(), app);
     }
 }

@@ -12,6 +12,7 @@ import com.co.eurekatic.common.repository.UserRepository;
 import com.co.eurekatic.common.security.PasswordPolicy;
 import com.co.eurekatic.ssoadmin.client.SessionInvalidationClient;
 import com.co.eurekatic.ssoadmin.config.EmailProperties;
+import com.co.eurekatic.ssoadmin.dto.AccountStatusResponse;
 import com.co.eurekatic.ssoadmin.dto.CreateAccountRequest;
 import com.co.eurekatic.ssoadmin.dto.EmailChangeReactivationRequest;
 import com.co.eurekatic.ssoadmin.dto.ForgotPasswordResponse;
@@ -290,6 +291,64 @@ public class UserAdminService {
         publishActivationEmail(saved, appName != null ? appName : resolveAppName(saved));
         log.info("Cuenta '{}' vuelve a PENDING_ACTIVATION por cambio de correo; activación enviada",
                 saved.getEmail());
+    }
+
+    /** Tope de correos por consulta de estado (la tabla de funcionarios pagina). */
+    public static final int MAX_CORREOS_ESTADO = 200;
+
+    /**
+     * Quita los invisibles que suelen colarse al copiar/pegar correos
+     * (U+200B-U+200D, U+2060, U+FEFF, U+00A0) y recorta. Mismo criterio
+     * para la consulta de estado y el reenvio.
+     */
+    static String normalizeEmail(String email) {
+        if (email == null) return "";
+        return email.replaceAll("[\\u200B-\\u200D\\u2060\\uFEFF\\u00A0]", "").trim();
+    }
+
+    /**
+     * Estado de cuenta por correo para la tabla de funcionarios (CE / PIGSE):
+     * {@code ACTIVE}, {@code PENDING_ACTIVATION}, {@code INACTIVE} (derivados
+     * de {@link User#getStatus()}) o {@code NOT_FOUND}. Devuelve una entrada
+     * por correo recibido, en el mismo orden y con el correo tal como llego,
+     * para que el front lo cruce con sus filas sin normalizar.
+     */
+    @Transactional(readOnly = true)
+    public List<AccountStatusResponse> accountStatusByEmails(List<String> correos) {
+        if (correos == null) return List.of();
+        if (correos.size() > MAX_CORREOS_ESTADO) {
+            throw new IllegalArgumentException(
+                    "Se pueden consultar como máximo " + MAX_CORREOS_ESTADO + " correos por solicitud.");
+        }
+        return correos.stream()
+                .map(c -> new AccountStatusResponse(c, findByEmailIgnoreCase(normalizeEmail(c))
+                        .map(u -> u.getStatus().name())
+                        .orElse(AccountStatusResponse.NOT_FOUND)))
+                .toList();
+    }
+
+    /**
+     * Reenvio de la activacion de un funcionario por correo (los fronts de
+     * CE/PIGSE no conocen el id de public.users). Solo procede si la cuenta
+     * sigue en PENDING_ACTIVATION; misma emision que {@link #resendActivation}
+     * (token nuevo, account-activation con el enlace de la app).
+     */
+    @Transactional
+    public void resendActivationByEmail(String correo, String appName) {
+        String email = normalizeEmail(correo);
+        User user = findByEmailIgnoreCase(email)
+                .orElseThrow(() -> new NotFoundException("User", email));
+        switch (user.getStatus()) {
+            case ACTIVE -> throw new InvalidUserStateException(
+                    "La cuenta ya está activa; usa restablecer contraseña.");
+            case INACTIVE -> throw new InvalidUserStateException(
+                    "La cuenta está inactiva; un administrador debe reactivarla antes de reenviar la activación.");
+            case PENDING_ACTIVATION -> { }
+        }
+        tokenService.issueActivationToken(user);
+        User saved = userRepository.save(user);
+        publishActivationEmail(saved, appName != null ? appName : resolveAppName(saved));
+        log.info("Reenviada la activación del funcionario '{}'", saved.getEmail());
     }
 
     private Optional<User> findByEmailIgnoreCase(String email) {
