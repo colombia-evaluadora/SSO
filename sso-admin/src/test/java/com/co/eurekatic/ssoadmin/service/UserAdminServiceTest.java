@@ -61,6 +61,7 @@ class UserAdminServiceTest {
     @Mock SessionInvalidationClient sessionInvalidationClient;
     @Mock CacheManager cacheManager;
     @Mock org.springframework.jdbc.core.JdbcTemplate jdbc;
+    @Mock FuncionarioAccountProvisioner funcionarioProvisioner;
 
     UserAdminService service;
 
@@ -87,7 +88,7 @@ class UserAdminServiceTest {
                 "restore-password-account.html");
         service = new UserAdminService(userRepository, roleRepository,
                 appRepository, passwordEncoder, tokenService, emailService,
-                emailProps, events, sessionInvalidationClient, cacheManager, jdbc);
+                emailProps, events, sessionInvalidationClient, cacheManager, jdbc, funcionarioProvisioner);
     }
 
     /* ====================== createAccount ====================== */
@@ -909,6 +910,97 @@ class UserAdminServiceTest {
                         "viejo@example.com", "nuevo@example.com"), null))
                 .isInstanceOf(com.co.eurekatic.ssoadmin.exception.NotFoundException.class);
         verify(userRepository, never()).save(any());
+    }
+
+    /* ============ funcionario sin cuenta SSO: se crea e invita ============ */
+
+    private void stubSaveAndFlushWithId() {
+        when(userRepository.saveAndFlush(any(User.class))).thenAnswer(inv -> {
+            User u = inv.getArgument(0);
+            u.setId(77L);
+            return u;
+        });
+    }
+
+    @Test
+    void resendActivationByEmailCreatesAndInvitesFuncionarioWithoutAccount() {
+        var f = new FuncionarioAccountProvisioner.Funcionario(5L, "sin@example.com", "Ana Perez");
+        when(userRepository.findByEmail("sin@example.com")).thenReturn(Optional.empty());
+        when(funcionarioProvisioner.findActiveFuncionario("sin@example.com", "COLOMBIA-EVALUADORA"))
+                .thenReturn(Optional.of(f));
+        stubSaveAndFlushWithId();
+
+        service.resendActivationByEmail("sin@example.com", "COLOMBIA-EVALUADORA");
+
+        ArgumentCaptor<User> captor = ArgumentCaptor.forClass(User.class);
+        verify(userRepository).saveAndFlush(captor.capture());
+        User creado = captor.getValue();
+        assertThat(creado.getEmail()).isEqualTo("sin@example.com");
+        assertThat(creado.getFullName()).isEqualTo("Ana Perez");
+        assertThat(creado.getPassword()).isNull();
+        assertThat(creado.getStatus()).isEqualTo(User.UserStatus.PENDING_ACTIVATION);
+        verify(tokenService).issueActivationToken(creado);
+        verify(funcionarioProvisioner).linkAndSyncRoles(f, 77L, "COLOMBIA-EVALUADORA");
+        verify(events).publish(eq("email"), eq("77"), eq("sin@example.com"),
+                eq("account-activation"), any(), any(), eq("COLOMBIA-EVALUADORA"));
+    }
+
+    @Test
+    void resendActivationByEmailNotFuncionarioKeeps404() {
+        when(userRepository.findByEmail("x@example.com")).thenReturn(Optional.empty());
+        when(funcionarioProvisioner.findActiveFuncionario("x@example.com", "PIGSE")).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> service.resendActivationByEmail("x@example.com", "PIGSE"))
+                .isInstanceOf(NotFoundException.class);
+        verify(userRepository, never()).saveAndFlush(any());
+        verify(funcionarioProvisioner, never()).linkAndSyncRoles(any(), org.mockito.ArgumentMatchers.anyLong(), any());
+        verify(events, never()).publish(any(), any(), any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void resendActivationByEmailExistingAccountDoesNotProvision() {
+        User u = activeUser("p@example.com");
+        u.setEnabled(false);
+        when(userRepository.findByEmail("p@example.com")).thenReturn(Optional.of(u));
+        when(userRepository.save(any(User.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        service.resendActivationByEmail("p@example.com", "PIGSE");
+
+        verify(funcionarioProvisioner, never()).findActiveFuncionario(any(), any());
+        verify(userRepository, never()).saveAndFlush(any());
+    }
+
+    @Test
+    void reactivateAfterEmailChangeCreatesWithNewEmailWhenNeitherHasAccount() {
+        var f = new FuncionarioAccountProvisioner.Funcionario(8L, "nuevo@example.com", null);
+        when(userRepository.findByEmail(any())).thenReturn(Optional.empty());
+        when(funcionarioProvisioner.findActiveFuncionario("nuevo@example.com", "PIGSE"))
+                .thenReturn(Optional.of(f));
+        stubSaveAndFlushWithId();
+
+        service.reactivateAfterEmailChange(new com.co.eurekatic.ssoadmin.dto.EmailChangeReactivationRequest(
+                "viejo@example.com", "nuevo@example.com"), "PIGSE");
+
+        ArgumentCaptor<User> captor = ArgumentCaptor.forClass(User.class);
+        verify(userRepository).saveAndFlush(captor.capture());
+        assertThat(captor.getValue().getEmail()).isEqualTo("nuevo@example.com");
+        assertThat(captor.getValue().getStatus()).isEqualTo(User.UserStatus.PENDING_ACTIVATION);
+        verify(funcionarioProvisioner).linkAndSyncRoles(f, 77L, "PIGSE");
+        verify(events).publish(eq("email"), eq("77"), eq("nuevo@example.com"),
+                eq("account-activation"), any(), any(), eq("PIGSE"));
+    }
+
+    @Test
+    void reactivateAfterEmailChangeNotFuncionarioKeeps404() {
+        when(userRepository.findByEmail(any())).thenReturn(Optional.empty());
+        when(funcionarioProvisioner.findActiveFuncionario("nuevo@example.com", "PIGSE"))
+                .thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> service.reactivateAfterEmailChange(
+                new com.co.eurekatic.ssoadmin.dto.EmailChangeReactivationRequest(
+                        "viejo@example.com", "nuevo@example.com"), "PIGSE"))
+                .isInstanceOf(NotFoundException.class);
+        verify(userRepository, never()).saveAndFlush(any());
     }
 
     private static <T> T eq(T value) {
