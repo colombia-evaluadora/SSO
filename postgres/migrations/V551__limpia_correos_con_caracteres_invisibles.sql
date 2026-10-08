@@ -57,7 +57,16 @@ UPDATE academico_test.tusuario t
 -- academico_test.tusuario.CORREO_ELECTRONICO (sin indice unico)
 UPDATE academico_test.tusuario t
    SET correo_electronico = btrim(regexp_replace(t.correo_electronico, '[​-‍⁠﻿ ]', '', 'g'))
- WHERE t.correo_electronico ~ '[​-‍⁠﻿ ]|^\s|\s$';
+ WHERE t.correo_electronico ~ '[​-‍⁠﻿ ]|^\s|\s$'
+   -- fn_sync_tusuario_to_users trata el cambio de CORREO_ELECTRONICO de un
+   -- funcionario con CUENTA = correo como renombre de la cuenta: si otro
+   -- tusuario activo ya tiene esa CUENTA, choca con u_tusuario_1 (test,
+   -- 2026-10-08). Esas filas se saltan y quedan a mano.
+   AND NOT EXISTS (
+       SELECT 1 FROM academico_test.tusuario o
+        WHERE o.pk_tusuario <> t.pk_tusuario
+          AND o.active = true
+          AND o.cuenta = btrim(regexp_replace(t.correo_electronico, '[​-‍⁠﻿ ]', '', 'g')));
 
 -- pigse.tusuario.CORREO_ELECTRONICO (unico por LOWER entre activos: U_PIGSE_TUSUARIO_CORREO)
 UPDATE pigse.tusuario t
