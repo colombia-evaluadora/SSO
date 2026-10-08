@@ -562,15 +562,21 @@ BEGIN
             USING ERRCODE = 'P0002';
     END IF;
     IF v_padre.ACTIVE = FALSE THEN
-        RAISE EXCEPTION 'El enunciado padre (%) esta inactivo; no se le pueden agregar evidencias', p_fk_padre
+        RAISE EXCEPTION 'El enunciado "%" está inactivo, así que no se le pueden agregar evidencias.',
+            (SELECT CASE WHEN LENGTH(e.TEXTO) > 80 THEN LEFT(e.TEXTO, 77) || '...' ELSE e.TEXTO END
+                     FROM academico_test.TREFERENTE_ENUNCIADO e WHERE e.PK_REFERENTE_ENUNCIADO = p_fk_padre)
             USING ERRCODE = '22023';
     END IF;
     IF v_padre.FK_REFERENTE_CURRICULAR <> p_pk_referente_curricular THEN
-        RAISE EXCEPTION 'El enunciado padre (%) pertenece a otro referente curricular', p_fk_padre
+        RAISE EXCEPTION 'El enunciado "%" pertenece a otro referente curricular.',
+            (SELECT CASE WHEN LENGTH(e.TEXTO) > 80 THEN LEFT(e.TEXTO, 77) || '...' ELSE e.TEXTO END
+                     FROM academico_test.TREFERENTE_ENUNCIADO e WHERE e.PK_REFERENTE_ENUNCIADO = p_fk_padre)
             USING ERRCODE = '22023';
     END IF;
     IF v_padre.FK_PADRE IS NOT NULL THEN
-        RAISE EXCEPTION 'Solo se permite un nivel de anidamiento: el padre (%) ya es una evidencia, no un enunciado', p_fk_padre
+        RAISE EXCEPTION 'Solo se permite un nivel de anidamiento: "%" ya es una evidencia, no un enunciado.',
+            (SELECT CASE WHEN LENGTH(e.TEXTO) > 80 THEN LEFT(e.TEXTO, 77) || '...' ELSE e.TEXTO END
+                     FROM academico_test.TREFERENTE_ENUNCIADO e WHERE e.PK_REFERENTE_ENUNCIADO = p_fk_padre)
             USING ERRCODE = '22023';
     END IF;
 END;

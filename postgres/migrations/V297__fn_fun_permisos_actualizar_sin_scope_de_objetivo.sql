@@ -97,6 +97,7 @@ DECLARE
     v_perm           RECORD;
     v_fk_sede_op     BIGINT;
     v_fk_rol_op      BIGINT;
+    v_fk_usuario_op  BIGINT;
 BEGIN
     -- =====================================================================
     -- 1. Validar existencia y estado del TFUNCIONARIO. Resolver PK_TUSUARIO
@@ -261,9 +262,16 @@ BEGIN
                 CONTINUE;
             END IF;
 
-            SELECT FK_TSEDE, FK_TROL INTO v_fk_sede_op, v_fk_rol_op
+            SELECT FK_TSEDE, FK_TROL, FK_TUSUARIO INTO v_fk_sede_op, v_fk_rol_op, v_fk_usuario_op
               FROM academico_test.TSEDE_USUARIO
              WHERE PK_TSEDE_USUARIO = v_perm.id;
+
+            -- Nadie se quita sus propios permisos: podria quedarse sin acceso
+            -- a la pantalla desde la que los recupera.
+            IF v_fk_usuario_op = p_pk_usuario_solicitante THEN
+                RAISE EXCEPTION 'No puede quitarse sus propios permisos.'
+                    USING ERRCODE = '42501';
+            END IF;
 
             IF FOUND AND NOT v_es_super
                AND NOT (v_fk_sede_op = ANY(v_sedes_plenas))

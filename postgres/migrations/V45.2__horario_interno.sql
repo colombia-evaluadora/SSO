@@ -410,7 +410,7 @@ BEGIN
             WHILE v_pendientes > 0 LOOP
                 IF v_idx >= v_capacidad THEN
                     RAISE EXCEPTION
-                        'El horario del grado "%" no alcanza: la jornada da % dia(s) x % bloque(s) = % celdas y el plan de estudio pide mas. Reduci la intensidad horaria o ampliá los bloques del periodo.',
+                        'El horario del grado "%" no alcanza: la jornada da % dia(s) x % bloque(s) = % celdas y el plan de estudio pide mas. Reduzca la intensidad horaria o amplíe los bloques del periodo.',
                         v_grado_nom, array_length(v_dias, 1), v_bloques, v_capacidad
                         USING ERRCODE = '22023';
                 END IF;

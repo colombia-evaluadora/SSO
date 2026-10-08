@@ -60,10 +60,10 @@ BEGIN
 
     IF v_suma + NEW.PONDERACION > 100 THEN
         RAISE EXCEPTION
-          'La ponderacion de % (asignatura %, grado %) ya suma %; con el % de % "%" llegaria a % (maximo 100)',
-          lower(academico_test.fn_planeador_rotulo_pluralizar(academico_test.fn_unidad_rotulo(NEW.FK_REFERENTE_CURRICULAR))),
-          NEW.FK_TASIGNATURA, NEW.FK_TGRADO, v_suma, NEW.PONDERACION,
-          academico_test.fn_unidad_rotulo(NEW.FK_REFERENTE_CURRICULAR), NEW.NOMBRE, v_suma + NEW.PONDERACION
+          'En % (grado %) la ponderación ya suma %; con el % de "%" llegaría a %, y no puede pasar de 100%%.',
+          (SELECT a.NOMBRE FROM academico_test.TASIGNATURA a WHERE a.PK_TASIGNATURA = NEW.FK_TASIGNATURA),
+          (SELECT g.NOMBRE FROM academico_test.TGRADO g WHERE g.PK_TGRADO = NEW.FK_TGRADO),
+          trim_scale(v_suma)::TEXT || '%', trim_scale(NEW.PONDERACION)::TEXT || '%', NEW.NOMBRE, trim_scale(v_suma + NEW.PONDERACION)::TEXT || '%'
           USING ERRCODE = '23514';
     END IF;
 

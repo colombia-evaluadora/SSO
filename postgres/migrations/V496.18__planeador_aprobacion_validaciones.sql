@@ -316,7 +316,7 @@ DECLARE
     v_estado VARCHAR := academico_test.fn_solicitud_aprobacion_estado(p_pk);
 BEGIN
     IF v_estado IS DISTINCT FROM 'PENDIENTE' THEN
-        RAISE EXCEPTION 'La solicitud de aprobación % ya fue resuelta (%)', p_pk, initcap(lower(v_estado))
+        RAISE EXCEPTION 'Esta solicitud ya fue %, así que no se puede resolver de nuevo.', COALESCE(lower(v_estado), 'resuelta')
             USING ERRCODE = '22023';
     END IF;
 END;

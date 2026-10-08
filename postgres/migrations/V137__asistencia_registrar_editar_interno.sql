@@ -77,8 +77,11 @@ BEGIN
 
     v_fk_periodo := academico_test.fn_asistencia_periodo_eval(p_fk_tgrupo, p_fecha);
     IF v_fk_periodo IS NULL THEN
-        RAISE EXCEPTION 'no hay periodo de evaluacion activo para el grupo % que contenga la fecha %',
-            p_fk_tgrupo, p_fecha USING ERRCODE = '22023';
+        RAISE EXCEPTION 'No hay un periodo de evaluación activo para el grupo % que incluya la fecha %.',
+            (SELECT format('%s del grado %s', gr.NOMBRE, g.NOMBRE)
+               FROM academico_test.TGRUPO gr
+               JOIN academico_test.TGRADO g ON g.PK_TGRADO = gr.FK_TGRADO
+              WHERE gr.PK_TGRUPO = p_fk_tgrupo), to_char(p_fecha, 'DD/MM/YYYY') USING ERRCODE = '22023';
     END IF;
 
     -- TARCHIVO.FK_TSEDE es la sede propietaria del archivo (V22): sin esto,

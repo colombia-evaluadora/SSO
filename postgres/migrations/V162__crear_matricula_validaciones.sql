@@ -198,13 +198,23 @@ BEGIN
      WHERE m.PK_TMATRICULA = p_pk_tmatricula;
 
     IF v_fecha_fin IS NULL THEN
-        RAISE EXCEPTION 'No se pudo resolver el periodo academico de la matricula %', p_pk_tmatricula
+        RAISE EXCEPTION 'No se pudo identificar el periodo académico de la matrícula de %.',
+            (SELECT CONCAT_WS(' ', u.PRIMER_NOMBRE, u.SEGUNDO_NOMBRE, u.PRIMER_APELLIDO, u.SEGUNDO_APELLIDO)
+               FROM academico_test.TMATRICULA m
+               JOIN academico_test.TESTUDIANTE es ON es.PK_TESTUDIANTE = m.FK_TESTUDIANTE
+               JOIN academico_test.TUSUARIO u ON u.PK_TUSUARIO = es.FK_TUSUARIO
+              WHERE m.PK_TMATRICULA = p_pk_tmatricula)
             USING ERRCODE = '23503';
     END IF;
 
     IF v_fecha_fin < CURRENT_DATE THEN
-        RAISE EXCEPTION 'No se puede % la matricula %: su periodo academico (%) termino el %',
-            p_accion, p_pk_tmatricula, COALESCE(v_periodo_nombre, 'sin nombre'), v_fecha_fin
+        RAISE EXCEPTION 'No se puede % la matrícula de %: su periodo académico (%) terminó el %.',
+            p_accion, (SELECT CONCAT_WS(' ', u.PRIMER_NOMBRE, u.SEGUNDO_NOMBRE, u.PRIMER_APELLIDO, u.SEGUNDO_APELLIDO)
+               FROM academico_test.TMATRICULA m
+               JOIN academico_test.TESTUDIANTE es ON es.PK_TESTUDIANTE = m.FK_TESTUDIANTE
+               JOIN academico_test.TUSUARIO u ON u.PK_TUSUARIO = es.FK_TUSUARIO
+              WHERE m.PK_TMATRICULA = p_pk_tmatricula),
+            COALESCE(v_periodo_nombre, 'sin nombre'), to_char(v_fecha_fin, 'DD/MM/YYYY')
             USING ERRCODE = '22023',
                   HINT    = 'Las acciones sobre una matricula solo se permiten mientras su periodo academico siga en curso';
     END IF;

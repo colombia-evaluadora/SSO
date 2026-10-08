@@ -128,7 +128,7 @@ BEGIN
           AND ACTIVE = TRUE
           AND PK_ESTABLECIMIENTO <> p_pk_establecimiento
     ) THEN
-        RAISE EXCEPTION 'Ya existe otro TESTABLECIMIENTO activo con NIT %', p_nit
+        RAISE EXCEPTION 'Ya existe otro establecimiento activo con el NIT %.', p_nit
             USING ERRCODE = '23505',
                   HINT    = 'Use fn_est_buscar_por_nit('') para localizar el registro que ya lo usa';
     END IF;
@@ -143,7 +143,7 @@ BEGIN
           AND ACTIVE = TRUE
           AND PK_ESTABLECIMIENTO <> p_pk_establecimiento
     ) THEN
-        RAISE EXCEPTION 'Ya existe otro TESTABLECIMIENTO activo con CODIGO %', p_codigo
+        RAISE EXCEPTION 'Ya existe otro establecimiento activo con el código DANE %.', p_codigo
             USING ERRCODE = '23505',
                   HINT    = 'Use una consulta directa sobre TESTABLECIMIENTO para localizar el registro que ya lo usa';
     END IF;
@@ -535,8 +535,15 @@ BEGIN
                   ))
               );
             IF v_perm_result.status IS DISTINCT FROM 'creado' THEN
-                RAISE EXCEPTION 'No se pudo crear el permiso del nuevo rector (TFUNCIONARIO %) en la sede %: %',
-                    p_FK_TFUNCIONARIO_RECTOR, v_pk_sede_loop, v_perm_result.status;
+                RAISE EXCEPTION 'No se pudo dar permiso al nuevo rector, %, en la sede %: %.',
+                    (SELECT CONCAT_WS(' ', u.PRIMER_NOMBRE, u.SEGUNDO_NOMBRE, u.PRIMER_APELLIDO, u.SEGUNDO_APELLIDO)
+                   FROM academico_test.TFUNCIONARIO f
+                   JOIN academico_test.TUSUARIO u ON u.PK_TUSUARIO = f.FK_TUSUARIO
+                  WHERE f.PK_TFUNCIONARIO = p_FK_TFUNCIONARIO_RECTOR),
+                    (SELECT s.NOMBRE FROM academico_test.TSEDE s WHERE s.PK_TSEDE = v_pk_sede_loop), CASE v_perm_result.status
+                         WHEN 'error:sin_permiso_en_sede' THEN 'no tiene permisos sobre esa sede'
+                         ELSE 'faltan datos del permiso'
+                    END;
             END IF;
         END IF;
 
@@ -566,8 +573,15 @@ BEGIN
                   ))
               );
             IF v_perm_result.status IS DISTINCT FROM 'creado' THEN
-                RAISE EXCEPTION 'No se pudo crear el permiso de la nueva secretaria (TFUNCIONARIO %) en la sede %: %',
-                    p_FK_TFUNCIONARIO_SECRETARIA, v_pk_sede_loop, v_perm_result.status;
+                RAISE EXCEPTION 'No se pudo dar permiso a la nueva secretaria, %, en la sede %: %.',
+                    (SELECT CONCAT_WS(' ', u.PRIMER_NOMBRE, u.SEGUNDO_NOMBRE, u.PRIMER_APELLIDO, u.SEGUNDO_APELLIDO)
+                   FROM academico_test.TFUNCIONARIO f
+                   JOIN academico_test.TUSUARIO u ON u.PK_TUSUARIO = f.FK_TUSUARIO
+                  WHERE f.PK_TFUNCIONARIO = p_FK_TFUNCIONARIO_SECRETARIA),
+                    (SELECT s.NOMBRE FROM academico_test.TSEDE s WHERE s.PK_TSEDE = v_pk_sede_loop), CASE v_perm_result.status
+                         WHEN 'error:sin_permiso_en_sede' THEN 'no tiene permisos sobre esa sede'
+                         ELSE 'faltan datos del permiso'
+                    END;
             END IF;
         END IF;
 

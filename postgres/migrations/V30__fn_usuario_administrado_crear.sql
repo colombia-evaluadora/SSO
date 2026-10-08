@@ -178,8 +178,8 @@ BEGIN
            AND IDENTIFICACION = TRIM(p_identificacion)
            AND ACTIVE = TRUE
     ) THEN
-        RAISE EXCEPTION 'ya existe un usuario activo con tipo_documento=%, identificacion=%',
-            p_fk_tlv_tipo_documento, TRIM(p_identificacion)
+        RAISE EXCEPTION 'Ya existe un usuario activo con el documento % (%).',
+            TRIM(p_identificacion), COALESCE((SELECT lv.NOMBRE FROM academico_test.TLISTA_VALOR lv WHERE lv.PK_LISTA_VALOR = p_fk_tlv_tipo_documento), 'documento')
             USING ERRCODE = '23505';
     END IF;
 
