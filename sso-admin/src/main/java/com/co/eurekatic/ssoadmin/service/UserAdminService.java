@@ -316,8 +316,25 @@ public class UserAdminService {
      */
     @Transactional
     public UserResponse updateAccount(UpdateAccountRequest req) {
+        return updateAccount(req, null);
+    }
+
+    /**
+     * Igual que {@link #updateAccount(UpdateAccountRequest)}, con la app de
+     * origen ({@code ?app=}) para armar el enlace de la invitacion.
+     *
+     * <p>Si la cuenta sigue en {@link UserStatus#PENDING_ACTIVATION} y el
+     * correo cambia, la invitacion original quedo en un buzon que ya no es el
+     * de la cuenta: se emite un token NUEVO ({@link TokenService#issueActivationToken}
+     * sobrescribe el anterior, asi que el enlace viejo deja de servir) y se
+     * reenvia la invitacion al correo nuevo. Cuentas activas o inactivas no
+     * reciben invitacion.
+     */
+    @Transactional
+    public UserResponse updateAccount(UpdateAccountRequest req, String appName) {
         User user = userRepository.findById(req.id())
                 .orElseThrow(() -> new NotFoundException("User", req.id()));
+        String previousEmail = user.getEmail();
 
         if (req.fullName() != null) user.setFullName(req.fullName());
         if (req.email() != null) {
@@ -356,7 +373,19 @@ public class UserAdminService {
             }
         }
 
+        boolean reinvite = user.getStatus() == UserStatus.PENDING_ACTIVATION
+                && user.getEmail() != null
+                && !user.getEmail().equalsIgnoreCase(previousEmail);
+        if (reinvite) {
+            tokenService.issueActivationToken(user);
+        }
+
         User saved = userRepository.save(user);
+        if (reinvite) {
+            publishActivationEmail(saved, appName != null ? appName : resolveAppName(saved));
+            log.info("Email of pending user {} changed; activation re-sent to '{}'",
+                    saved.getId(), saved.getEmail());
+        }
         if (req.roleNames() != null) {
             // Roles just changed — drop the cache so the next
             // /login (or /auth/refresh) re-reads the new set

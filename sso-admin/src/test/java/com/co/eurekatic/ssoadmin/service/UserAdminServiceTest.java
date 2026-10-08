@@ -265,6 +265,55 @@ class UserAdminServiceTest {
         verify(roleRepository, never()).findByName(anyString());
     }
 
+    @Test
+    void updateAccountOfPendingUserWithNewEmailReissuesInvitationToNewEmail() {
+        User existing = new User();
+        existing.setId(8L);
+        existing.setEmail("old@example.com");
+        existing.setActive(true);
+        existing.setEnabled(false);
+        when(userRepository.findById(8L)).thenReturn(Optional.of(existing));
+        when(userRepository.save(any(User.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        service.updateAccount(new UpdateAccountRequest(8L, null, "new@example.com", null, null, null), "PIGSE");
+
+        verify(tokenService).issueActivationToken(existing);
+        verify(events).publish(eq("email"), eq("8"), eq("new@example.com"),
+                eq("account-activation"), any(), any(), eq("PIGSE"));
+    }
+
+    @Test
+    void updateAccountOfActiveUserWithNewEmailDoesNotSendInvitation() {
+        User existing = new User();
+        existing.setId(9L);
+        existing.setEmail("old@example.com");
+        existing.setActive(true);
+        existing.setEnabled(true);
+        when(userRepository.findById(9L)).thenReturn(Optional.of(existing));
+        when(userRepository.save(any(User.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        service.updateAccount(new UpdateAccountRequest(9L, null, "new@example.com", null, null, null), null);
+
+        verify(tokenService, never()).issueActivationToken(any());
+        verify(events, never()).publish(any(), any(), any(),
+                eq("account-activation"), any(), any(), any());
+    }
+
+    @Test
+    void updateAccountOfPendingUserWithSameEmailDoesNotSendInvitation() {
+        User existing = new User();
+        existing.setId(10L);
+        existing.setEmail("same@example.com");
+        existing.setActive(true);
+        existing.setEnabled(false);
+        when(userRepository.findById(10L)).thenReturn(Optional.of(existing));
+        when(userRepository.save(any(User.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        service.updateAccount(new UpdateAccountRequest(10L, "Nuevo", "SAME@example.com", null, null, null), null);
+
+        verify(tokenService, never()).issueActivationToken(any());
+    }
+
     /* ====================== activateAccount ====================== */
 
     @Test
