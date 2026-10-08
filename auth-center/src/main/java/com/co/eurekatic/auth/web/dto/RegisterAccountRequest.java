@@ -1,5 +1,7 @@
 package com.co.eurekatic.auth.web.dto;
 
+import com.co.eurekatic.common.util.EmailNormalizer;
+
 import jakarta.validation.constraints.Email;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotEmpty;
@@ -22,4 +24,8 @@ public record RegisterAccountRequest(
         @NotBlank @Size(max = 200) String fullName,
         @NotEmpty List<@NotBlank @Size(max = 140) String> roleNames,
         @Positive Long establecimientoId
-) {}
+) {
+    public RegisterAccountRequest {
+        email = EmailNormalizer.normalize(email);
+    }
+}
