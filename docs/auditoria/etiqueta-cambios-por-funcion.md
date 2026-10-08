@@ -242,3 +242,11 @@ Ninguno de los dos guardados declaraba etiqueta. Al partirlos en wrapper + núcl
 |---|---|---|---|
 | `fn_informe_periodo_guardar` | Tras `fn_informe_assert_grupo_propio` (existencia → período del grupo → gate EDITAR → Regla 76 → grupo propio), antes de `fn_informe_periodo_guardar_interno`. | `Guardado del informe del periodo %s del grupo %s` | Sí — `v_fk_ee` y `v_fk_sede`, del mismo `SELECT` de contexto que alimenta el gate. |
 | `fn_informe_planilla_guardar` | Mismo punto; además va después de `fn_planilla_grupo_asignatura_assert`. | `Guardado de la planilla de %s del grupo %s, periodo %s` | Sí — mismo patrón. |
+
+## V544 — configuración de matrícula (editar un campo)
+
+`fn_matricula_config_editar_campo` escribía `TMATRICULA_VALOR` sin etiqueta. Al partirla en wrapper + núcleo (`V543`) la declaración queda en el wrapper, después del gate y de las validaciones del cambio y del campo, y antes de `fn_matricula_config_editar_campo_interno`.
+
+| Función | Posición | Etiqueta | Info extra |
+|---|---|---|---|
+| `fn_matricula_config_editar_campo` | Tras `fn_matricula_config_validar_campo_editable`, antes del núcleo. | `Configuracion de matricula de %s: campo %s` | Sí — el establecimiento resuelto (`v_fk_est`); sin sede, porque la configuración es del establecimiento. |
