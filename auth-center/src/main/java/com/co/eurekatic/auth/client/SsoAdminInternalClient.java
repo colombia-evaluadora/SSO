@@ -9,7 +9,10 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientResponseException;
 
+import com.co.eurekatic.auth.web.dto.EstadoCuentaFuncionarioResponse;
+
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -79,7 +82,74 @@ public class SsoAdminInternalClient {
         }
     }
 
+    /**
+     * Estado de cuenta por correo (tabla de funcionarios). Un 400 de
+     * sso-admin (p. ej. mas de 200 correos) -> {@link IllegalArgumentException}
+     * (400); otro fallo -> {@link IllegalStateException} (500).
+     */
+    public List<EstadoCuentaFuncionarioResponse> accountStatus(List<String> correos) {
+        requireToken();
+        try {
+            EstadoCuentaFuncionarioResponse[] out = http.post()
+                    .uri("/internal/funcionario/estado-cuenta")
+                    .header(HEADER, token)
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(Map.of("correos", correos))
+                    .retrieve()
+                    .body(EstadoCuentaFuncionarioResponse[].class);
+            return out == null ? List.of() : List.of(out);
+        } catch (RestClientResponseException e) {
+            int status = e.getStatusCode().value();
+            if (status == 400) {
+                throw new IllegalArgumentException(messageOf(e, "No se pudo consultar el estado de las cuentas"));
+            }
+            log.error("sso-admin respondio {} al consultar estado de cuentas", status, e);
+            throw new IllegalStateException("No se pudo consultar el estado de las cuentas", e);
+        }
+    }
+
+    /**
+     * Reenvia la activacion de un funcionario pendiente. A diferencia de
+     * {@link #reactivateAfterEmailChange}, el front necesita distinguir
+     * 404 (sin cuenta) y 409 (cuenta activa/inactiva): se propagan con su
+     * status y mensaje via {@link SsoAdminStatusException}; un 400 sigue
+     * siendo {@link IllegalArgumentException}.
+     */
+    public void resendActivation(String correo, String app) {
+        requireToken();
+        try {
+            http.post()
+                    .uri(b -> b.path("/internal/funcionario/reenviar-activacion")
+                            .queryParam("app", app).build())
+                    .header(HEADER, token)
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(Map.of("correo", correo))
+                    .retrieve()
+                    .toBodilessEntity();
+        } catch (RestClientResponseException e) {
+            int status = e.getStatusCode().value();
+            if (status == 404 || status == 409) {
+                throw new SsoAdminStatusException(status, messageOf(e));
+            }
+            if (status == 400) {
+                throw new IllegalArgumentException(messageOf(e));
+            }
+            log.error("sso-admin respondio {} al reenviar la activacion", status, e);
+            throw new IllegalStateException("No se pudo enviar el correo de activación", e);
+        }
+    }
+
+    private void requireToken() {
+        if (token == null || token.isBlank()) {
+            throw new IllegalStateException("sso.internal.token no configurado en auth-center");
+        }
+    }
+
     private static String messageOf(RestClientResponseException e) {
+        return messageOf(e, "No se pudo enviar el correo de activación");
+    }
+
+    private static String messageOf(RestClientResponseException e, String fallback) {
         try {
             Map<?, ?> m = e.getResponseBodyAs(Map.class);
             Object msg = m == null ? null : m.get("message");
@@ -87,6 +157,6 @@ public class SsoAdminInternalClient {
         } catch (RuntimeException ignored) {
             // cuerpo no JSON: mensaje generico abajo
         }
-        return "No se pudo enviar el correo de activación";
+        return fallback;
     }
 }

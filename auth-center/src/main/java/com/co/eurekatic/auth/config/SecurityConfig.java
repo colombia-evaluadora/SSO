@@ -146,7 +146,11 @@ public class SecurityConfig {
                         // Cambio de correo de funcionario (CE / PIGSE): mismo gate role_endpoint
                         // que el alta; roles sembrados en V550 copiando los de /register/*/funcionario.
                         .requestMatchers(HttpMethod.POST, "/register/cval/funcionario/reactivar-por-cambio-de-correo",
-                                "/register/pigse/funcionario/reactivar-por-cambio-de-correo").access(authCenterAccessManager)
+                                "/register/pigse/funcionario/reactivar-por-cambio-de-correo",
+                                "/register/cval/funcionario/estado-cuenta",
+                                "/register/pigse/funcionario/estado-cuenta",
+                                "/register/cval/funcionario/reenviar-activacion",
+                                "/register/pigse/funcionario/reenviar-activacion").access(authCenterAccessManager)
                         .requestMatchers(HttpMethod.POST, "/register/usuario").access(authCenterAccessManager)
                         .requestMatchers(HttpMethod.POST, "/register/account").access(authCenterAccessManager)
                         // /actuator/prometheus is read by the Grafana Alloy
