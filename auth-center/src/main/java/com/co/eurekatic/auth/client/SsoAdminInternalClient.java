@@ -74,8 +74,12 @@ public class SsoAdminInternalClient {
                     .toBodilessEntity();
         } catch (RestClientResponseException e) {
             int status = e.getStatusCode().value();
-            if (status == 400 || status == 404 || status == 409) {
-                throw new IllegalArgumentException(messageOf(e));
+            // Cualquier 4xx es un rechazo de negocio (incluye 422 de correo
+            // invalido, que antes caia como 500 generico y ocultaba el motivo).
+            if (status >= 400 && status < 500 && status != 401 && status != 403) {
+                String msg = messageOf(e);
+                log.warn("sso-admin rechazo la reactivacion por cambio de correo ({}): {}", status, msg);
+                throw new IllegalArgumentException(msg);
             }
             log.error("sso-admin respondio {} al reactivar por cambio de correo", status, e);
             throw new IllegalStateException("No se pudo enviar el correo de activación", e);

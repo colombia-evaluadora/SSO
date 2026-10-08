@@ -46,8 +46,9 @@ public class UserController {
     }
 
     @PutMapping("/updateAccount")
-    public UserResponse updateAccount(@Valid @RequestBody UpdateAccountRequest req) {
-        return service.updateAccount(req);
+    public UserResponse updateAccount(@Valid @RequestBody UpdateAccountRequest req,
+                                      @RequestParam(value = "app", required = false) String app) {
+        return service.updateAccount(req, app);
     }
 
     /**
