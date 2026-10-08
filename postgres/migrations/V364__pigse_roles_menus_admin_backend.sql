@@ -427,7 +427,7 @@ SELECT gen_random_uuid()::text,
            CAST(:BODY.PATH AS VARCHAR),
            CAST(:BODY.ICON AS VARCHAR),
            CAST(:BODY.IDPARENT AS BIGINT),
-           TRUE  -- ver nota 8.5 al final del archivo
+           TRUE
        )$q$,
        'postgres', false, false, m.id_microservice, '/menus/:ID', 'SELECT', 'PATCH',
        '{"PARAM.ID":"BIGINT","BODY.NAME":"Nullable(VARCHAR)","BODY.PATH":"Nullable(VARCHAR)","BODY.ICON":"Nullable(VARCHAR)","BODY.IDPARENT":"Nullable(BIGINT)"}'::jsonb,
