@@ -125,6 +125,7 @@ public class UserAdminService {
      * académica) nunca aparecía en el roster de su app.
      */
     private final JdbcTemplate jdbc;
+    private final FuncionarioAccountProvisioner funcionarioProvisioner;
 
     public UserAdminService(UserRepository userRepository,
                             RoleRepository roleRepository,
@@ -136,7 +137,8 @@ public class UserAdminService {
                             NotificationEventPublisher events,
                             SessionInvalidationClient sessionInvalidationClient,
                             CacheManager cacheManager,
-                            JdbcTemplate jdbc) {
+                            JdbcTemplate jdbc,
+                            FuncionarioAccountProvisioner funcionarioProvisioner) {
         this.userRepository = userRepository;
         this.roleRepository = roleRepository;
         this.appRepository = appRepository;
@@ -148,6 +150,7 @@ public class UserAdminService {
         this.sessionInvalidationClient = sessionInvalidationClient;
         this.cacheManager = cacheManager;
         this.jdbc = jdbc;
+        this.funcionarioProvisioner = funcionarioProvisioner;
     }
 
     /**
@@ -272,10 +275,17 @@ public class UserAdminService {
             throw new IllegalArgumentException(
                     "La cuenta todavía tiene el correo anterior: guarda primero el cambio de correo.");
         }
-        User user = findByEmailIgnoreCase(nuevo).orElseThrow(() -> {
+        Optional<User> cuentaNueva = findByEmailIgnoreCase(nuevo);
+        if (cuentaNueva.isEmpty()) {
+            // Ni el correo anterior ni el nuevo tienen cuenta: funcionario
+            // migrado sin cuenta SSO. Se le crea con el correo NUEVO y se invita.
+            if (inviteFuncionarioWithoutAccount(nuevo, appName)) {
+                return;
+            }
             log.warn("Reactivacion por cambio de correo rechazada: no hay cuenta con el correo nuevo '{}'", nuevo);
-            return new NotFoundException("User", nuevo);
-        });
+            throw new NotFoundException("User", nuevo);
+        }
+        User user = cuentaNueva.get();
         if (user.getStatus() == UserStatus.INACTIVE) {
             log.warn("Reactivacion por cambio de correo rechazada: la cuenta '{}' esta INACTIVE", nuevo);
             throw new InvalidUserStateException("Reenviar la activación", user.getStatus(), UserStatus.ACTIVE);
@@ -336,8 +346,14 @@ public class UserAdminService {
     @Transactional
     public void resendActivationByEmail(String correo, String appName) {
         String email = normalizeEmail(correo);
-        User user = findByEmailIgnoreCase(email)
-                .orElseThrow(() -> new NotFoundException("User", email));
+        Optional<User> cuenta = findByEmailIgnoreCase(email);
+        if (cuenta.isEmpty()) {
+            if (inviteFuncionarioWithoutAccount(email, appName)) {
+                return;
+            }
+            throw new NotFoundException("User", email);
+        }
+        User user = cuenta.get();
         switch (user.getStatus()) {
             case ACTIVE -> throw new InvalidUserStateException(
                     "La cuenta ya está activa; usa restablecer contraseña.");
@@ -349,6 +365,51 @@ public class UserAdminService {
         User saved = userRepository.save(user);
         publishActivationEmail(saved, appName != null ? appName : resolveAppName(saved));
         log.info("Reenviada la activación del funcionario '{}'", saved.getEmail());
+    }
+
+    /**
+     * Funcionario sin cuenta SSO (sin fila en {@code public.users}; en test
+     * la gran mayoria, migrados sin login): si el correo es de un funcionario
+     * ACTIVO de la app, se le crea la cuenta en PENDING_ACTIVATION con la
+     * misma forma que {@link #createAccount} (sin contrasena,
+     * {@code active=true, enabled=false}), se enlaza a su TUSUARIO con sus
+     * roles (ver {@link FuncionarioAccountProvisioner}) y se manda
+     * {@code account-activation} con el enlace de la app.
+     *
+     * @return {@code false} si el correo no es de un funcionario activo de la
+     *         app (el caller mantiene el 404).
+     */
+    private boolean inviteFuncionarioWithoutAccount(String email, String appName) {
+        Optional<FuncionarioAccountProvisioner.Funcionario> encontrado =
+                funcionarioProvisioner.findActiveFuncionario(email, appName);
+        if (encontrado.isEmpty()) {
+            log.warn("Sin cuenta SSO y sin funcionario activo de '{}' para '{}': no se invita", appName, email);
+            return false;
+        }
+        FuncionarioAccountProvisioner.Funcionario f = encontrado.get();
+        String loginEmail = f.email() == null || f.email().isBlank() ? email : EmailNormalizer.normalize(f.email());
+        // Distinta capitalizacion que la buscada: si ya existe, no se duplica.
+        if (!loginEmail.equals(email) && findByEmailIgnoreCase(loginEmail).isPresent()) {
+            throw new UserDuplicateException(loginEmail);
+        }
+
+        User user = new User();
+        user.setEmail(loginEmail);
+        user.setFullName(f.fullName());
+        user.setActive(true);
+        user.setEnabled(false);
+        user.setLdap(false);
+        tokenService.issueActivationToken(user);
+        // Flush: lo que sigue es SQL plano (JdbcTemplate) que lee esta fila.
+        User saved = userRepository.saveAndFlush(user);
+        funcionarioProvisioner.linkAndSyncRoles(f, saved.getId(), appName);
+
+        sessionInvalidationClient.invalidate(saved.getEmail());
+        evictUserByEmailCache(saved.getEmail());
+        publishActivationEmail(saved, appName);
+        log.info("Creada la cuenta PENDING_ACTIVATION del funcionario '{}' ({}) e invitado",
+                saved.getEmail(), appName);
+        return true;
     }
 
     private Optional<User> findByEmailIgnoreCase(String email) {
