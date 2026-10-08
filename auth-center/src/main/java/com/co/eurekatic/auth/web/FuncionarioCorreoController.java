@@ -16,7 +16,7 @@ import org.springframework.web.bind.annotation.RestController;
  * la activacion al correo nuevo con el enlace de la app.
  *
  * <p>Va junto a {@code /register/{cval,pigse}/funcionario} y con su mismo
- * gate (role_endpoint via AuthCenterAccessManager, sembrado en V549 para los
+ * gate (role_endpoint via AuthCenterAccessManager, sembrado en V550 para los
  * mismos roles que registran funcionarios). La app sale de la RUTA, igual que
  * en el alta, no de un parametro del caller. El trabajo real lo hace
  * sso-admin por {@code /internal/**} (ver {@link SsoAdminInternalClient}).

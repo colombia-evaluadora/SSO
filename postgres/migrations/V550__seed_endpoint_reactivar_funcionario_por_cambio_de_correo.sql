@@ -1,5 +1,5 @@
 -- ===========================================================================
--- V549 - registra en el catalogo los endpoints de auth-center
+-- V550 - registra en el catalogo los endpoints de auth-center
 --          POST /register/cval/funcionario/reactivar-por-cambio-de-correo
 --          POST /register/pigse/funcionario/reactivar-por-cambio-de-correo
 --        SOLO DATOS (endpoint, role_endpoint, endpoint_microservice): no

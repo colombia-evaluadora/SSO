@@ -144,7 +144,7 @@ public class SecurityConfig {
                         // (Path=/api/auth/register/**, StripPrefix=2) sin tocar api-gateway.
                         .requestMatchers(HttpMethod.POST, "/register/pigse/funcionario").access(authCenterAccessManager)
                         // Cambio de correo de funcionario (CE / PIGSE): mismo gate role_endpoint
-                        // que el alta; roles sembrados en V549 copiando los de /register/*/funcionario.
+                        // que el alta; roles sembrados en V550 copiando los de /register/*/funcionario.
                         .requestMatchers(HttpMethod.POST, "/register/cval/funcionario/reactivar-por-cambio-de-correo",
                                 "/register/pigse/funcionario/reactivar-por-cambio-de-correo").access(authCenterAccessManager)
                         .requestMatchers(HttpMethod.POST, "/register/usuario").access(authCenterAccessManager)
