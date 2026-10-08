@@ -291,8 +291,10 @@ COMMENT ON FUNCTION academico_test.fn_assert_rango_rol_otorgable(BIGINT, BIGINT)
 -- 4) Rango DENTRO de un establecimiento, para los permisos de sede.
 -- ---------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION academico_test.fn_usuario_rango_en_ee(
-    p_pk_tusuario BIGINT,
-    p_pk_ee       BIGINT
+    p_pk_tusuario           BIGINT,
+    p_pk_ee                 BIGINT,
+    p_excluir_tsede_usuario BIGINT DEFAULT NULL,
+    p_con_punteros          BOOLEAN DEFAULT TRUE
 )
 RETURNS TABLE (nivel INT, peso NUMERIC)
 LANGUAGE sql
@@ -305,6 +307,7 @@ AS $$
          WHERE su.FK_TUSUARIO = p_pk_tusuario
            AND su.ACTIVE = TRUE
            AND s.FK_TESTABLECIMIENTO = p_pk_ee
+           AND su.PK_TSEDE_USUARIO IS DISTINCT FROM p_excluir_tsede_usuario
         UNION
         SELECT r.PK_TROL
           FROM academico_test.TESTABLECIMIENTO e
@@ -312,6 +315,7 @@ AS $$
           JOIN academico_test.TROL r ON r.CODIGO = 'RECTOR'
          WHERE e.PK_ESTABLECIMIENTO = p_pk_ee AND e.ACTIVE = TRUE
            AND f.ACTIVE = TRUE AND f.FK_TUSUARIO = p_pk_tusuario
+           AND p_con_punteros
         UNION
         SELECT r.PK_TROL
           FROM academico_test.TESTABLECIMIENTO e
@@ -319,6 +323,7 @@ AS $$
           JOIN academico_test.TROL r ON r.CODIGO = 'JEFE_SISTEMA_ESTABLECIMIENTO'
          WHERE e.PK_ESTABLECIMIENTO = p_pk_ee AND e.ACTIVE = TRUE
            AND f.ACTIVE = TRUE AND f.FK_TUSUARIO = p_pk_tusuario
+           AND p_con_punteros
     )
     SELECT academico_test.fn_rol_categoria_nivel(r.PK_TROL), r.PESO_CATEGORIA
       FROM roles
@@ -327,8 +332,8 @@ AS $$
      LIMIT 1;
 $$;
 
-COMMENT ON FUNCTION academico_test.fn_usuario_rango_en_ee(BIGINT, BIGINT)
-    IS 'El rol de mas autoridad de un usuario DENTRO de un establecimiento: nivel de categoria (fn_rol_categoria_nivel) y TROL.PESO_CATEGORIA, entre sus TSEDE_USUARIO activas en sedes de ese EE y los punteros de rector y secretaria (Jefe de sistema) de ese EE. Ninguna fila si no tiene rol ahi. Lo que pasa en otro establecimiento no cuenta: un docente de este EE que es rector en otro es docente aqui. Lo usa fn_fun_permisos_actualizar por operacion.';
+COMMENT ON FUNCTION academico_test.fn_usuario_rango_en_ee(BIGINT, BIGINT, BIGINT, BOOLEAN)
+    IS 'El rol de mas autoridad de un usuario DENTRO de un establecimiento: nivel de categoria (fn_rol_categoria_nivel) y TROL.PESO_CATEGORIA, entre sus TSEDE_USUARIO activas en sedes de ese EE y los punteros de rector y secretaria (Jefe de sistema) de ese EE. Ninguna fila si no tiene rol ahi. p_excluir_tsede_usuario deja fuera un permiso, para saber que rango le quedaria al quitarlo; p_con_punteros = FALSE cuenta solo los permisos de sede, que son los que dan menus y acceso. Lo que pasa en otro establecimiento no cuenta: un docente de este EE que es rector en otro es docente aqui. Lo usa fn_fun_permisos_actualizar por operacion.';
 
 CREATE OR REPLACE FUNCTION academico_test.fn_rango_supera(
     p_nivel_a INT, p_peso_a NUMERIC,

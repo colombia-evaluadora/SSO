@@ -99,6 +99,7 @@ DECLARE
     v_fk_rol_op      BIGINT;
     v_fk_usuario_op  BIGINT;
     v_ee             BIGINT;
+    v_existe         BOOLEAN;
     v_nivel_actor    INT;
     v_peso_actor     NUMERIC;
     v_nivel_obj      INT;
@@ -310,12 +311,24 @@ BEGIN
             SELECT FK_TSEDE, FK_TROL, FK_TUSUARIO INTO v_fk_sede_op, v_fk_rol_op, v_fk_usuario_op
               FROM academico_test.TSEDE_USUARIO
              WHERE PK_TSEDE_USUARIO = v_perm.id;
+            v_existe := FOUND;
 
-            -- Nadie se quita sus propios permisos: podria quedarse sin acceso
-            -- a la pantalla desde la que los recupera.
-            IF v_fk_usuario_op = p_pk_usuario_solicitante THEN
-                RAISE EXCEPTION 'No puede quitarse sus propios permisos.'
-                    USING ERRCODE = '42501';
+            -- Uno puede quitarse permisos propios, pero no el que le da su rango
+            -- mas alto en ese establecimiento: se quedaria sin la autoridad para
+            -- devolverselo. Si otro permiso le deja el mismo rango, si puede. Solo
+            -- cuentan los permisos de sede (dan menus y acceso), no los punteros.
+            IF v_existe AND v_fk_usuario_op = p_pk_usuario_solicitante THEN
+                v_ee := (SELECT s.FK_TESTABLECIMIENTO FROM academico_test.TSEDE s WHERE s.PK_TSEDE = v_fk_sede_op);
+                SELECT nivel, peso INTO v_nivel_actor, v_peso_actor
+                  FROM academico_test.fn_usuario_rango_en_ee(p_pk_usuario_solicitante, v_ee, NULL, FALSE);
+                SELECT nivel, peso INTO v_nivel_obj, v_peso_obj
+                  FROM academico_test.fn_usuario_rango_en_ee(p_pk_usuario_solicitante, v_ee, v_perm.id, FALSE);
+                IF academico_test.fn_rango_supera(v_nivel_actor, v_peso_actor, v_nivel_obj, v_peso_obj) THEN
+                    RAISE EXCEPTION 'No puede quitarse su rol de mayor rango (%) en %: otra persona con autoridad tendría que hacerlo.',
+                        (SELECT r.NOMBRE FROM academico_test.TROL r WHERE r.PK_TROL = v_fk_rol_op),
+                        (SELECT e.NOMBRE FROM academico_test.TESTABLECIMIENTO e WHERE e.PK_ESTABLECIMIENTO = v_ee)
+                        USING ERRCODE = '42501';
+                END IF;
             END IF;
 
             IF v_fk_rol_op = v_pk_trol_director THEN
@@ -323,7 +336,7 @@ BEGIN
                     USING ERRCODE = '22023';
             END IF;
 
-            IF FOUND AND NOT v_es_super
+            IF v_existe AND NOT v_es_super
                AND NOT (v_fk_sede_op = ANY(v_sedes_plenas))
                AND NOT (v_fk_sede_op = ANY(v_sedes_coord)
                         AND academico_test.fn_rol_categoria_nivel(v_fk_rol_op) = 3)
@@ -333,7 +346,7 @@ BEGIN
                 CONTINUE;
             END IF;
 
-            IF FOUND AND NOT v_es_super THEN
+            IF v_existe AND NOT v_es_super THEN
                 v_ee := (SELECT s.FK_TESTABLECIMIENTO FROM academico_test.TSEDE s WHERE s.PK_TSEDE = v_fk_sede_op);
                 SELECT nivel, peso INTO v_nivel_actor, v_peso_actor
                   FROM academico_test.fn_usuario_rango_en_ee(p_pk_usuario_solicitante, v_ee);
