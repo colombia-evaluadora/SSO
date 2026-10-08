@@ -1744,6 +1744,8 @@ services:
       # esa instancia no esta levantada, los reportes de Auditoria
       # responden 502 y los academicos siguen funcionando.
       REPORTING_AUDIT_CVAL_URL: "${REPORTING_AUDIT_CVAL_URL:-http://query-service-audit-clickhouse-cval:8084}"
+      # Instancia del catalogo PIGSE (V549): claves pigse-*.
+      REPORTING_PIGSE_URL: "${REPORTING_PIGSE_URL:-http://query-service-pigse:8084}"
       REPORTING_MAX_ROWS: "${REPORTING_MAX_ROWS:-50000}"
       # De donde baja las imagenes que van DENTRO de un reporte: el fondo
       # del boletin, la foto del estudiante y las evidencias (V465/V466).
