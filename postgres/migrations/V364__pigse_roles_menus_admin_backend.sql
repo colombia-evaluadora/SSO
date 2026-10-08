@@ -427,7 +427,7 @@ SELECT gen_random_uuid()::text,
            CAST(:BODY.PATH AS VARCHAR),
            CAST(:BODY.ICON AS VARCHAR),
            CAST(:BODY.IDPARENT AS BIGINT),
-           jsonb_exists(CAST(:BODY_RAW AS JSONB), 'idParent')
+           TRUE  -- ver nota 8.5 al final del archivo
        )$q$,
        'postgres', false, false, m.id_microservice, '/menus/:ID', 'SELECT', 'PATCH',
        '{"PARAM.ID":"BIGINT","BODY.NAME":"Nullable(VARCHAR)","BODY.PATH":"Nullable(VARCHAR)","BODY.ICON":"Nullable(VARCHAR)","BODY.IDPARENT":"Nullable(BIGINT)"}'::jsonb,
@@ -492,15 +492,26 @@ SELECT gen_random_uuid()::text,
  WHERE m.serviceid = 'pigse'
    AND NOT EXISTS (SELECT 1 FROM public.query WHERE microservice_id = m.id_microservice AND path_template = '/roles/:ROLEID/menus' AND http_method = 'PUT');
 
--- 8.5: el operador jsonb `?` chocaba con los placeholders con nombre del
--- query-service ("Not allowed to mix named and traditional ? placeholders").
+-- 8.5: el ultimo argumento (p_tiene_parent) no se puede derivar del body:
+--   * `(:BODY_RAW ? 'idParent')` choca con los placeholders con nombre
+--     ("Not allowed to mix named and traditional ? placeholders").
+--   * `:BODY_RAW` a secas no existe: el query-service solo publica
+--     BODY_RAW.<CAMPO> (QueryPathController.buildParams) -> "Falta el
+--     parametro obligatorio 'BODY_RAW'".
+--   * ParamBinder bindea un Nullable ausente como NULL, asi que ausente e
+--     `idParent: null` son indistinguibles.
+-- Mismo criterio que CE (eval-col-menus-update-001 -> fn_upsert_menu): el
+-- form de edicion SIEMPRE manda idParent (null = menu raiz), asi que el
+-- padre se aplica siempre (p_tiene_parent = TRUE). Idempotente: cubre las
+-- dos versiones previas de la fila (id 309 en prod).
 UPDATE public.query q
-   SET query = replace(q.query, '(:BODY_RAW ? ''idParent'')',
-                       'jsonb_exists(CAST(:BODY_RAW AS JSONB), ''idParent'')')
+   SET query = replace(replace(q.query,
+                   '(:BODY_RAW ? ''idParent'')', 'TRUE'),
+                   'jsonb_exists(CAST(:BODY_RAW AS JSONB), ''idParent'')', 'TRUE')
   FROM public.microservice m
  WHERE m.id_microservice = q.microservice_id AND m.serviceid = 'pigse'
    AND q.path_template = '/menus/:ID' AND q.http_method = 'PATCH'
-   AND q.query LIKE '%:BODY_RAW ? %';
+   AND q.query LIKE '%:BODY_RAW%';
 
 -- 8.8/8.9 en servidores que ya tenian las filas (los INSERT de arriba no las pisan).
 UPDATE public.query q
