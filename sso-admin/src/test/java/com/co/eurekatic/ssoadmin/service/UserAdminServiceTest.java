@@ -700,6 +700,70 @@ class UserAdminServiceTest {
 
     /* ====================== helpers ====================== */
 
+    /* ============ reactivateAfterEmailChange ============ */
+
+    private static User activeUser(String email) {
+        User u = new User();
+        u.setId(9L);
+        u.setEmail(email);
+        u.setActive(true);
+        u.setEnabled(true);
+        return u;
+    }
+
+    @Test
+    void reactivateAfterEmailChangeSendsActivationToNewEmail() {
+        User u = activeUser("nuevo@example.com");
+        when(userRepository.findByEmail("viejo@example.com")).thenReturn(Optional.empty());
+        when(userRepository.findByEmail("nuevo@example.com")).thenReturn(Optional.of(u));
+        when(userRepository.save(any(User.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        service.reactivateAfterEmailChange(new com.co.eurekatic.ssoadmin.dto.EmailChangeReactivationRequest(
+                "viejo@example.com", "nuevo@example.com"), "PIGSE");
+
+        assertThat(u.getStatus()).isEqualTo(User.UserStatus.PENDING_ACTIVATION);
+        verify(tokenService).issueActivationToken(u);
+        verify(sessionInvalidationClient).invalidate("viejo@example.com");
+        verify(sessionInvalidationClient).invalidate("nuevo@example.com");
+        verify(events).publish(eq("email"), eq("9"), eq("nuevo@example.com"),
+                eq("account-activation"), any(), any(), eq("PIGSE"));
+    }
+
+    @Test
+    void reactivateAfterEmailChangeRejectsSameEmailIgnoringCase() {
+        assertThatThrownBy(() -> service.reactivateAfterEmailChange(
+                new com.co.eurekatic.ssoadmin.dto.EmailChangeReactivationRequest(
+                        "Nuevo@Example.com", "nuevo@example.com"), null))
+                .isInstanceOf(IllegalArgumentException.class);
+        verify(userRepository, never()).save(any());
+    }
+
+    @Test
+    void reactivateAfterEmailChangeRejectsWhenOldEmailStillExists() {
+        when(userRepository.findByEmail("viejo@example.com"))
+                .thenReturn(Optional.of(activeUser("viejo@example.com")));
+
+        assertThatThrownBy(() -> service.reactivateAfterEmailChange(
+                new com.co.eurekatic.ssoadmin.dto.EmailChangeReactivationRequest(
+                        "viejo@example.com", "nuevo@example.com"), null))
+                .isInstanceOf(IllegalArgumentException.class);
+        verify(userRepository, never()).save(any());
+    }
+
+    @Test
+    void reactivateAfterEmailChangeRejectsInactiveAccount() {
+        User u = activeUser("nuevo@example.com");
+        u.setActive(false);
+        when(userRepository.findByEmail("viejo@example.com")).thenReturn(Optional.empty());
+        when(userRepository.findByEmail("nuevo@example.com")).thenReturn(Optional.of(u));
+
+        assertThatThrownBy(() -> service.reactivateAfterEmailChange(
+                new com.co.eurekatic.ssoadmin.dto.EmailChangeReactivationRequest(
+                        "viejo@example.com", "nuevo@example.com"), null))
+                .isInstanceOf(com.co.eurekatic.ssoadmin.exception.InvalidUserStateException.class);
+        verify(userRepository, never()).save(any());
+    }
+
     private static <T> T eq(T value) {
         return org.mockito.ArgumentMatchers.eq(value);
     }

@@ -11,6 +11,7 @@ import com.co.eurekatic.common.security.PasswordPolicy;
 import com.co.eurekatic.ssoadmin.client.SessionInvalidationClient;
 import com.co.eurekatic.ssoadmin.config.EmailProperties;
 import com.co.eurekatic.ssoadmin.dto.CreateAccountRequest;
+import com.co.eurekatic.ssoadmin.dto.EmailChangeReactivationRequest;
 import com.co.eurekatic.ssoadmin.dto.ForgotPasswordResponse;
 import com.co.eurekatic.ssoadmin.dto.ResetTokenStatusResponse;
 import com.co.eurekatic.ssoadmin.dto.UpdateAccountRequest;
@@ -226,6 +227,64 @@ public class UserAdminService {
         User saved = userRepository.save(user);
         publishActivationEmail(saved, appName != null ? appName : resolveAppName(saved));
         log.info("Resent activation email for user '{}'", saved.getEmail());
+    }
+
+    /**
+     * Cambio de correo de un funcionario (Colombia Evaluadora / PIGSE).
+     *
+     * <p>La edicion del funcionario corre por query-service y el correo se
+     * sincroniza a {@code public.users} en SQL (V215), que no puede mandar
+     * correos. El front llama a este metodo DESPUES de guardar: la cuenta
+     * vuelve a PENDING_ACTIVATION ({@code enabled=false}, no puede iniciar
+     * sesion), se rota el token de activacion, se invalidan las sesiones y se
+     * manda {@code account-activation} al correo NUEVO con el enlace de la
+     * app indicada. Al activar, el usuario fija su contrasena (flujo
+     * existente de {@link #activateAccount}).
+     *
+     * <p>Guardas contra el abuso (reactivar una cuenta ajena sin cambio real):
+     * los correos deben diferir sin distinguir mayusculas, la cuenta con el
+     * correo nuevo debe existir (la sincronizacion ya ocurrio) y NO debe
+     * quedar ninguna cuenta con el correo anterior. Una cuenta INACTIVE no se
+     * toca (la baja la decide un admin, no un cambio de correo).
+     */
+    @Transactional
+    public void reactivateAfterEmailChange(EmailChangeReactivationRequest req, String appName) {
+        String anterior = req.correoAnterior() == null ? "" : req.correoAnterior().trim();
+        String nuevo = req.correoNuevo() == null ? "" : req.correoNuevo().trim();
+        if (!EMAIL_REGEX.matcher(nuevo).matches()) {
+            throw new EmailInvalidException(nuevo);
+        }
+        if (anterior.equalsIgnoreCase(nuevo)) {
+            throw new IllegalArgumentException("El correo no cambió: no hay nada que reactivar.");
+        }
+        if (findByEmailIgnoreCase(anterior).isPresent()) {
+            throw new IllegalArgumentException(
+                    "La cuenta todavía tiene el correo anterior: guarda primero el cambio de correo.");
+        }
+        User user = findByEmailIgnoreCase(nuevo)
+                .orElseThrow(() -> new NotFoundException("User", nuevo));
+        if (user.getStatus() == UserStatus.INACTIVE) {
+            throw new InvalidUserStateException("Reenviar la activación", user.getStatus(), UserStatus.ACTIVE);
+        }
+
+        user.setEnabled(false);
+        tokenService.issueActivationToken(user);
+        User saved = userRepository.save(user);
+        sessionInvalidationClient.invalidate(anterior);
+        sessionInvalidationClient.invalidate(saved.getEmail());
+        evictUserByEmailCache(anterior);
+        evictUserByEmailCache(saved.getEmail());
+        publishActivationEmail(saved, appName != null ? appName : resolveAppName(saved));
+        log.info("Cuenta '{}' vuelve a PENDING_ACTIVATION por cambio de correo; activación enviada",
+                saved.getEmail());
+    }
+
+    private Optional<User> findByEmailIgnoreCase(String email) {
+        if (email == null || email.isBlank()) return Optional.empty();
+        Optional<User> exacto = userRepository.findByEmail(email);
+        if (exacto.isPresent()) return exacto;
+        String lower = email.toLowerCase(java.util.Locale.ROOT);
+        return lower.equals(email) ? Optional.empty() : userRepository.findByEmail(lower);
     }
 
     private void publishActivationEmail(User user, String appName) {
