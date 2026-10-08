@@ -2,6 +2,7 @@ package com.co.eurekatic.ssoadmin.controller;
 
 import com.co.eurekatic.ssoadmin.dto.BindUserRoleRequest;
 import com.co.eurekatic.ssoadmin.dto.CreateAccountRequest;
+import com.co.eurekatic.ssoadmin.dto.EmailChangeReactivationRequest;
 import com.co.eurekatic.ssoadmin.dto.ForgotPasswordResponse;
 import com.co.eurekatic.ssoadmin.dto.ResetTokenStatusResponse;
 import com.co.eurekatic.ssoadmin.dto.TokenPasswordRequest;
@@ -142,6 +143,21 @@ public class UserController {
     public void resendActivation(@PathVariable Long id,
                                   @RequestParam(value = "app", required = false) String app) {
         service.resendActivation(id, app);
+    }
+
+    /**
+     * Cambio de correo de un funcionario (fronts CE y PIGSE, despues de
+     * guardar la edicion): la cuenta vuelve a PENDING_ACTIVATION y se manda
+     * el correo de activacion al correo nuevo con el enlace de {@code app}.
+     * Gate estandar de sso-admin (role_app SSO-ADMIN + role_endpoint), con
+     * los roles que pueden registrar funcionarios (ver V549). 400 si el
+     * cambio de correo no ocurrio de verdad.
+     */
+    @PostMapping("/funcionario/reactivar-por-cambio-de-correo")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void reactivateAfterEmailChange(@Valid @RequestBody EmailChangeReactivationRequest req,
+                                           @RequestParam(value = "app", required = false) String app) {
+        service.reactivateAfterEmailChange(req, app);
     }
 
     /**
