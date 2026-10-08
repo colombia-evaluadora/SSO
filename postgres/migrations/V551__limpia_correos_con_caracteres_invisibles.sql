@@ -34,7 +34,15 @@ UPDATE public.users u
    AND NOT EXISTS (
        SELECT 1 FROM public.users o
         WHERE o.id_user <> u.id_user
-          AND o.email = btrim(regexp_replace(u.email, '[​-‍⁠﻿ ]', '', 'g')));
+          AND o.email = btrim(regexp_replace(u.email, '[​-‍⁠﻿ ]', '', 'g')))
+   -- El trigger de V215 copia el email limpio a academico_test.tusuario.CUENTA,
+   -- que es unica entre activos (u_tusuario_1). Si OTRO tusuario activo ya
+   -- tiene esa cuenta (p. ej. un funcionario duplicado sin fila en users), el
+   -- UPDATE abortaba el deploy (test, 2026-10-08): se salta y queda a mano.
+   AND NOT EXISTS (
+       SELECT 1 FROM academico_test.tusuario o
+        WHERE o.active = true
+          AND o.cuenta = btrim(regexp_replace(u.email, '[​-‍⁠﻿ ]', '', 'g')));
 
 -- academico_test.tusuario.CUENTA (unico entre activos: u_tusuario_1)
 UPDATE academico_test.tusuario t
