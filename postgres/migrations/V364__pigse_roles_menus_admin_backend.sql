@@ -275,12 +275,17 @@ END;
 $$;
 
 -- ---------------------------------------------------------------------------
--- 7. Rol -> menús asignados: reemplaza el conjunto completo.
+-- 7. Rol -> menús asignados: reemplaza el conjunto completo. p_menus es
+--    [{"id":n,"soloLectura":bool}] (un numero suelto = sin solo lectura).
+--    Solo lectura = puede_ver y nada mas, igual que TROL_MENU.SOLO_LECTURA
+--    de CEVAL; las 4 columnas puede_* de role_route las agrega V370.
 -- ---------------------------------------------------------------------------
+DROP FUNCTION IF EXISTS public.fn_pigse_rol_rutas_actualizar(BIGINT, BIGINT, BIGINT[]);
+
 CREATE OR REPLACE FUNCTION public.fn_pigse_rol_rutas_actualizar(
-    p_id_user  BIGINT,
-    p_role_id  BIGINT,
-    p_menu_ids BIGINT[]
+    p_id_user BIGINT,
+    p_role_id BIGINT,
+    p_menus   JSONB
 )
 RETURNS TABLE (status VARCHAR, message VARCHAR)
 LANGUAGE plpgsql
@@ -295,25 +300,32 @@ BEGIN
     IF NOT EXISTS (SELECT 1 FROM public.role WHERE id_role = p_role_id) THEN
         RAISE EXCEPTION 'El rol (%) no existe', p_role_id USING ERRCODE = 'P0002';
     END IF;
+    IF p_menus IS NOT NULL AND jsonb_typeof(p_menus) <> 'array' THEN
+        RAISE EXCEPTION 'Se esperaba un array JSON de menus [{"id":..,"soloLectura":..}]'
+            USING ERRCODE = '22023';
+    END IF;
 
     SELECT a.id_app INTO v_id_app FROM public.app a WHERE a.name = 'PIGSE';
 
-    -- Solo se tocan los binds del rol que caen dentro del catalogo de
-    -- PIGSE -- si el mismo rol tuviera rutas de otra app (no aplica hoy,
-    -- pero la funcion queda correcta si algun dia pasa), esas no se
-    -- pierden.
+    -- Solo se tocan los binds del rol que caen dentro del catalogo de PIGSE.
     DELETE FROM public.role_route rr
      USING public.app_route ar
      WHERE rr.route_id = ar.id_route
        AND ar.id_app = v_id_app
        AND rr.role_id = p_role_id;
 
-    INSERT INTO public.role_route (role_id, route_id)
-    SELECT p_role_id, ar.id_route
-      FROM public.app_route ar
-     WHERE ar.id_app = v_id_app
-       AND ar.id_route = ANY(COALESCE(p_menu_ids, ARRAY[]::BIGINT[]))
-    ON CONFLICT DO NOTHING;
+    -- DISTINCT ON: un id repetido en el body no choca con la PK (route_id, role_id).
+    INSERT INTO public.role_route (role_id, route_id, puede_crear, puede_editar, puede_eliminar, puede_ver)
+    SELECT DISTINCT ON (m.id) p_role_id, m.id, NOT m.solo, NOT m.solo, NOT m.solo, TRUE
+      FROM (
+          SELECT CASE jsonb_typeof(e) WHEN 'number' THEN (e #>> '{}')::BIGINT
+                                      ELSE (e->>'id')::BIGINT END AS id,
+                 COALESCE(CASE WHEN jsonb_typeof(e) = 'object'
+                               THEN (e->>'soloLectura')::BOOLEAN END, FALSE) AS solo
+            FROM jsonb_array_elements(COALESCE(p_menus, '[]'::jsonb)) AS e
+      ) m
+      JOIN public.app_route ar ON ar.id_route = m.id AND ar.id_app = v_id_app
+     ORDER BY m.id, m.solo DESC;
 
     RETURN QUERY SELECT 'success'::VARCHAR, 'Menus del rol actualizados.'::VARCHAR;
 END;
@@ -429,7 +441,8 @@ SELECT gen_random_uuid()::text,
 -- 8.8 GET /roles/:ROLEID/menus
 INSERT INTO public.query (uuid, query, type, public_end, captcha, microservice_id, path_template, execution_mode, http_method, param_types, detail)
 SELECT gen_random_uuid()::text,
-       $q$SELECT r.id_route AS id
+       $q$SELECT r.id_route AS id,
+                 NOT (rr.puede_crear OR rr.puede_editar OR rr.puede_eliminar) AS "soloLectura"
             FROM public.role_route rr
             JOIN public.route r ON r.id_route = rr.route_id
             JOIN public.app_route ar ON ar.id_route = r.id_route
@@ -450,14 +463,41 @@ SELECT gen_random_uuid()::text,
        $q$SELECT * FROM public.fn_pigse_rol_rutas_actualizar(
            :CONTEXT.USER_ID::BIGINT,
            CAST(:PARAM.ROLEID AS BIGINT),
-           (SELECT array_agg(x::BIGINT) FROM jsonb_array_elements_text(CAST(:BODY.MENUIDS AS JSONB)) AS x)
+           CAST(:BODY.MENUS AS JSONB)
        )$q$,
        'postgres', false, false, m.id_microservice, '/roles/:ROLEID/menus', 'SELECT', 'PUT',
-       '{"PARAM.ROLEID":"BIGINT","BODY.MENUIDS":"JSONB"}'::jsonb,
-       'roles-permisos PIGSE: reemplaza los menus asignados a un rol (status/message).'
+       '{"PARAM.ROLEID":"BIGINT","BODY.MENUS":"JSONB"}'::jsonb,
+       'roles-permisos PIGSE: reemplaza los menus asignados a un rol, con soloLectura por menu (status/message).'
   FROM public.microservice m
  WHERE m.serviceid = 'pigse'
    AND NOT EXISTS (SELECT 1 FROM public.query WHERE microservice_id = m.id_microservice AND path_template = '/roles/:ROLEID/menus' AND http_method = 'PUT');
+
+-- 8.8/8.9 en servidores que ya tenian las filas (los INSERT de arriba no las pisan).
+UPDATE public.query q
+   SET query = $q$SELECT r.id_route AS id,
+                 NOT (rr.puede_crear OR rr.puede_editar OR rr.puede_eliminar) AS "soloLectura"
+            FROM public.role_route rr
+            JOIN public.route r ON r.id_route = rr.route_id
+            JOIN public.app_route ar ON ar.id_route = r.id_route
+            JOIN public.app a ON a.id_app = ar.id_app
+           WHERE a.name = 'PIGSE'
+             AND rr.role_id = CAST(:PARAM.ROLEID AS BIGINT)
+           ORDER BY r.menuorder$q$
+  FROM public.microservice m
+ WHERE m.id_microservice = q.microservice_id AND m.serviceid = 'pigse'
+   AND q.path_template = '/roles/:ROLEID/menus' AND q.http_method = 'GET';
+
+UPDATE public.query q
+   SET query = $q$SELECT * FROM public.fn_pigse_rol_rutas_actualizar(
+           :CONTEXT.USER_ID::BIGINT,
+           CAST(:PARAM.ROLEID AS BIGINT),
+           CAST(:BODY.MENUS AS JSONB)
+       )$q$,
+       param_types = '{"PARAM.ROLEID":"BIGINT","BODY.MENUS":"JSONB"}'::jsonb,
+       detail = 'roles-permisos PIGSE: reemplaza los menus asignados a un rol, con soloLectura por menu (status/message).'
+  FROM public.microservice m
+ WHERE m.id_microservice = q.microservice_id AND m.serviceid = 'pigse'
+   AND q.path_template = '/roles/:ROLEID/menus' AND q.http_method = 'PUT';
 
 -- 8.10 GET /plans (stub vacio -- PIGSE no tiene concepto de plan comercial)
 INSERT INTO public.query (uuid, query, type, public_end, captcha, microservice_id, path_template, execution_mode, http_method, param_types, detail)
