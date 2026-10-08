@@ -1,5 +1,7 @@
 package com.co.eurekatic.ssoadmin.dto;
 
+import com.co.eurekatic.common.util.EmailNormalizer;
+
 import jakarta.validation.constraints.Email;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
@@ -15,4 +17,9 @@ import jakarta.validation.constraints.Size;
 public record EmailChangeReactivationRequest(
         @NotBlank @Email @Size(max = 200) String correoAnterior,
         @NotBlank @Email @Size(max = 200) String correoNuevo
-) {}
+) {
+    public EmailChangeReactivationRequest {
+        correoAnterior = EmailNormalizer.normalize(correoAnterior);
+        correoNuevo = EmailNormalizer.normalize(correoNuevo);
+    }
+}

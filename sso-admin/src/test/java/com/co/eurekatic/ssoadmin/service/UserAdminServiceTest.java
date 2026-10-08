@@ -764,6 +764,31 @@ class UserAdminServiceTest {
         verify(userRepository, never()).save(any());
     }
 
+    @Test
+    void reactivateAfterEmailChangeStripsInvisibleCharacters() {
+        User u = activeUser("nuevo@example.com");
+        when(userRepository.findByEmail("viejo@example.com")).thenReturn(Optional.empty());
+        when(userRepository.findByEmail("nuevo@example.com")).thenReturn(Optional.of(u));
+        when(userRepository.save(any(User.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        service.reactivateAfterEmailChange(new com.co.eurekatic.ssoadmin.dto.EmailChangeReactivationRequest(
+                "⁠viejo@example.com", "​nuevo@example.com "), "PIGSE");
+
+        assertThat(u.getStatus()).isEqualTo(User.UserStatus.PENDING_ACTIVATION);
+        verify(sessionInvalidationClient).invalidate("viejo@example.com");
+    }
+
+    @Test
+    void reactivateAfterEmailChangeRejectsUnknownNewEmail() {
+        when(userRepository.findByEmail(any())).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> service.reactivateAfterEmailChange(
+                new com.co.eurekatic.ssoadmin.dto.EmailChangeReactivationRequest(
+                        "viejo@example.com", "nuevo@example.com"), null))
+                .isInstanceOf(com.co.eurekatic.ssoadmin.exception.NotFoundException.class);
+        verify(userRepository, never()).save(any());
+    }
+
     private static <T> T eq(T value) {
         return org.mockito.ArgumentMatchers.eq(value);
     }

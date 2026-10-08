@@ -55,6 +55,17 @@ class SsoAdminInternalClientTest {
     }
 
     @Test
+    void un422DeSsoAdminTambienEsRechazoConMensaje() {
+        server.expect(requestTo(URL)).andRespond(withStatus(HttpStatus.UNPROCESSABLE_ENTITY)
+                .contentType(MediaType.APPLICATION_JSON)
+                .body("{\"message\":\"Correo invalido\"}"));
+
+        assertThatThrownBy(() -> client.reactivateAfterEmailChange("a@x.co", "b@x.co", "PIGSE"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("Correo invalido");
+    }
+
+    @Test
     void un401EsErrorDeInfraestructura() {
         server.expect(requestTo(URL)).andRespond(withStatus(HttpStatus.UNAUTHORIZED));
 
