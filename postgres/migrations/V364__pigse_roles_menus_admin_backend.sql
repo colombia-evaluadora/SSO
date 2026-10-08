@@ -142,8 +142,17 @@ BEGIN
      WHERE ar.id_app = v_id_app
        AND r.idparent IS NOT DISTINCT FROM p_id_parent;
 
-    INSERT INTO public.route (name, path, icon, menuorder, idparent)
-    VALUES (TRIM(p_name), NULLIF(TRIM(p_path), ''), NULLIF(TRIM(p_icon), ''), v_order, p_id_parent)
+    -- codigo (V370) se deriva del path: la pantalla no lo pide, y sin el
+    -- pigse.fn_usuario_puede_en_menu no reconoce el menu (todo FALSE).
+    INSERT INTO public.route (name, path, icon, menuorder, idparent, codigo)
+    VALUES (TRIM(p_name), NULLIF(TRIM(p_path), ''), NULLIF(TRIM(p_icon), ''), v_order, p_id_parent,
+            CASE WHEN p_id_parent IS NOT NULL THEN
+                CASE regexp_replace(TRIM(COALESCE(p_path, '')), '^/?(app/)?', '')
+                    WHEN 'establecimiento-educativo/general'      THEN 'ESTABLECIMIENTO'
+                    WHEN 'establecimiento-educativo/sedes'        THEN 'SEDES_EDUCATIVAS'
+                    WHEN 'establecimiento-educativo/funcionarios' THEN 'FUNCIONARIOS'
+                END
+            END)
     RETURNING id_route INTO v_id_route;
 
     INSERT INTO public.app_route (id_app, id_route) VALUES (v_id_app, v_id_route);
@@ -190,6 +199,17 @@ BEGIN
            path  = CASE WHEN p_path IS NULL THEN path ELSE NULLIF(TRIM(p_path), '') END,
            icon  = CASE WHEN p_icon IS NULL THEN icon ELSE NULLIF(TRIM(p_icon), '') END,
            idparent = CASE WHEN p_tiene_parent THEN p_id_parent ELSE idparent END
+     WHERE id_route = p_id;
+
+    -- Mismo criterio que fn_pigse_ruta_crear, sobre el path/padre ya guardados.
+    UPDATE public.route
+       SET codigo = CASE WHEN idparent IS NOT NULL THEN
+                        CASE regexp_replace(TRIM(COALESCE(path, '')), '^/?(app/)?', '')
+                            WHEN 'establecimiento-educativo/general'      THEN 'ESTABLECIMIENTO'
+                            WHEN 'establecimiento-educativo/sedes'        THEN 'SEDES_EDUCATIVAS'
+                            WHEN 'establecimiento-educativo/funcionarios' THEN 'FUNCIONARIOS'
+                        END
+                    END
      WHERE id_route = p_id;
 
     RETURN QUERY
@@ -277,8 +297,8 @@ $$;
 -- ---------------------------------------------------------------------------
 -- 7. Rol -> menús asignados: reemplaza el conjunto completo. p_menus es
 --    [{"id":n,"soloLectura":bool}] (un numero suelto = sin solo lectura).
---    Solo lectura = puede_ver y nada mas, igual que TROL_MENU.SOLO_LECTURA
---    de CEVAL; las 4 columnas puede_* de role_route las agrega V370.
+--    Misma semantica que TROL_MENU.SOLO_LECTURA de CEVAL ('SI' = solo ver);
+--    la columna role_route.solo_lectura la agrega V370.
 -- ---------------------------------------------------------------------------
 DROP FUNCTION IF EXISTS public.fn_pigse_rol_rutas_actualizar(BIGINT, BIGINT, BIGINT[]);
 
@@ -407,7 +427,7 @@ SELECT gen_random_uuid()::text,
            CAST(:BODY.PATH AS VARCHAR),
            CAST(:BODY.ICON AS VARCHAR),
            CAST(:BODY.IDPARENT AS BIGINT),
-           (:BODY_RAW ? 'idParent')
+           jsonb_exists(CAST(:BODY_RAW AS JSONB), 'idParent')
        )$q$,
        'postgres', false, false, m.id_microservice, '/menus/:ID', 'SELECT', 'PATCH',
        '{"PARAM.ID":"BIGINT","BODY.NAME":"Nullable(VARCHAR)","BODY.PATH":"Nullable(VARCHAR)","BODY.ICON":"Nullable(VARCHAR)","BODY.IDPARENT":"Nullable(BIGINT)"}'::jsonb,
@@ -471,6 +491,16 @@ SELECT gen_random_uuid()::text,
   FROM public.microservice m
  WHERE m.serviceid = 'pigse'
    AND NOT EXISTS (SELECT 1 FROM public.query WHERE microservice_id = m.id_microservice AND path_template = '/roles/:ROLEID/menus' AND http_method = 'PUT');
+
+-- 8.5: el operador jsonb `?` chocaba con los placeholders con nombre del
+-- query-service ("Not allowed to mix named and traditional ? placeholders").
+UPDATE public.query q
+   SET query = replace(q.query, '(:BODY_RAW ? ''idParent'')',
+                       'jsonb_exists(CAST(:BODY_RAW AS JSONB), ''idParent'')')
+  FROM public.microservice m
+ WHERE m.id_microservice = q.microservice_id AND m.serviceid = 'pigse'
+   AND q.path_template = '/menus/:ID' AND q.http_method = 'PATCH'
+   AND q.query LIKE '%:BODY_RAW ? %';
 
 -- 8.8/8.9 en servidores que ya tenian las filas (los INSERT de arriba no las pisan).
 UPDATE public.query q
