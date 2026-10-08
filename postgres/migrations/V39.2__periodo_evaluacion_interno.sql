@@ -1,13 +1,51 @@
 -- ===========================================================================
 -- V39.2 -- Periodo de evaluacion: nucleos _interno
 -- ===========================================================================
--- QUE HACE: crear/actualizar/eliminar/listar/detalle sin permisos.
+-- QUE HACE: crear/actualizar/eliminar/listar/detalle sin permisos, y el
+-- estado automatico (Calificable dentro de las fechas, NO Calificable fuera).
 -- Validan con V39.1 antes de escribir; el gate y la auditoria van en V39.3.
 -- POR QUE AQUI: capa 2 del modulo (V39.1 / V39.2 / V39.3).
 -- DEPENDE DE: V22, V39.1.
 -- ===========================================================================
 
 SET search_path TO academico_test, public;
+
+CREATE OR REPLACE FUNCTION academico_test.fn_periodo_eval_sincronizar_estado_interno(
+    p_pk BIGINT DEFAULT NULL
+)
+RETURNS INTEGER LANGUAGE plpgsql AS $$
+DECLARE
+    v_calificable    BIGINT;
+    v_no_calificable BIGINT;
+    v_n              INTEGER;
+BEGIN
+    SELECT max(PK_LISTA_VALOR) FILTER (WHERE VALOR = '1'),
+           max(PK_LISTA_VALOR) FILTER (WHERE VALOR = '2')
+      INTO v_calificable, v_no_calificable
+      FROM academico_test.TLISTA_VALOR
+     WHERE CATEGORIA = 'ESTADOPERIODOEVALUACION';
+    IF v_calificable IS NULL OR v_no_calificable IS NULL THEN
+        RAISE WARNING 'Catalogo ESTADOPERIODOEVALUACION sin VALOR 1/2; no se sincroniza el estado';
+        RETURN 0;
+    END IF;
+
+    -- Las fechas solo alternan Calificable/NO Calificable. Los otros estados
+    -- (p. ej. En Recuperaciones, que habilita refuerzos) los pone el usuario y se respetan.
+    UPDATE academico_test.TPERIODO_EVALUACION
+       SET FK_TLV_ESTADO = CASE WHEN CURRENT_DATE BETWEEN FECHA_INICIO AND FECHA_FIN
+                                THEN v_calificable ELSE v_no_calificable END
+     WHERE ACTIVE = TRUE
+       AND (p_pk IS NULL OR PK_TPERIODO_EVALUACION = p_pk)
+       AND FK_TLV_ESTADO IN (v_calificable, v_no_calificable)
+       AND FK_TLV_ESTADO <> CASE WHEN CURRENT_DATE BETWEEN FECHA_INICIO AND FECHA_FIN
+                                 THEN v_calificable ELSE v_no_calificable END;
+    GET DIAGNOSTICS v_n = ROW_COUNT;
+    RETURN v_n;
+END;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_periodo_eval_sincronizar_estado_interno(BIGINT)
+    IS 'INTERNO: pone Calificable si hoy esta entre FECHA_INICIO y FECHA_FIN y NO Calificable si no; otros estados (En Recuperaciones...) no se tocan. p_pk NULL = todos. La usan fn_periodo_eval_crear_interno/_actualizar_interno y el job diario periodo-eval-estado. Devuelve filas cambiadas.';
 
 CREATE OR REPLACE FUNCTION academico_test.fn_periodo_eval_crear_interno(
     p_fk_periodo   BIGINT,
@@ -35,12 +73,13 @@ BEGIN
     VALUES (p_codigo, p_nombre, p_abreviacion, p_fecha_inicio, p_fecha_fin, p_fk_estado,
             p_fk_periodo, p_porcentaje, p_audit)
     RETURNING PK_TPERIODO_EVALUACION INTO v_id;
+    PERFORM academico_test.fn_periodo_eval_sincronizar_estado_interno(v_id);
     RETURN v_id;
 END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_periodo_eval_crear_interno(BIGINT, VARCHAR, VARCHAR, VARCHAR, DATE, DATE, BIGINT, NUMERIC, VARCHAR)
-    IS 'INTERNO: valida e inserta un periodo de evaluacion. Lo usa fn_periodo_eval_crear.';
+    IS 'INTERNO: valida e inserta un periodo de evaluacion y fija su estado por fechas. Lo usa fn_periodo_eval_crear.';
 
 -- Los NULL conservan el valor actual.
 CREATE OR REPLACE FUNCTION academico_test.fn_periodo_eval_actualizar_interno(
@@ -76,12 +115,13 @@ BEGIN
         FK_TLV_ESTADO = COALESCE(p_fk_estado, FK_TLV_ESTADO), PORCENTAJE = v_pct,
         MODIFIED_BY = p_audit, MODIFIED_AT = CURRENT_TIMESTAMP
      WHERE PK_TPERIODO_EVALUACION = p_pk;
+    PERFORM academico_test.fn_periodo_eval_sincronizar_estado_interno(p_pk);
     RETURN p_pk;
 END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_periodo_eval_actualizar_interno(BIGINT, VARCHAR, VARCHAR, VARCHAR, DATE, DATE, BIGINT, NUMERIC, VARCHAR)
-    IS 'INTERNO: valida y actualiza un periodo de evaluacion existente y activo. Lo usa fn_periodo_eval_actualizar.';
+    IS 'INTERNO: valida y actualiza un periodo de evaluacion existente y activo, y recalcula su estado por fechas. Lo usa fn_periodo_eval_actualizar.';
 
 CREATE OR REPLACE FUNCTION academico_test.fn_periodo_eval_eliminar_interno(p_pk BIGINT, p_audit VARCHAR)
 RETURNS BIGINT LANGUAGE plpgsql AS $$
