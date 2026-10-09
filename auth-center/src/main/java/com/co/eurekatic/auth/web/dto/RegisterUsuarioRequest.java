@@ -10,7 +10,11 @@ import java.time.LocalDate;
 public record RegisterUsuarioRequest(
     @NotBlank @Email @Size(max = 200) String email,
     @NotBlank @Size(max = 200) String fullName,
-    @NotBlank @Size(min = PasswordPolicy.MIN_LENGTH, max = PasswordPolicy.MAX_LENGTH) String password,
+    // password: opcional. Vacia o ausente en /register/{cval,pigse}/funcionario
+    // = alta por invitacion (cuenta PENDING_ACTIVATION + correo de activacion).
+    // Si viene, el servicio la valida con PasswordPolicy (contrato anterior,
+    // fronts viejos); /register/usuario la sigue exigiendo ahi mismo.
+    @Size(max = PasswordPolicy.MAX_LENGTH) String password,
     @NotBlank @Size(max = 30) String identificacion,
     @NotBlank @Size(max = 40) String primerNombre,
     @NotBlank @Size(max = 40) String primerApellido,
@@ -33,10 +37,32 @@ public record RegisterUsuarioRequest(
     @Size(max = 30) String telefono,
     @Email @Size(max = 120) String correoElectronico,
     @Positive Long fkTarchivoFoto,
-    @Size(max = 2) String visado
+    @Size(max = 2) String visado,
+    // enviarInvitacion: solo aplica al alta por invitacion de
+    // /register/{cval,pigse}/funcionario. Ausente = true. Con false la cuenta
+    // queda igual de PENDING_ACTIVATION pero no sale el correo: el front lo
+    // manda despues por /register/{app}/funcionario/reenviar-activacion (p. ej.
+    // rector/secretaria, solo si el establecimiento llego a crearse).
+    Boolean enviarInvitacion
 ) {
     public RegisterUsuarioRequest {
         email = EmailNormalizer.normalize(email);
         correoElectronico = EmailNormalizer.normalize(correoElectronico);
+    }
+
+    /** Contrato anterior (sin {@code enviarInvitacion}): invita por defecto. */
+    public RegisterUsuarioRequest(String email, String fullName, String password, String identificacion,
+                                  String primerNombre, String primerApellido, LocalDate fechaNacimiento,
+                                  Long fkTlvTipoDocumento, Long fkTlvGenero, String segundoNombre,
+                                  String segundoApellido, String telefono, String correoElectronico,
+                                  Long fkTarchivoFoto, String visado) {
+        this(email, fullName, password, identificacion, primerNombre, primerApellido, fechaNacimiento,
+                fkTlvTipoDocumento, fkTlvGenero, segundoNombre, segundoApellido, telefono,
+                correoElectronico, fkTarchivoFoto, visado, null);
+    }
+
+    /** {@code enviarInvitacion} ausente equivale a {@code true}. */
+    public boolean debeEnviarInvitacion() {
+        return !Boolean.FALSE.equals(enviarInvitacion);
     }
 }
