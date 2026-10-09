@@ -340,6 +340,7 @@ $$;
 COMMENT ON FUNCTION academico_test.fn_actividad_listar(BIGINT, VARCHAR, BIGINT, BIGINT, BIGINT, BIGINT, BIGINT, DATE, DATE, VARCHAR[], INT, BOOLEAN, VARCHAR, BOOLEAN, INT, INT, BIGINT, DATE, VARCHAR[])
     IS 'GET /planeador/actividades y POST /planeador/actividades/export-all: gate VER sobre PLANEADOR, alcance del usuario (fn_planeador_alcance_docente: sedes y, en nivel 3, pares sede+jornada) y delega en fn_actividad_listar_interno, que documenta filtros, orden y paginado por día. Devuelve t_actividad_listado_fila, la misma fila que /planeador/actividades/mias.';
 
+DROP FUNCTION IF EXISTS academico_test.fn_actividad_listar_docente(BIGINT, VARCHAR, BIGINT, BIGINT, BIGINT, VARCHAR[], INT, VARCHAR, BOOLEAN, INT, INT, DATE, VARCHAR[], BIGINT);
 CREATE OR REPLACE FUNCTION academico_test.fn_actividad_listar_docente(
     p_pk_usuario_solicitante   BIGINT,
     p_search                   VARCHAR   DEFAULT NULL,
@@ -354,7 +355,9 @@ CREATE OR REPLACE FUNCTION academico_test.fn_actividad_listar_docente(
     p_offset                   INT       DEFAULT 0,
     p_dia                      DATE      DEFAULT NULL,
     p_grado_asignatura_pares   VARCHAR[] DEFAULT NULL,
-    p_fk_tfuncionario          BIGINT    DEFAULT NULL
+    p_fk_tfuncionario          BIGINT    DEFAULT NULL,
+    p_fk_sede                  BIGINT DEFAULT NULL,
+    p_fk_periodo               BIGINT DEFAULT NULL
 )
 RETURNS SETOF academico_test.t_actividad_listado_fila
 LANGUAGE plpgsql
@@ -368,7 +371,7 @@ BEGIN
     );
 
     SELECT * INTO v_alc
-      FROM academico_test.fn_planeador_alcance_docente(p_pk_usuario_solicitante, p_fk_tfuncionario);
+      FROM academico_test.fn_planeador_alcance_docente(p_pk_usuario_solicitante, p_fk_tfuncionario, p_fk_sede, p_fk_periodo);
 
     -- Docente puro sin funcionario, o alcance total sin docente elegido: 0
     -- filas. Delegar con el filtro en NULL devolvería todo su alcance.
@@ -389,5 +392,5 @@ BEGIN
 END;
 $$;
 
-COMMENT ON FUNCTION academico_test.fn_actividad_listar_docente(BIGINT, VARCHAR, BIGINT, BIGINT, BIGINT, VARCHAR[], INT, VARCHAR, BOOLEAN, INT, INT, DATE, VARCHAR[], BIGINT)
+COMMENT ON FUNCTION academico_test.fn_actividad_listar_docente(BIGINT, VARCHAR, BIGINT, BIGINT, BIGINT, VARCHAR[], INT, VARCHAR, BOOLEAN, INT, INT, DATE, VARCHAR[], BIGINT, BIGINT, BIGINT)
     IS 'GET /planeador/actividades/mias: gate VER sobre PLANEADOR y las actividades que DICTA el docente resuelto por fn_planeador_alcance_docente, vía fn_actividad_listar_interno. Docente puro: las suyas (ignora p_fk_tfuncionario; sin funcionario, 0 filas). Otros con p_fk_tfuncionario (?funcionario=): las de ese docente dentro del alcance, 42501 si no dicta nada en él. Otros sin él: todo su alcance (nivel 3: sus pares sede+jornada); alcance total sin docente elegido: 0 filas. Solo activas; sin filtros de tipo, instrumento ni fechas. p_grado_asignatura_pares (V526): acota a una pestaña de Rotulo de Ejecucion (fn_planeador_actividad_tabs_listar, V525) -- VARCHAR[] de "grado:asignatura", nunca JSONB. Devuelve t_actividad_listado_fila, la misma fila que GET /planeador/actividades.';

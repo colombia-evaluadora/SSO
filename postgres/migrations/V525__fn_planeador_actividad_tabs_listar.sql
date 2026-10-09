@@ -203,9 +203,12 @@ COMMENT ON FUNCTION academico_test.fn_planeador_actividad_tabs_listar_interno(BI
 -- ---------------------------------------------------------------------------
 -- 3. Wrapper: gate + alcance + delegar.
 -- ---------------------------------------------------------------------------
+DROP FUNCTION IF EXISTS academico_test.fn_planeador_actividad_tabs_listar(BIGINT, BIGINT);
 CREATE OR REPLACE FUNCTION academico_test.fn_planeador_actividad_tabs_listar(
     p_pk_usuario_solicitante BIGINT,
-    p_fk_tfuncionario        BIGINT DEFAULT NULL
+    p_fk_tfuncionario        BIGINT DEFAULT NULL,
+    p_fk_sede                BIGINT DEFAULT NULL,
+    p_fk_periodo             BIGINT DEFAULT NULL
 )
 RETURNS TABLE (
     rotulo_ejecucion         VARCHAR,
@@ -228,7 +231,7 @@ BEGIN
     );
 
     SELECT * INTO v_alc
-      FROM academico_test.fn_planeador_alcance_docente(p_pk_usuario_solicitante, p_fk_tfuncionario);
+      FROM academico_test.fn_planeador_alcance_docente(p_pk_usuario_solicitante, p_fk_tfuncionario, p_fk_sede, p_fk_periodo);
 
     -- Docente elegido por quien administra: solo lo que ese docente dicta
     -- (sin la rama territorial), dentro del alcance.
@@ -249,7 +252,7 @@ BEGIN
 END;
 $$;
 
-COMMENT ON FUNCTION academico_test.fn_planeador_actividad_tabs_listar(BIGINT, BIGINT) IS
+COMMENT ON FUNCTION academico_test.fn_planeador_actividad_tabs_listar(BIGINT, BIGINT, BIGINT, BIGINT) IS
     'GET /planeador/actividades/tabs: las pestañas de Actividades del usuario
      autenticado, una por Rotulo de Ejecucion. Gate VER sobre PLANEADOR;
      alcance via fn_planeador_alcance_docente (el de los listados, y en
