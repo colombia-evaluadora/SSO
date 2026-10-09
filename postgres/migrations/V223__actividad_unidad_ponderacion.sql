@@ -55,9 +55,13 @@ CREATE OR REPLACE FUNCTION academico_test.fn_unidad_calculo_definitiva_modo(
     p_pk_tunidad   BIGINT
 )
 RETURNS VARCHAR
-LANGUAGE sql
+LANGUAGE plpgsql
 STABLE
 AS $$
+BEGIN
+    -- plpgsql y no sql: una sql con FROM no se incrusta y se replanifica en
+    -- cada llamada; aqui el plan queda en cache. Primera fila o NULL, como antes.
+    RETURN (SELECT * FROM (
     SELECT CASE lv.VALOR
                WHEN '2' THEN 'PONDERAR'
                WHEN '1' THEN 'PROMEDIAR'
@@ -66,7 +70,9 @@ AS $$
            END::VARCHAR
       FROM academico_test.TUNIDAD u
       JOIN academico_test.TLISTA_VALOR lv ON lv.PK_LISTA_VALOR = u.FK_TLV_CALCULO_DEFINITIVA
-     WHERE u.PK_TUNIDAD = p_pk_tunidad;
+     WHERE u.PK_TUNIDAD = p_pk_tunidad
+    ) q LIMIT 1);
+END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_unidad_calculo_definitiva_modo(BIGINT)

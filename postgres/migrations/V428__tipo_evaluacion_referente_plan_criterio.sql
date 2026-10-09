@@ -2,7 +2,7 @@
 -- V428 - El tipo de evaluacion sale del REFERENTE, no del criterio: primero el
 -- referente del (grado, asignatura), luego el plan de estudio y al final el
 -- criterio. Quedan fn_asignatura_tipo_evaluacion y fn_nota_homologar (con el
--- ROWS 1). fn_informe_estudiante_asignaturas y
+-- ROWS 1), que homologa con fn_nota_homologar_formato (formato ya resuelto). fn_informe_estudiante_asignaturas y
 -- fn_informe_periodo_requerido viven hoy como _interno en V536; aqui solo se
 -- crean si faltan, porque los DO de V439 y V496.24 las llaman al migrar una
 -- base limpia. fn_informe_grupo_listar vive en V490.
@@ -16,9 +16,13 @@ CREATE OR REPLACE FUNCTION academico_test.fn_grado_escala_aplicable(
     p_fk_tgrado BIGINT
 )
 RETURNS BIGINT
-LANGUAGE sql
+LANGUAGE plpgsql
 STABLE
 AS $function$
+BEGIN
+    -- plpgsql y no sql: una sql con FROM no se incrusta y se replanifica en
+    -- cada llamada; aqui el plan queda en cache. Primera fila o NULL, como antes.
+    RETURN (SELECT * FROM (
     -- El criterio general del periodo comparte PK con TPERIODO_ACADEMICO;
     -- sin escala ahi, la del nivel de ensenanza del grado ("cada nivel tendra
     -- su escala"), la mas reciente.
@@ -36,7 +40,9 @@ AS $function$
             AND ne.ACTIVE = TRUE
           WHERE g.PK_TGRADO = p_fk_tgrado
           ORDER BY ne.PK_TNIVEL_ESCALA DESC
-          LIMIT 1));
+          LIMIT 1))
+    ) q LIMIT 1);
+END;
 $function$;
 
 COMMENT ON FUNCTION academico_test.fn_grado_escala_aplicable(BIGINT)
@@ -249,6 +255,58 @@ $function$;
 COMMENT ON FUNCTION academico_test.fn_asignatura_tipo_evaluacion(BIGINT, BIGINT)
     IS 'Si una asignatura se evalua con NUMEROS o con DESEMPEÑOS en un grado dado, y con que escala. Resuelve la cadena que pide el negocio y que no estaba implementada: REFERENTE CURRICULAR -> PLAN DE ESTUDIO -> CRITERIO DE EVALUACION, y el primero que responde manda. Del referente: enfoque FORMATIVO o tipo CUALITATIVA dan cualitativo, CUANTITATIVA da numerico, y CUANTITATIVA_CUALITATIVA NO decide -- admite las dos, asi que la respuesta esta mas abajo. Se toma el referente mas especifico con la misma prioridad que fn_refcurr_por_grado_asignatura (0 lista mi area, 1 sin areas y por tanto aplica a todas las del nivel, 2 el resto). Esa funcion NO se reutiliza porque asserta PLANEADOR/VER y el informe reventaria con 42501 para quien tenga INFORMES y no PLANEADOR -- el mismo defecto que tenia el listado de grupos antes de V419. Del plan: FORMATO_CALIFICACION_DEF, con _ACT de respaldo; es la fuente mas poblada (9.746 filas contra 171 criterios y 3 referentes activos). Sin ninguna configuracion, cualitativo: mostrar numeros seria inventarlos. EL TIPO Y LA ESCALA SON PREGUNTAS DISTINTAS: la escala sale del criterio, que es el unico con FK_TESCALA y por tanto con bandas de desempeño, y si no hay criterio se cae al formato del plan, que da la nota maxima pero no las bandas. Cuando ni el criterio de la asignatura ni el plan traen bandas, la escala es la del grado (fn_grado_escala_aplicable: criterio del periodo y luego TNIVEL_ESCALA del nivel), con origen_escala NIVEL. origen_tipo y origen_escala dicen de donde salio cada una.';
 
+CREATE OR REPLACE FUNCTION academico_test.fn_nota_homologar_formato(
+    p_porcentaje     NUMERIC,
+    p_es_numerico    BOOLEAN,
+    p_formato_valor  VARCHAR,
+    p_formato_nombre VARCHAR,
+    p_nota_maxima    NUMERIC,
+    p_decimales      INT,
+    p_fk_tescala     BIGINT
+)
+ RETURNS TABLE(porcentaje numeric, nota_homologada numeric, formato_valor character varying, formato_nombre character varying, nota_maxima numeric, decimales integer, pk_tescala_valoracion bigint, valoracion_codigo character varying, valoracion_nombre character varying, valoracion_simbolo character varying)
+ LANGUAGE plpgsql
+ STABLE
+ ROWS 1
+AS $function$
+BEGIN
+    -- Sin porcentaje o sin escala configurada no se puede homologar: la fila
+    -- sale con todo en NULL (no sin fila), para que un LEFT JOIN LATERAL desde
+    -- un listado no pierda al estudiante sin calificar.
+    IF p_porcentaje IS NULL OR p_formato_valor IS NULL THEN
+        RETURN QUERY SELECT p_porcentaje, NULL::NUMERIC, NULL::VARCHAR, NULL::VARCHAR,
+                            NULL::NUMERIC, NULL::INT, NULL::BIGINT,
+                            NULL::VARCHAR, NULL::VARCHAR, NULL::VARCHAR;
+        RETURN;
+    END IF;
+
+    RETURN QUERY
+    SELECT p_porcentaje,
+           -- Solo los formatos numericos producen nota; en LITERAL/SIMBOLO/
+           -- CARITA el colegio no califica con un numero y forzar uno seria
+           -- inventarselo.
+           CASE WHEN p_es_numerico
+                THEN ROUND(p_porcentaje / 100 * p_nota_maxima, p_decimales)
+           END,
+           p_formato_valor,
+           p_formato_nombre,
+           p_nota_maxima,
+           p_decimales,
+           b.pk_tescala_valoracion,
+           b.valoracion_codigo,
+           b.valoracion_nombre,
+           b.valoracion_simbolo
+      -- LEFT JOIN LATERAL y no JOIN: si el porcentaje cae en un hueco entre
+      -- bandas la fila sale igual, con la valoracion en NULL.
+      FROM (SELECT 1) _base
+      LEFT JOIN LATERAL academico_test.fn_escala_valoracion_banda(
+                    p_fk_tescala, p_porcentaje) b ON TRUE;
+END;
+$function$;
+
+COMMENT ON FUNCTION academico_test.fn_nota_homologar_formato(NUMERIC, BOOLEAN, VARCHAR, VARCHAR, NUMERIC, INT, BIGINT)
+    IS 'Homologa un porcentaje (0-100) con un formato YA resuelto -- las columnas de fn_asignatura_tipo_evaluacion --: la nota en la escala del colegio si es numerico y la banda de desempeño de la escala. Es el cuerpo de fn_nota_homologar sin la resolucion del formato, para que un listado que homologa muchas notas de la misma asignatura resuelva el formato una vez y no por nota (el informe lo hacia tres veces por fila). Misma salida que fn_nota_homologar.';
+
 CREATE OR REPLACE FUNCTION academico_test.fn_nota_homologar(p_porcentaje numeric, p_fk_tasignatura bigint, p_fk_tgrado bigint)
  RETURNS TABLE(porcentaje numeric, nota_homologada numeric, formato_valor character varying, formato_nombre character varying, nota_maxima numeric, decimales integer, pk_tescala_valoracion bigint, valoracion_codigo character varying, valoracion_nombre character varying, valoracion_simbolo character varying)
  LANGUAGE plpgsql
@@ -274,37 +332,12 @@ BEGIN
     SELECT t.* INTO v_fmt
       FROM academico_test.fn_asignatura_tipo_evaluacion(p_fk_tasignatura, p_fk_tgrado) t;
 
-    -- Sin NINGUNA escala configurada no se puede homologar; se devuelve el
-    -- crudo. Se mira formato_valor y no el registro entero porque la funcion
-    -- nueva siempre devuelve fila (con el tipo resuelto aunque no haya escala).
-    IF v_fmt.formato_valor IS NULL THEN
-        RETURN QUERY SELECT p_porcentaje, NULL::NUMERIC, NULL::VARCHAR, NULL::VARCHAR,
-                            NULL::NUMERIC, NULL::INT, NULL::BIGINT,
-                            NULL::VARCHAR, NULL::VARCHAR, NULL::VARCHAR;
-        RETURN;
-    END IF;
-
+    -- Sin escala configurada (formato_valor NULL) fn_nota_homologar_formato
+    -- devuelve el crudo; con escala, la nota y la banda.
     RETURN QUERY
-    SELECT p_porcentaje,
-           -- Solo los formatos numericos producen nota; en LITERAL/SIMBOLO/
-           -- CARITA el colegio no califica con un numero y forzar uno seria
-           -- inventarselo.
-           CASE WHEN v_fmt.es_numerico
-                THEN ROUND(p_porcentaje / 100 * v_fmt.nota_maxima, v_fmt.decimales)
-           END,
-           v_fmt.formato_valor,
-           v_fmt.formato_nombre,
-           v_fmt.nota_maxima,
-           v_fmt.decimales,
-           b.pk_tescala_valoracion,
-           b.valoracion_codigo,
-           b.valoracion_nombre,
-           b.valoracion_simbolo
-      -- LEFT JOIN LATERAL y no JOIN: si el porcentaje cae en un hueco entre
-      -- bandas la fila sale igual, con la valoracion en NULL.
-      FROM (SELECT 1) _base
-      LEFT JOIN LATERAL academico_test.fn_escala_valoracion_banda(
-                    v_fmt.fk_tescala, p_porcentaje) b ON TRUE;
+    SELECT h.* FROM academico_test.fn_nota_homologar_formato(
+               p_porcentaje, v_fmt.es_numerico, v_fmt.formato_valor, v_fmt.formato_nombre,
+               v_fmt.nota_maxima, v_fmt.decimales, v_fmt.fk_tescala) h;
 END;
 $function$;
 

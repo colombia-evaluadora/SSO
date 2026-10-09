@@ -526,63 +526,13 @@ CREATE OR REPLACE FUNCTION academico_test.fn_informe_planillas_pendientes(p_pk_u
  STABLE
 AS $function$
 DECLARE
-    r_g          RECORD;
-    -- V491 -- los grupos que de verdad se van a consultar: los pedidos
-    -- menos los que el usuario no puede ver por no dirigirlos.
-    v_grupos     BIGINT[] := ARRAY[]::BIGINT[];
-    v_solo_mios  BOOLEAN;
-    v_fk_sede    BIGINT;
-    v_fk_jornada BIGINT;
-    v_fk_ee      BIGINT;
+    -- Los grupos que de verdad se consultan: los pedidos que el usuario puede
+    -- ver. La validacion de permisos y el recorte por grupos dirigidos viven en
+    -- fn_informe_grupos_visibles, una vez por sede y jornada.
+    v_grupos BIGINT[];
 BEGIN
-    IF p_fk_tgrupos IS NULL OR CARDINALITY(p_fk_tgrupos) = 0 THEN
-        RAISE EXCEPTION 'Debe indicar al menos un grupo'
-            USING ERRCODE = '22023';
-    END IF;
-
-    -- Gate por grupo, ANTES de leer nada.
-    FOR r_g IN SELECT UNNEST(p_fk_tgrupos) AS pk
-    LOOP
-        SELECT s.PK_TSEDE, gr.FK_TLV_JORNADA, s.FK_TESTABLECIMIENTO
-          INTO v_fk_sede, v_fk_jornada, v_fk_ee
-          FROM academico_test.TGRUPO gr
-          JOIN academico_test.TGRADO gd ON gd.PK_TGRADO = gr.FK_TGRADO
-          JOIN academico_test.TPERIODO_ACADEMICO pa
-            ON pa.PK_TPERIODO_ACADEMICO = gd.FK_TPERIODO_ACADEMICO
-          JOIN academico_test.TSEDE s ON s.PK_TSEDE = pa.FK_TSEDE
-         WHERE gr.PK_TGRUPO = r_g.pk
-           AND gr.ACTIVE = TRUE;
-
-        IF NOT FOUND THEN
-            RAISE EXCEPTION 'No se encontro el grupo %', r_g.pk
-                USING ERRCODE = 'P0002';
-        END IF;
-
-        PERFORM academico_test.fn_assert_permiso_seccion(
-            p_pk_usuario_solicitante, 'INFORMES', 'VER',
-            v_fk_ee, v_fk_sede, v_fk_jornada
-        );
-
-        -- V491 -- el recorte por grupo DESCARTA en silencio, no falla.
-        -- Es la diferencia con el gate de arriba y es deliberada: pedir
-        -- un grupo de otra sede es un error de quien llama, pero pedir
-        -- uno de la propia sede que no se dirige es lo que hace el front
-        -- solo, con las pestañas que quedaron abiertas. Fallar ahi
-        -- tumbaria las alertas de los grupos que SI puede ver.
-        -- V447 -- por grupo y no una vez para toda la lista: la sede la
-        -- acaba de resolver el SELECT de arriba, y una lista de pestañas
-        -- abiertas puede cruzar establecimientos.
-        v_solo_mios := academico_test.fn_usuario_solo_sus_grupos(
-                           p_pk_usuario_solicitante, v_fk_sede, v_fk_jornada);
-
-        IF NOT v_solo_mios
-           OR EXISTS (SELECT 1
-                        FROM academico_test.fn_usuario_grupos_dirigidos(
-                                 p_pk_usuario_solicitante) g
-                       WHERE g.grupo_id = r_g.pk) THEN
-            v_grupos := v_grupos || r_g.pk;
-        END IF;
-    END LOOP;
+    v_grupos := academico_test.fn_informe_grupos_visibles(
+                    p_pk_usuario_solicitante, p_fk_tgrupos);
 
     RETURN QUERY
     WITH grupos AS (
@@ -712,63 +662,13 @@ CREATE OR REPLACE FUNCTION academico_test.fn_informe_cambios_pendientes(p_pk_usu
  STABLE
 AS $function$
 DECLARE
-    r_g          RECORD;
-    -- V491 -- los grupos que de verdad se van a consultar: los pedidos
-    -- menos los que el usuario no puede ver por no dirigirlos.
-    v_grupos     BIGINT[] := ARRAY[]::BIGINT[];
-    v_solo_mios  BOOLEAN;
-    v_fk_sede    BIGINT;
-    v_fk_jornada BIGINT;
-    v_fk_ee      BIGINT;
+    -- Los grupos que de verdad se consultan: los pedidos que el usuario puede
+    -- ver. La validacion de permisos y el recorte por grupos dirigidos viven en
+    -- fn_informe_grupos_visibles, una vez por sede y jornada.
+    v_grupos BIGINT[];
 BEGIN
-    IF p_fk_tgrupos IS NULL OR CARDINALITY(p_fk_tgrupos) = 0 THEN
-        RAISE EXCEPTION 'Debe indicar al menos un grupo'
-            USING ERRCODE = '22023';
-    END IF;
-
-    -- Gate por grupo, ANTES de leer nada.
-    FOR r_g IN SELECT UNNEST(p_fk_tgrupos) AS pk
-    LOOP
-        SELECT s.PK_TSEDE, gr.FK_TLV_JORNADA, s.FK_TESTABLECIMIENTO
-          INTO v_fk_sede, v_fk_jornada, v_fk_ee
-          FROM academico_test.TGRUPO gr
-          JOIN academico_test.TGRADO gd ON gd.PK_TGRADO = gr.FK_TGRADO
-          JOIN academico_test.TPERIODO_ACADEMICO pa
-            ON pa.PK_TPERIODO_ACADEMICO = gd.FK_TPERIODO_ACADEMICO
-          JOIN academico_test.TSEDE s ON s.PK_TSEDE = pa.FK_TSEDE
-         WHERE gr.PK_TGRUPO = r_g.pk
-           AND gr.ACTIVE = TRUE;
-
-        IF NOT FOUND THEN
-            RAISE EXCEPTION 'No se encontro el grupo %', r_g.pk
-                USING ERRCODE = 'P0002';
-        END IF;
-
-        PERFORM academico_test.fn_assert_permiso_seccion(
-            p_pk_usuario_solicitante, 'INFORMES', 'VER',
-            v_fk_ee, v_fk_sede, v_fk_jornada
-        );
-
-        -- V491 -- el recorte por grupo DESCARTA en silencio, no falla.
-        -- Es la diferencia con el gate de arriba y es deliberada: pedir
-        -- un grupo de otra sede es un error de quien llama, pero pedir
-        -- uno de la propia sede que no se dirige es lo que hace el front
-        -- solo, con las pestañas que quedaron abiertas. Fallar ahi
-        -- tumbaria las alertas de los grupos que SI puede ver.
-        -- V447 -- por grupo y no una vez para toda la lista: la sede la
-        -- acaba de resolver el SELECT de arriba, y una lista de pestañas
-        -- abiertas puede cruzar establecimientos.
-        v_solo_mios := academico_test.fn_usuario_solo_sus_grupos(
-                           p_pk_usuario_solicitante, v_fk_sede, v_fk_jornada);
-
-        IF NOT v_solo_mios
-           OR EXISTS (SELECT 1
-                        FROM academico_test.fn_usuario_grupos_dirigidos(
-                                 p_pk_usuario_solicitante) g
-                       WHERE g.grupo_id = r_g.pk) THEN
-            v_grupos := v_grupos || r_g.pk;
-        END IF;
-    END LOOP;
+    v_grupos := academico_test.fn_informe_grupos_visibles(
+                    p_pk_usuario_solicitante, p_fk_tgrupos);
 
     RETURN QUERY
     WITH matriculas AS (
@@ -777,6 +677,23 @@ BEGIN
           FROM academico_test.TMATRICULA m
          WHERE m.FK_TGRUPO = ANY (v_grupos)
            AND m.ACTIVE = TRUE
+    ),
+    -- Un cambio propuesto exige nota GUARDADA (TASIGNATURA_NOTA): sin ella el
+    -- estado es "proyectada", nunca "cambio_propuesto". Se descarta antes de
+    -- recalcular, que es lo caro (se calculaba la sede entera para 0 filas).
+    -- Con FK_TPERIODO_EVALUACION nulo (la Final) tambien se considera.
+    consolidadas AS (
+        SELECT mt.*
+          FROM matriculas mt
+         WHERE EXISTS (
+                SELECT 1
+                  FROM academico_test.TASIGNATURA_NOTA an
+                 WHERE an.FK_TMATRICULA = mt.pk
+                   AND an.ACTIVE = TRUE
+                   AND (p_fk_periodos_evaluacion IS NULL
+                        OR CARDINALITY(p_fk_periodos_evaluacion) = 0
+                        OR an.FK_TPERIODO_EVALUACION IS NULL
+                        OR an.FK_TPERIODO_EVALUACION = ANY (p_fk_periodos_evaluacion)))
     ),
     -- Se reutiliza el detalle con p_solo_cambios para que la alerta no pueda
     -- contradecir a la tabla.
@@ -789,10 +706,10 @@ BEGIN
                d.periodo_inicio,
                mt.pk          AS matricula,
                d.calificado_en
-          FROM matriculas mt
-          CROSS JOIN LATERAL academico_test.fn_informe_estudiante_asignaturas_interno(
+          FROM consolidadas mt
+          CROSS JOIN LATERAL academico_test.fn_informe_estudiante_cambios_interno(
                          mt.pk,
-                         p_fk_periodos_evaluacion, TRUE) d
+                         p_fk_periodos_evaluacion) d
         UNION ALL
         -- Una correccion pendiente no mueve la proyectada: se suma aparte.
         SELECT mt.grupo,

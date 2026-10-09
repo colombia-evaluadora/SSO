@@ -2,8 +2,8 @@
 --
 -- Qué hace: reúne los validadores y predicados de alcance de informes, que no
 -- piden permisos y lanzan o devuelven: alcance de sede y jornada, grupo
--- propio, escritura reservada (Regla 76) y, nuevo, que el periodo pertenezca
--- al año del grupo (antes copiado en tres funciones).
+-- propio, escritura reservada (Regla 76), que el periodo pertenezca al año
+-- del grupo y los grupos visibles de una lista (gate de las alertas).
 -- Por qué aquí: estructura por capas; un cambio futuro edita esta migración.
 -- Los usan también observaciones, final y formativo, con la misma firma.
 -- Incluye fn_usuario_solo_sus_grupos por sede y jornada (antes V446).
@@ -128,6 +128,74 @@ END;
 $function$;
 COMMENT ON FUNCTION academico_test.fn_informe_assert_grupo_propio(BIGINT, BIGINT)
     IS 'Recorta el acceso al grupo, DESPUES de que el gate territorial ya decidio. No repite fn_assert_permiso_seccion a proposito: todos los puntos de entrada de informes ya lo llaman, y repetirlo aqui seria resolver dos veces la sede y la jornada del grupo en cada llamada -- en un listado, una vez por estudiante. Solo actua cuando fn_usuario_solo_sus_grupos dice que el usuario no alcanza la sede entera; para todos los demas es un no-op. Falla con 42501 y no devolviendo vacio, porque pedir por id el informe de un grupo ajeno no es "no hay datos" sino no tener permiso; en el LISTADO de grupos, en cambio, se filtran las filas, que ahi si es la respuesta correcta. Un grupo NULL no hace nada: el caller ya valido su existencia. V489.';
+
+CREATE OR REPLACE FUNCTION academico_test.fn_informe_grupos_visibles(
+    p_pk_usuario_solicitante BIGINT,
+    p_fk_tgrupos             BIGINT[]
+)
+RETURNS BIGINT[]
+LANGUAGE plpgsql
+STABLE
+AS $$
+DECLARE
+    r           RECORD;
+    v_faltante  BIGINT;
+    v_dirigidos BIGINT[];
+    v_visibles  BIGINT[] := ARRAY[]::BIGINT[];
+BEGIN
+    IF p_fk_tgrupos IS NULL OR CARDINALITY(p_fk_tgrupos) = 0 THEN
+        RAISE EXCEPTION 'Debe indicar al menos un grupo'
+            USING ERRCODE = '22023';
+    END IF;
+
+    -- Sede y jornada de TODOS los grupos en una consulta; un grupo que no
+    -- resuelve hace fallar la llamada, como antes, y ANTES de leer nada.
+    SELECT x.pk INTO v_faltante
+      FROM UNNEST(p_fk_tgrupos) WITH ORDINALITY x(pk, i)
+     WHERE NOT EXISTS (
+            SELECT 1
+              FROM academico_test.TGRUPO gr
+              JOIN academico_test.TGRADO gd ON gd.PK_TGRADO = gr.FK_TGRADO
+              JOIN academico_test.TPERIODO_ACADEMICO pa ON pa.PK_TPERIODO_ACADEMICO = gd.FK_TPERIODO_ACADEMICO
+              JOIN academico_test.TSEDE s ON s.PK_TSEDE = pa.FK_TSEDE
+             WHERE gr.PK_TGRUPO = x.pk AND gr.ACTIVE = TRUE)
+     ORDER BY x.i
+     LIMIT 1;
+    IF v_faltante IS NOT NULL THEN
+        RAISE EXCEPTION 'No se encontro el grupo %', v_faltante
+            USING ERRCODE = 'P0002';
+    END IF;
+
+    v_dirigidos := ARRAY(SELECT g.grupo_id
+                           FROM academico_test.fn_usuario_grupos_dirigidos(p_pk_usuario_solicitante) g);
+
+    -- El gate y "solo sus grupos" dependen de la sede y la jornada, no del
+    -- grupo: una vez por combinacion, no una vez por pestaña.
+    FOR r IN
+        SELECT s.FK_TESTABLECIMIENTO AS ee, s.PK_TSEDE AS sede, gr.FK_TLV_JORNADA AS jornada,
+               ARRAY_AGG(gr.PK_TGRUPO) AS grupos
+          FROM academico_test.TGRUPO gr
+          JOIN academico_test.TGRADO gd ON gd.PK_TGRADO = gr.FK_TGRADO
+          JOIN academico_test.TPERIODO_ACADEMICO pa ON pa.PK_TPERIODO_ACADEMICO = gd.FK_TPERIODO_ACADEMICO
+          JOIN academico_test.TSEDE s ON s.PK_TSEDE = pa.FK_TSEDE
+         WHERE gr.PK_TGRUPO = ANY (p_fk_tgrupos) AND gr.ACTIVE = TRUE
+         GROUP BY 1, 2, 3
+    LOOP
+        PERFORM academico_test.fn_assert_permiso_seccion(
+            p_pk_usuario_solicitante, 'INFORMES', 'VER', r.ee, r.sede, r.jornada);
+        IF academico_test.fn_usuario_solo_sus_grupos(p_pk_usuario_solicitante, r.sede, r.jornada) THEN
+            v_visibles := v_visibles || ARRAY(SELECT g FROM UNNEST(r.grupos) g WHERE g = ANY (v_dirigidos));
+        ELSE
+            v_visibles := v_visibles || r.grupos;
+        END IF;
+    END LOOP;
+
+    RETURN v_visibles;
+END;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_informe_grupos_visibles(BIGINT, BIGINT[])
+    IS 'Gate de las alertas de informes, que reciben una LISTA de grupos (las pestañas abiertas): falla con P0002 si un grupo no existe y con 42501 si la sede o jornada de alguno esta fuera de INFORMES/VER; y de los que pasan devuelve los que el usuario puede ver -- todos, o solo los que dirige cuando fn_usuario_solo_sus_grupos lo limita a sus grupos. Pedir uno de la propia sede que no dirige lo DESCARTA en silencio (lo hace el front solo, con pestañas que quedaron abiertas). El gate y el recorte se calculan una vez por (establecimiento, sede, jornada) y los grupos dirigidos una sola vez: antes era una vez por grupo y con cientos de pestañas o grupos el permiso pesaba mas que la alerta. La usan fn_informe_planillas_pendientes y fn_informe_cambios_pendientes.';
 
 CREATE OR REPLACE FUNCTION academico_test.fn_informe_assert_puede_escribir(p_pk_usuario_solicitante bigint)
  RETURNS void
