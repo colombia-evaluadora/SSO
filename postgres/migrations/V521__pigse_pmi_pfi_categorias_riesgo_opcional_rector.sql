@@ -2,8 +2,7 @@
 -- V521 — Varios cambios en "Gestión documental" de PIGSE, pedido explícito:
 --   1. PMI se separa en dos tipos: PMI (tradicional) / PFI (étnico), mismo
 --      criterio de exclusión que PEI/PEC (ETNIAS).
---   2. PMI/PFI pasan a tener categorías, como PEI/PEC, ambas obligatorias:
---      el plan (PLAN_MEJORAMIENTO / PLAN_FORTALECIMIENTO) y su anexo
+--   2. PMI/PFI pasan a tener categoría, como PEI/PEC: una sola, obligatoria,
 --      "Autoevaluación institucional" (AUTOEVALUACION_INSTITUCIONAL).
 --   3. PEI/PEC: "Plan escolar de gestión del riesgo" deja de contar para
 --      COMPLETO (las otras 4 categorías siguen obligatorias) — sigue
@@ -60,16 +59,14 @@ ALTER TABLE pigse.tdocumento_institucional
         categoria IS NULL
         OR categoria IN ('PLAN_ESTUDIOS', 'SIEE', 'MANUAL_CONVIVENCIA',
                           'PROYECTOS_TRANSVERSALES', 'PLAN_GESTION_RIESGO',
-                          'AUTOEVALUACION_INSTITUCIONAL', 'PLAN_MEJORAMIENTO',
-                          'PLAN_FORTALECIMIENTO')
+                          'AUTOEVALUACION_INSTITUCIONAL')
     );
 
 ALTER TABLE pigse.tdocumento_institucional
     ADD CONSTRAINT pigse_tdocumento_institucional_tipo_categoria_chk
     CHECK (
         NOT active
-        OR (tipo = 'PMI' AND categoria IN ('PLAN_MEJORAMIENTO', 'AUTOEVALUACION_INSTITUCIONAL'))
-        OR (tipo = 'PFI' AND categoria IN ('PLAN_FORTALECIMIENTO', 'AUTOEVALUACION_INSTITUCIONAL'))
+        OR (tipo IN ('PMI', 'PFI') AND categoria = 'AUTOEVALUACION_INSTITUCIONAL')
         OR (tipo IN ('PEI', 'PEC') AND categoria IN
             ('PLAN_ESTUDIOS', 'SIEE', 'MANUAL_CONVIVENCIA',
              'PROYECTOS_TRANSVERSALES', 'PLAN_GESTION_RIESGO'))
@@ -106,10 +103,7 @@ AS $$
                  ('PLAN_ESTUDIOS'), ('SIEE'), ('MANUAL_CONVIVENCIA'), ('PROYECTOS_TRANSVERSALES')
              ) c(categoria) WHERE tipos.tipo IN ('PEI', 'PEC')
              UNION ALL
-             SELECT categoria FROM (VALUES
-                 ('PMI', 'PLAN_MEJORAMIENTO'), ('PMI', 'AUTOEVALUACION_INSTITUCIONAL'),
-                 ('PFI', 'PLAN_FORTALECIMIENTO'), ('PFI', 'AUTOEVALUACION_INSTITUCIONAL')
-             ) p(tipo, categoria) WHERE p.tipo = tipos.tipo
+             SELECT 'AUTOEVALUACION_INSTITUCIONAL' WHERE tipos.tipo IN ('PMI', 'PFI')
          ) AS cat(categoria)
           LEFT JOIN pigse.tdocumento_institucional d
                  ON d.fk_testablecimiento = te.PK_ESTABLECIMIENTO
@@ -124,11 +118,11 @@ AS $$
         tipos.tipo AS "type",
         tipos.nombre AS "typeName",
         CASE WHEN c.completadas = c.total THEN 'COMPLETO' ELSE 'PENDIENTE' END AS status,
-        plan.nombre::TEXT AS "fileName",
-        plan.created_at AS "uploadedAt",
-        plan.peso AS "sizeBytes",
-        plan.pk_tarchivo AS "archivoId",
-        '/api/files/download/' || plan.pk_tarchivo AS "downloadUrl",
+        NULL::TEXT AS "fileName",
+        NULL::TIMESTAMP AS "uploadedAt",
+        NULL::BIGINT AS "sizeBytes",
+        NULL::BIGINT AS "archivoId",
+        NULL::TEXT AS "downloadUrl",
         c.completadas::INT AS "completedCategories",
         c.total::INT AS "totalCategories"
       FROM pigse.testablecimiento te
@@ -144,23 +138,12 @@ AS $$
       JOIN categorias c
         ON c.fk_establecimiento = te.PK_ESTABLECIMIENTO
        AND c.tipo = tipos.tipo
-      -- PMI/PFI: el archivo del plan viaja en la fila (tablero de monitoreo).
-      LEFT JOIN LATERAL (
-          SELECT ta.nombre, ta.created_at, ta.peso, ta.pk_tarchivo
-            FROM pigse.tdocumento_institucional d
-            JOIN pigse.v_archivo ta ON ta.pk_tarchivo = d.fk_tarchivo
-           WHERE d.fk_testablecimiento = te.PK_ESTABLECIMIENTO
-             AND d.tipo = tipos.tipo
-             AND d.categoria IN ('PLAN_MEJORAMIENTO', 'PLAN_FORTALECIMIENTO')
-             AND d.active
-           LIMIT 1
-      ) plan ON true
      WHERE te.PK_ESTABLECIMIENTO = p_fk_establecimiento
      ORDER BY tipos.tipo;
 $$;
 
 COMMENT ON FUNCTION pigse.fn_documentos_listar(BIGINT) IS
-    'V521: PMI/PFI van por categorías como PEI/PEC (plan + AUTOEVALUACION_INSTITUCIONAL); fileName/archivoId/downloadUrl son los del plan. El tipo no aplicable (ETNIAS) no aparece -- antes devolvía NO_APLICA. PLAN_GESTION_RIESGO no cuenta para el total de PEI/PEC.';
+    'V521: PMI/PFI van por categorías como PEI/PEC (AUTOEVALUACION_INSTITUCIONAL). El tipo no aplicable (ETNIAS) no aparece -- antes devolvía NO_APLICA. PLAN_GESTION_RIESGO no cuenta para el total de PEI/PEC.';
 
 -- ---------------------------------------------------------------------------
 -- 7. fn_documentos_listar_todos -- mismo criterio que fn_documentos_listar,
@@ -200,10 +183,7 @@ AS $$
                  ('PLAN_ESTUDIOS'), ('SIEE'), ('MANUAL_CONVIVENCIA'), ('PROYECTOS_TRANSVERSALES')
              ) c(categoria) WHERE tipos.tipo IN ('PEI', 'PEC')
              UNION ALL
-             SELECT categoria FROM (VALUES
-                 ('PMI', 'PLAN_MEJORAMIENTO'), ('PMI', 'AUTOEVALUACION_INSTITUCIONAL'),
-                 ('PFI', 'PLAN_FORTALECIMIENTO'), ('PFI', 'AUTOEVALUACION_INSTITUCIONAL')
-             ) p(tipo, categoria) WHERE p.tipo = tipos.tipo
+             SELECT 'AUTOEVALUACION_INSTITUCIONAL' WHERE tipos.tipo IN ('PMI', 'PFI')
          ) AS cat(categoria)
           LEFT JOIN pigse.tdocumento_institucional d
                  ON d.fk_testablecimiento = te.PK_ESTABLECIMIENTO
@@ -218,11 +198,11 @@ AS $$
         tipos.tipo AS "type",
         tipos.nombre AS "typeName",
         CASE WHEN c.completadas = c.total THEN 'COMPLETO' ELSE 'PENDIENTE' END AS status,
-        plan.nombre::TEXT AS "fileName",
-        plan.created_at AS "uploadedAt",
-        plan.peso AS "sizeBytes",
-        plan.pk_tarchivo AS "archivoId",
-        '/api/files/download/' || plan.pk_tarchivo AS "downloadUrl",
+        NULL::TEXT AS "fileName",
+        NULL::TIMESTAMP AS "uploadedAt",
+        NULL::BIGINT AS "sizeBytes",
+        NULL::BIGINT AS "archivoId",
+        NULL::TEXT AS "downloadUrl",
         te.PK_ESTABLECIMIENTO AS "establecimientoId",
         te.NOMBRE AS "establecimientoNombre",
         c.completadas::INT AS "completedCategories",
@@ -240,17 +220,6 @@ AS $$
       JOIN categorias c
         ON c.fk_establecimiento = te.PK_ESTABLECIMIENTO
        AND c.tipo = tipos.tipo
-      -- PMI/PFI: el archivo del plan viaja en la fila (tablero de monitoreo).
-      LEFT JOIN LATERAL (
-          SELECT ta.nombre, ta.created_at, ta.peso, ta.pk_tarchivo
-            FROM pigse.tdocumento_institucional d
-            JOIN pigse.v_archivo ta ON ta.pk_tarchivo = d.fk_tarchivo
-           WHERE d.fk_testablecimiento = te.PK_ESTABLECIMIENTO
-             AND d.tipo = tipos.tipo
-             AND d.categoria IN ('PLAN_MEJORAMIENTO', 'PLAN_FORTALECIMIENTO')
-             AND d.active
-           LIMIT 1
-      ) plan ON true
      WHERE te.ACTIVE = TRUE
      ORDER BY te.NOMBRE, tipos.tipo;
 $$;
@@ -324,8 +293,8 @@ COMMENT ON FUNCTION pigse.fn_cumplimiento_metricas() IS
     'V521: gana la clave "pfi" (antes PMI contaba TODOS los establecimientos; ahora pmi/pfi tienen denominador propio por ETNIAS, igual que pei/pec).';
 
 -- ---------------------------------------------------------------------------
--- 9. fn_documento_categorias_listar -- PMI/PFI: dos categorías fijas (el
---    plan y su anexo de autoevaluación), mismo patrón de archivo único que las
+-- 9. fn_documento_categorias_listar -- PMI/PFI: una sola categoría fija
+--    (AUTOEVALUACION_INSTITUCIONAL), mismo patrón de archivo único que las
 --    4 categorías fijas de PEI/PEC. PEI/PEC: PLAN_GESTION_RIESGO se marca
 --    "(opcional)" en el nombre mostrado -- sigue siendo una categoría más,
 --    solo que ya no bloquea el COMPLETO del documento padre.
@@ -360,10 +329,18 @@ BEGIN
      WHERE te.PK_ESTABLECIMIENTO = p_fk_establecimiento;
 
     IF p_tipo IN ('PMI', 'PFI') THEN
-        -- Dos categorías obligatorias: el plan (primero) y su anexo.
         RETURN QUERY
+        WITH doc AS (
+            SELECT d.fk_tarchivo
+              FROM pigse.tdocumento_institucional d
+             WHERE d.fk_testablecimiento = p_fk_establecimiento
+               AND d.tipo = p_tipo
+               AND d.categoria = 'AUTOEVALUACION_INSTITUCIONAL'
+               AND d.active
+        )
         SELECT
-            cat.categoria, p_tipo::TEXT, v_type_name, cat.categoria, cat.nombre,
+            'AUTOEVALUACION_INSTITUCIONAL'::TEXT, p_tipo::TEXT, v_type_name,
+            'AUTOEVALUACION_INSTITUCIONAL'::TEXT, 'Autoevaluación institucional'::TEXT,
             CASE
                 WHEN v_no_aplica THEN 'NO_APLICA'
                 WHEN ta.pk_tarchivo IS NOT NULL THEN 'COMPLETO'
@@ -372,19 +349,9 @@ BEGIN
             ta.nombre::TEXT, ta.created_at, ta.peso, ta.pk_tarchivo,
             CASE WHEN ta.pk_tarchivo IS NOT NULL
                  THEN '/api/files/download/' || ta.pk_tarchivo ELSE NULL END
-          FROM (VALUES
-                    (1, 'PLAN_MEJORAMIENTO', 'Plan de Mejoramiento Institucional', 'PMI'),
-                    (1, 'PLAN_FORTALECIMIENTO', 'Plan de Fortalecimiento Institucional', 'PFI'),
-                    (2, 'AUTOEVALUACION_INSTITUCIONAL', 'Autoevaluación institucional (anexo)', p_tipo)
-               ) AS cat(orden, categoria, nombre, tipo)
-          LEFT JOIN pigse.tdocumento_institucional d
-                 ON d.fk_testablecimiento = p_fk_establecimiento
-                AND d.tipo = p_tipo
-                AND d.categoria = cat.categoria
-                AND d.active
-          LEFT JOIN pigse.v_archivo ta ON ta.pk_tarchivo = d.fk_tarchivo
-         WHERE cat.tipo = p_tipo
-         ORDER BY cat.orden;
+          FROM (SELECT 1) AS one
+          LEFT JOIN doc ON true
+          LEFT JOIN pigse.v_archivo ta ON ta.pk_tarchivo = doc.fk_tarchivo;
         RETURN;
     END IF;
 
@@ -463,7 +430,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION pigse.fn_documento_categorias_listar(BIGINT, VARCHAR) IS
-    'V521: PMI/PFI devuelven el plan (PLAN_MEJORAMIENTO/PLAN_FORTALECIMIENTO) y su anexo AUTOEVALUACION_INSTITUCIONAL, mismo patrón que las 4 categorías fijas de PEI/PEC. PLAN_GESTION_RIESGO marcada "(opcional)" en el nombre.';
+    'V521: PMI/PFI devuelven su única categoría fija (AUTOEVALUACION_INSTITUCIONAL), mismo patrón que las 4 categorías fijas de PEI/PEC. PLAN_GESTION_RIESGO marcada "(opcional)" en el nombre.';
 
 -- ---------------------------------------------------------------------------
 -- 10. fn_documento_guardar -- PMI/PFI ya no son casos aparte: pasan por el
