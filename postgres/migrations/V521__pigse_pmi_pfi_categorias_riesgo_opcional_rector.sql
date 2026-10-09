@@ -468,7 +468,7 @@ COMMENT ON FUNCTION pigse.fn_documento_categorias_listar(BIGINT, VARCHAR) IS
 -- ---------------------------------------------------------------------------
 -- 10. fn_documento_guardar -- PMI/PFI ya no son casos aparte: pasan por el
 --     mismo camino de categoría que PEI/PEC. Gana la validación de que
---     PMI/PFI no acepten otra categoría que su plan o la autoevaluación (y
+--     PMI/PFI no acepten otra categoría que AUTOEVALUACION_INSTITUCIONAL (y
 --     viceversa), y el chequeo de "no aplica" para los dos tipos nuevos.
 -- ---------------------------------------------------------------------------
 DROP FUNCTION IF EXISTS pigse.fn_documento_guardar(BIGINT, VARCHAR, VARCHAR, BIGINT, VARCHAR);
@@ -502,19 +502,14 @@ BEGIN
             USING ERRCODE = '22023';
     ELSIF p_categoria NOT IN ('PLAN_ESTUDIOS', 'SIEE', 'MANUAL_CONVIVENCIA',
                                'PROYECTOS_TRANSVERSALES', 'PLAN_GESTION_RIESGO',
-                               'AUTOEVALUACION_INSTITUCIONAL', 'PLAN_MEJORAMIENTO',
-                               'PLAN_FORTALECIMIENTO') THEN
+                               'AUTOEVALUACION_INSTITUCIONAL') THEN
         RAISE EXCEPTION 'pigse: categoria invalida: %', p_categoria
             USING ERRCODE = '22023';
-    ELSIF p_tipo = 'PMI' AND p_categoria NOT IN ('PLAN_MEJORAMIENTO', 'AUTOEVALUACION_INSTITUCIONAL') THEN
-        RAISE EXCEPTION 'pigse: PMI solo admite las categorias PLAN_MEJORAMIENTO y AUTOEVALUACION_INSTITUCIONAL'
+    ELSIF p_tipo IN ('PMI', 'PFI') AND p_categoria <> 'AUTOEVALUACION_INSTITUCIONAL' THEN
+        RAISE EXCEPTION 'pigse: % solo admite la categoria AUTOEVALUACION_INSTITUCIONAL', p_tipo
             USING ERRCODE = '22023';
-    ELSIF p_tipo = 'PFI' AND p_categoria NOT IN ('PLAN_FORTALECIMIENTO', 'AUTOEVALUACION_INSTITUCIONAL') THEN
-        RAISE EXCEPTION 'pigse: PFI solo admite las categorias PLAN_FORTALECIMIENTO y AUTOEVALUACION_INSTITUCIONAL'
-            USING ERRCODE = '22023';
-    ELSIF p_tipo IN ('PEI', 'PEC')
-          AND p_categoria IN ('AUTOEVALUACION_INSTITUCIONAL', 'PLAN_MEJORAMIENTO', 'PLAN_FORTALECIMIENTO') THEN
-        RAISE EXCEPTION 'pigse: % no admite la categoria %', p_tipo, p_categoria
+    ELSIF p_tipo IN ('PEI', 'PEC') AND p_categoria = 'AUTOEVALUACION_INSTITUCIONAL' THEN
+        RAISE EXCEPTION 'pigse: % no admite la categoria AUTOEVALUACION_INSTITUCIONAL', p_tipo
             USING ERRCODE = '22023';
     END IF;
 
@@ -585,7 +580,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION pigse.fn_documento_guardar(BIGINT, VARCHAR, VARCHAR, BIGINT, VARCHAR) IS
-    'V521: PMI/PFI ya no son casos aparte -- van por categoria (plan o AUTOEVALUACION_INSTITUCIONAL) igual que PEI/PEC. Valida que cada tipo solo use sus categorias propias.';
+    'V521: PMI/PFI ya no son casos aparte -- van por categoria (AUTOEVALUACION_INSTITUCIONAL) igual que PEI/PEC. Valida que cada tipo solo use sus categorias propias.';
 
 -- ---------------------------------------------------------------------------
 -- 11. fn_documento_eliminar -- mismo criterio: PMI/PFI dejan de ser casos
