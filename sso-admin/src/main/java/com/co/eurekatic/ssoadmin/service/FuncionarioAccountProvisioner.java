@@ -49,8 +49,16 @@ public class FuncionarioAccountProvisioner {
     public static final String APP_CVAL = "COLOMBIA-EVALUADORA";
     public static final String APP_PIGSE = "PIGSE";
 
-    /** Datos minimos para crear la cuenta: el TUSUARIO, el correo de login y el nombre. */
-    public record Funcionario(long pkTusuario, String email, String fullName) { }
+    /**
+     * Datos minimos para crear la cuenta: el TUSUARIO, el correo de login y el
+     * nombre. {@code porCuenta}: el correo coincide con {@code TUSUARIO.CUENTA}
+     * (si es false, solo con {@code CORREO_ELECTRONICO}).
+     */
+    public record Funcionario(long pkTusuario, String email, String fullName, boolean porCuenta) {
+        public Funcionario(long pkTusuario, String email, String fullName) {
+            this(pkTusuario, email, fullName, true);
+        }
+    }
 
     /*
      * Se prefiere el TUSUARIO cuya CUENTA es el correo (funcionario/acudiente:
@@ -63,7 +71,8 @@ public class FuncionarioAccountProvisioner {
             SELECT t.pk_tusuario,
                    CASE WHEN UPPER(t.cuenta) = UPPER(?) THEN t.cuenta ELSE t.correo_electronico END AS email,
                    NULLIF(concat_ws(' ', t.primer_nombre, t.segundo_nombre,
-                                         t.primer_apellido, t.segundo_apellido), '') AS full_name
+                                         t.primer_apellido, t.segundo_apellido), '') AS full_name,
+                   COALESCE(UPPER(t.cuenta) = UPPER(?), FALSE) AS por_cuenta
               FROM academico_test.tusuario t
              WHERE t.active = TRUE
                AND (UPPER(t.cuenta) = UPPER(?) OR UPPER(t.correo_electronico) = UPPER(?))
@@ -104,6 +113,53 @@ public class FuncionarioAccountProvisioner {
                                 WHERE ru.user_id = ? AND ru.role_id = r.fk_id_role)
             """;
 
+    /*
+     * Mismo conjunto de roles deseados que academico_test.fn_sincronizar_rol_publico
+     * (V302), para el TUSUARIO cuya CUENTA no es el correo de la cuenta SSO: esa
+     * funcion enlaza por CUENTA y para el no haria nada. Solo INSERT: la cuenta
+     * acaba de crearse sin roles, no hay nada que reconciliar hacia abajo.
+     * Params: user_id, pk_tusuario x5, user_id.
+     */
+    private static final String SQL_CVAL_ROLES_POR_CORREO = """
+            INSERT INTO public.role_users (user_id, role_id)
+            SELECT DISTINCT ?::bigint, r.id_role
+              FROM (SELECT pr.prefix, tr.codigo
+                      FROM academico_test.tsede_usuario su
+                      JOIN academico_test.trol tr ON tr.pk_trol = su.fk_trol
+                     CROSS JOIN (VALUES ('CEVAL'), ('PIGSE')) pr(prefix)
+                     WHERE su.fk_tusuario = ? AND su.active = TRUE
+                    UNION
+                    SELECT pr.prefix, tr.codigo
+                      FROM academico_test.tente_usuario tu
+                      JOIN academico_test.trol tr ON tr.pk_trol = tu.fk_trol
+                     CROSS JOIN (VALUES ('CEVAL'), ('PIGSE')) pr(prefix)
+                     WHERE tu.fk_tusuario = ? AND tu.active = TRUE
+                    UNION
+                    SELECT pr.prefix, 'RECTOR'
+                      FROM (VALUES ('CEVAL'), ('PIGSE')) pr(prefix)
+                     WHERE EXISTS (SELECT 1 FROM academico_test.testablecimiento e
+                                     JOIN academico_test.tfuncionario f
+                                       ON f.pk_tfuncionario = e.fk_tfuncionario_rector
+                                    WHERE f.fk_tusuario = ? AND f.active = TRUE AND e.active = TRUE)
+                    UNION
+                    SELECT pr.prefix, 'JEFE_SISTEMA_ESTABLECIMIENTO'
+                      FROM (VALUES ('CEVAL'), ('PIGSE')) pr(prefix)
+                     WHERE EXISTS (SELECT 1 FROM academico_test.testablecimiento e
+                                     JOIN academico_test.tfuncionario f
+                                       ON f.pk_tfuncionario = e.fk_tfuncionario_secretaria
+                                    WHERE f.fk_tusuario = ? AND f.active = TRUE AND e.active = TRUE)
+                    UNION
+                    SELECT 'PIGSE', 'SECRETARIO'
+                     WHERE EXISTS (SELECT 1 FROM academico_test.testablecimiento e
+                                     JOIN academico_test.tfuncionario f
+                                       ON f.pk_tfuncionario = e.fk_tfuncionario_secretaria
+                                    WHERE f.fk_tusuario = ? AND f.active = TRUE AND e.active = TRUE)
+                   ) deseados(prefix, codigo)
+              JOIN public.role r ON r.name = deseados.prefix || '-' || deseados.codigo
+             WHERE NOT EXISTS (SELECT 1 FROM public.role_users ru
+                                WHERE ru.user_id = ? AND ru.role_id = r.id_role)
+            """;
+
     private final JdbcTemplate jdbc;
 
     public FuncionarioAccountProvisioner(JdbcTemplate jdbc) {
@@ -116,8 +172,9 @@ public class FuncionarioAccountProvisioner {
         List<Funcionario> rows;
         if (APP_CVAL.equals(appName)) {
             rows = jdbc.query(SQL_CVAL, (rs, i) -> new Funcionario(
-                    rs.getLong("pk_tusuario"), rs.getString("email"), rs.getString("full_name")),
-                    email, email, email, email);
+                    rs.getLong("pk_tusuario"), rs.getString("email"), rs.getString("full_name"),
+                    rs.getBoolean("por_cuenta")),
+                    email, email, email, email, email);
         } else if (APP_PIGSE.equals(appName)) {
             rows = jdbc.query(SQL_PIGSE, (rs, i) -> new Funcionario(
                     rs.getLong("pk_tusuario"), rs.getString("email"), rs.getString("full_name")),
@@ -134,9 +191,19 @@ public class FuncionarioAccountProvisioner {
      */
     public void linkAndSyncRoles(Funcionario funcionario, long userId, String appName) {
         if (APP_CVAL.equals(appName)) {
-            // Devuelve VOID: query, no update (ver UserAdminService#syncAppUsers).
-            jdbc.query("SELECT academico_test.fn_sincronizar_rol_publico(?)", rs -> null,
-                    funcionario.pkTusuario());
+            if (funcionario.porCuenta()) {
+                // Devuelve VOID: query, no update (ver UserAdminService#syncAppUsers).
+                jdbc.query("SELECT academico_test.fn_sincronizar_rol_publico(?)", rs -> null,
+                        funcionario.pkTusuario());
+            } else {
+                // Coincidio solo por CORREO_ELECTRONICO (CUENTA = documento u
+                // otro valor): fn_sincronizar_rol_publico no encontraria la
+                // cuenta. Se asignan los mismos roles directo a userId sin
+                // renombrar CUENTA (u_tusuario_1 y los triggers V215 intactos).
+                long pk = funcionario.pkTusuario();
+                jdbc.update(SQL_CVAL_ROLES_POR_CORREO, userId, pk, pk, pk, pk, pk, userId);
+                jdbc.query("SELECT public.fn_sync_app_users(?)", rs -> null, userId);
+            }
         } else if (APP_PIGSE.equals(appName)) {
             jdbc.update("UPDATE pigse.tusuario SET fk_id_user = ?, modified_at = CURRENT_TIMESTAMP "
                             + "WHERE pk_tusuario = ? AND fk_id_user IS NULL",
