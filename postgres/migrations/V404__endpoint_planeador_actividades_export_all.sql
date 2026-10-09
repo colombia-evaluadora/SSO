@@ -4,11 +4,12 @@
 -- reporting-service (clave planeador-actividades). Llama al MISMO listado que
 -- el rail del docente (GET /planeador/actividades/mias, fn_actividad_listar_docente)
 -- con sus filtros (SEARCH, ASIGNATURA, GRUPO, UNIDAD, ESTADOS[], DIAS_GRACIA,
--- GRADO_ASIGNATURA_PARES[] de la pestaña, DIA opcional) bajo BODY.FILTERS.*,
+-- GRADO_ASIGNATURA_PARES[] de la pestaña, FUNCIONARIO, DIA opcional) bajo BODY.FILTERS.*,
 -- sin paginar y sin la fila centinela de un dia vacio (pk_tactividad NULL).
 -- FILTERS.IDS recorta a las seleccionadas despues del gate.
 -- Por que aqui: es la dueña de la fila. Depende de: V250 (/mias y sus roles);
--- al ejecutarse, de la firma de fn_actividad_listar_docente con pestaña (V526).
+-- al ejecutarse, de la firma de fn_actividad_listar_docente con pestaña y docente
+-- elegido (V526, V553).
 
 DELETE FROM public.query WHERE uuid = 'eval-col-planeador-actividades-export-all-001';
 
@@ -32,13 +33,14 @@ SELECT
     NULL::INT,
     0,
     CAST(:BODY.FILTERS.DIA AS DATE),
-    CAST(:BODY.FILTERS.GRADO_ASIGNATURA_PARES AS VARCHAR[])
+    CAST(:BODY.FILTERS.GRADO_ASIGNATURA_PARES AS VARCHAR[]),
+    CAST(:BODY.FILTERS.FUNCIONARIO AS BIGINT)
 ) t
 WHERE t.pk_tactividad IS NOT NULL
   AND (CAST(:BODY.FILTERS.IDS AS BIGINT[]) IS NULL
        OR t.pk_tactividad = ANY(CAST(:BODY.FILTERS.IDS AS BIGINT[])));$q$,
     q.type, FALSE, FALSE,
-    'Reporte PDF/Excel de las actividades del planeador (reporting-service, clave planeador-actividades): las mismas que ve el usuario en su rail (fn_actividad_listar_docente, mismo gate y alcance que GET /planeador/actividades/mias), sin paginar y sin la fila centinela de un dia vacio. Filtros opcionales bajo BODY.FILTERS: SEARCH, ASIGNATURA, GRUPO, UNIDAD, ESTADOS[], DIAS_GRACIA, GRADO_ASIGNATURA_PARES[] ("grado:asignatura", la pestaña activa), DIA (solo si se quiere acotar a un dia) e IDS[] para exportar seleccionados; SORTING.ID/DESC para el orden. No es el JSON de intercambio de /planeador/actividades/exportar (V273).',
+    'Reporte PDF/Excel de las actividades del planeador (reporting-service, clave planeador-actividades): las mismas que ve el usuario en su rail (fn_actividad_listar_docente, mismo gate y alcance que GET /planeador/actividades/mias), sin paginar y sin la fila centinela de un dia vacio. Filtros opcionales bajo BODY.FILTERS: SEARCH, ASIGNATURA, GRUPO, UNIDAD, ESTADOS[], DIAS_GRACIA, GRADO_ASIGNATURA_PARES[] ("grado:asignatura", la pestaña activa), FUNCIONARIO (el docente elegido por super admin o coordinador, el ?funcionario= de /mias), DIA (solo si se quiere acotar a un dia) e IDS[] para exportar seleccionados; SORTING.ID/DESC para el orden. No es el JSON de intercambio de /planeador/actividades/exportar (V273).',
     q.action, q.style,
     CURRENT_TIMESTAMP, q.microservice_id,
     '/planeador/actividades/export-all',
@@ -51,6 +53,7 @@ WHERE t.pk_tactividad IS NOT NULL
       "BODY.FILTERS.DIAS_GRACIA": "INT",
       "BODY.FILTERS.DIA": "DATE",
       "BODY.FILTERS.GRADO_ASIGNATURA_PARES": "TEXT[]",
+      "BODY.FILTERS.FUNCIONARIO": "BIGINT",
       "BODY.FILTERS.IDS": "BIGINT[]",
       "BODY.SORTING.ID": "VARCHAR",
       "BODY.SORTING.DESC": "TEXT"}'::JSONB,
