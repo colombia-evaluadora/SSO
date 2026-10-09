@@ -99,22 +99,34 @@ SELECT academico_test.fn_cdc_asegurar_auditoria('academico_test', 'tinforme_desa
 -- ---------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION academico_test.fn_tlv_solicitud_tipo_pk(p_valor TEXT)
 RETURNS BIGINT
-LANGUAGE sql
+LANGUAGE plpgsql
 STABLE
 AS $$
+BEGIN
+    -- plpgsql y no sql: una sql con FROM no se incrusta y se replanifica en
+    -- cada llamada; aqui el plan queda en cache. Primera fila o NULL, como antes.
+    RETURN (SELECT * FROM (
     SELECT PK_LISTA_VALOR FROM academico_test.TLISTA_VALOR
      WHERE CATEGORIA = 'TIPO_SOLICITUD_APROBACION' AND VALOR = upper(TRIM(p_valor)) AND ACTIVE = TRUE
-     LIMIT 1;
+     LIMIT 1
+    ) q LIMIT 1);
+END;
 $$;
 
 CREATE OR REPLACE FUNCTION academico_test.fn_tlv_solicitud_estado_pk(p_valor TEXT)
 RETURNS BIGINT
-LANGUAGE sql
+LANGUAGE plpgsql
 STABLE
 AS $$
+BEGIN
+    -- plpgsql y no sql: una sql con FROM no se incrusta y se replanifica en
+    -- cada llamada; aqui el plan queda en cache. Primera fila o NULL, como antes.
+    RETURN (SELECT * FROM (
     SELECT PK_LISTA_VALOR FROM academico_test.TLISTA_VALOR
      WHERE CATEGORIA = 'ESTADO_SOLICITUD_APROBACION' AND VALOR = upper(TRIM(p_valor)) AND ACTIVE = TRUE
-     LIMIT 1;
+     LIMIT 1
+    ) q LIMIT 1);
+END;
 $$;
 
 CREATE OR REPLACE FUNCTION academico_test.fn_solicitud_aprobacion_estado(p_pk BIGINT)
@@ -316,7 +328,7 @@ DECLARE
     v_estado VARCHAR := academico_test.fn_solicitud_aprobacion_estado(p_pk);
 BEGIN
     IF v_estado IS DISTINCT FROM 'PENDIENTE' THEN
-        RAISE EXCEPTION 'La solicitud de aprobación % ya fue resuelta (%)', p_pk, initcap(lower(v_estado))
+        RAISE EXCEPTION 'Esta solicitud ya fue %, así que no se puede resolver de nuevo.', COALESCE(lower(v_estado), 'resuelta')
             USING ERRCODE = '22023';
     END IF;
 END;

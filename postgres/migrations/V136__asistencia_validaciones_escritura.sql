@@ -83,8 +83,11 @@ DECLARE
 BEGIN
     SELECT * INTO v_estado FROM academico_test.fn_asistencia_periodo_estado(p_fk_tgrupo);
     IF v_estado.estado_valor = 'C' THEN
-        RAISE EXCEPTION 'el periodo academico del grupo % esta %; no se puede % la asistencia',
-            p_fk_tgrupo, COALESCE(v_estado.estado_nombre, 'Cerrado'), p_accion
+        RAISE EXCEPTION 'El periodo académico del grupo % está %, así que no se puede % la asistencia.',
+            (SELECT format('%s del grado %s', gr.NOMBRE, g.NOMBRE)
+               FROM academico_test.TGRUPO gr
+               JOIN academico_test.TGRADO g ON g.PK_TGRADO = gr.FK_TGRADO
+              WHERE gr.PK_TGRUPO = p_fk_tgrupo), lower(COALESCE(v_estado.estado_nombre, 'Cerrado')), p_accion
             USING ERRCODE = '22023',
                   HINT = 'Reabrir el periodo academico para permitir cambios de asistencia.';
     END IF;
@@ -137,8 +140,12 @@ BEGIN
          WHERE FK_TFUNCIONARIO = v_funcionario AND FK_TGRUPO = p_fk_tgrupo
            AND FK_TASIGNATURA = v_asignatura AND ACTIVE = TRUE
     ) THEN
-        RAISE EXCEPTION 'no tiene asignada la asignatura % en el grupo % para registrar/editar asistencia',
-            v_asignatura, p_fk_tgrupo USING ERRCODE = '42501';
+        RAISE EXCEPTION 'No tiene asignada la asignatura % en el grupo %, así que no puede registrar ni editar su asistencia.',
+            COALESCE((SELECT a.NOMBRE FROM academico_test.TASIGNATURA a WHERE a.PK_TASIGNATURA = v_asignatura), 'seleccionada'),
+            (SELECT format('%s del grado %s', gr.NOMBRE, g.NOMBRE)
+               FROM academico_test.TGRUPO gr
+               JOIN academico_test.TGRADO g ON g.PK_TGRADO = gr.FK_TGRADO
+              WHERE gr.PK_TGRUPO = p_fk_tgrupo) USING ERRCODE = '42501';
     END IF;
 END;
 $$;
