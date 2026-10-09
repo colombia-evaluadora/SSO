@@ -96,8 +96,10 @@ RETURNS TABLE (
 -- jit off: el estimado inflado dispara JIT y compilar costaba como la consulta.
 LANGUAGE plpgsql STABLE SET jit = off AS $function$
 DECLARE
-    v_col TEXT;
-    v_dir TEXT;
+    v_col  TEXT;
+    v_dir  TEXT;
+    v_expr TEXT;   -- la misma columna, sobre g y lo que haga falta unirle
+    v_join TEXT;
 BEGIN
     v_col := CASE lower(coalesce(p_sort_by, ''))
         WHEN 'estudiante' THEN 'estudiante'
@@ -110,49 +112,79 @@ BEGIN
         ELSE 'fecha'
     END;
     v_dir := CASE WHEN lower(coalesce(p_sort_dir, '')) = 'asc' THEN 'ASC' ELSE 'DESC' END;
+    -- Se pagina antes de poner los textos: solo se une lo que pide el orden.
+    v_expr := CASE v_col
+        WHEN 'estudiante' THEN 'e.estudiante'
+        WHEN 'documento'  THEN 'e.documento'
+        WHEN 'grupo'      THEN 'e.grupo'
+        WHEN 'asignatura' THEN 'asig.NOMBRE'
+        WHEN 'actividad'  THEN 'act.TITULO'
+        ELSE 'g.' || v_col
+    END;
+    v_join := CASE
+        WHEN v_col IN ('estudiante', 'documento', 'grupo')
+            THEN 'JOIN est e ON e.fk_tmatricula = g.fk_tmatricula'
+        WHEN v_col = 'asignatura'
+            THEN 'LEFT JOIN academico_test.TASIGNATURA asig ON asig.PK_TASIGNATURA = g.fk_tasignatura'
+        WHEN v_col = 'actividad'
+            THEN 'LEFT JOIN academico_test.TACTIVIDAD act ON act.PK_TACTIVIDAD = g.fk_tactividad'
+        ELSE ''
+    END;
 
     RETURN QUERY EXECUTE format($q$
-      -- Entra por sede -> matriculas -> indice (matricula, fecha), no por la vista.
-      WITH base AS MATERIALIZED (
-        SELECT a.PK_TASISTENCIA AS pk_tasistencia, a.FK_TMATRICULA AS fk_tmatricula,
-               m.FK_TGRUPO AS fk_tgrupo,
-               NULLIF(TRIM(regexp_replace(
-                   concat_ws(' ', u.PRIMER_NOMBRE, u.SEGUNDO_NOMBRE,
-                                  u.PRIMER_APELLIDO, u.SEGUNDO_APELLIDO),
-                   '\s+', ' ', 'g')), '')                         AS estudiante,
-               u.IDENTIFICACION AS documento, gr.NOMBRE AS grupo,
-               g.NOMBRE AS grado, g.CODIGO AS grado_valor, jor.NOMBRE AS jornada,
-               a.FK_TASIGNATURA AS fk_tasignatura, asig.NOMBRE AS asignatura,
-               a.FK_TACTIVIDAD AS fk_tactividad, act.TITULO AS actividad,
-               a.FECHA AS fecha, a.BLOQUE AS bloque,
-               CASE lv.VALOR WHEN '1' THEN 1 WHEN '2' THEN 2 WHEN '3' THEN 3
-                             WHEN '5' THEN 5 WHEN '6' THEN 6 END       AS tipo_valor,
-               lv.NOMBRE AS tipo_nombre,
-               a.OBSERVACION AS observacion, a.FK_SOPORTE_ARCHIVO AS fk_soporte_archivo,
-               arch.NOMBRE AS soporte_nombre,
-               pa.HORA_INICIO AS jornada_inicio, pa.HORA_FIN AS jornada_fin
+      -- Matriculas del filtro; la busqueda por estudiante/grupo se evalua aqui,
+      -- una vez por matricula y no por registro.
+      WITH mat AS MATERIALIZED (
+        SELECT m.PK_TMATRICULA AS pk_tmatricula, m.FK_TGRUPO AS fk_tgrupo,
+               pa.HORA_INICIO AS jornada_inicio, pa.HORA_FIN AS jornada_fin,
+               ($7 IS NOT NULL AND (
+                   NULLIF(TRIM(regexp_replace(
+                       concat_ws(' ', u.PRIMER_NOMBRE, u.SEGUNDO_NOMBRE,
+                                      u.PRIMER_APELLIDO, u.SEGUNDO_APELLIDO),
+                       '\s+', ' ', 'g')), '')  ILIKE '%%' || $7 || '%%' OR
+                   u.IDENTIFICACION ILIKE '%%' || $7 || '%%' OR
+                   gr.NOMBRE        ILIKE '%%' || $7 || '%%'))         AS coincide
           FROM academico_test.TPERIODO_ACADEMICO pa
           JOIN academico_test.TGRADO g       ON g.FK_TPERIODO_ACADEMICO = pa.PK_TPERIODO_ACADEMICO
           JOIN academico_test.TGRUPO gr      ON gr.FK_TGRADO = g.PK_TGRADO
           JOIN academico_test.TMATRICULA m   ON m.FK_TGRUPO = gr.PK_TGRUPO
-          JOIN academico_test.TASISTENCIA a  ON a.FK_TMATRICULA = m.PK_TMATRICULA
           JOIN academico_test.TESTUDIANTE es ON es.PK_TESTUDIANTE = m.FK_TESTUDIANTE
           JOIN academico_test.TUSUARIO u     ON u.PK_TUSUARIO = es.FK_TUSUARIO
-          JOIN academico_test.TLISTA_VALOR lv ON lv.PK_LISTA_VALOR = a.FK_TLV_TIPO_ASISTENCIA
-          LEFT JOIN academico_test.TASIGNATURA asig ON asig.PK_TASIGNATURA = a.FK_TASIGNATURA
-          LEFT JOIN academico_test.TACTIVIDAD  act  ON act.PK_TACTIVIDAD  = a.FK_TACTIVIDAD
           LEFT JOIN academico_test.TLISTA_VALOR jor ON jor.PK_LISTA_VALOR = gr.FK_TLV_JORNADA
                                                    AND jor.CATEGORIA = 'JORNADA'
-          LEFT JOIN academico_test.TARCHIVO arch ON arch.PK_TARCHIVO = a.FK_SOPORTE_ARCHIVO
-         WHERE a.ACTIVE = TRUE
-           AND ($2  IS NULL OR a.FECHA >= $2)
-           AND ($3  IS NULL OR a.FECHA <= $3)
-           AND ($4  IS NULL OR gr.PK_TGRUPO = $4)
-           AND ($5  IS NULL OR a.FK_TASIGNATURA = $5)
-           AND ($10 IS NULL OR a.FK_TACTIVIDAD = $10)
+         WHERE ($4  IS NULL OR gr.PK_TGRUPO = $4)
            AND ($11 IS NULL OR jor.NOMBRE = $11)
            AND ($12 IS NULL OR g.NOMBRE = $12)
            AND ($13 IS NULL OR pa.FK_TSEDE = $13)
+      ),
+      -- Entra por el indice (matricula, fecha). Solo ids y numeros hasta
+      -- paginar: los textos se unen al final, una vez por fila.
+      base AS MATERIALIZED (
+        SELECT a.PK_TASISTENCIA AS pk_tasistencia, a.FK_TMATRICULA AS fk_tmatricula,
+               mt.fk_tgrupo,
+               a.FK_TASIGNATURA AS fk_tasignatura, a.FK_TACTIVIDAD AS fk_tactividad,
+               a.FECHA AS fecha, a.BLOQUE AS bloque,
+               CASE lv.VALOR WHEN '1' THEN 1 WHEN '2' THEN 2 WHEN '3' THEN 3
+                             WHEN '5' THEN 5 WHEN '6' THEN 6 END       AS tipo_valor,
+               a.FK_TLV_TIPO_ASISTENCIA AS fk_tipo,
+               (a.OBSERVACION IS NOT NULL) AS tiene_observacion,
+               a.FK_SOPORTE_ARCHIVO AS fk_soporte_archivo,
+               mt.jornada_inicio, mt.jornada_fin
+          FROM mat mt
+          JOIN academico_test.TASISTENCIA a  ON a.FK_TMATRICULA = mt.pk_tmatricula
+          JOIN academico_test.TLISTA_VALOR lv ON lv.PK_LISTA_VALOR = a.FK_TLV_TIPO_ASISTENCIA
+          LEFT JOIN academico_test.TASIGNATURA asig ON asig.PK_TASIGNATURA = a.FK_TASIGNATURA
+          LEFT JOIN academico_test.TACTIVIDAD  act  ON act.PK_TACTIVIDAD  = a.FK_TACTIVIDAD
+         WHERE a.ACTIVE = TRUE
+           AND ($2  IS NULL OR a.FECHA >= $2)
+           AND ($3  IS NULL OR a.FECHA <= $3)
+           AND ($5  IS NULL OR a.FK_TASIGNATURA = $5)
+           AND ($10 IS NULL OR a.FK_TACTIVIDAD = $10)
+           -- Incluye ACTIVIDAD: en preescolar la asignatura viene NULL.
+           AND ($7 IS NULL OR mt.coincide OR
+                asig.NOMBRE ILIKE '%%' || $7 || '%%' OR
+                act.TITULO  ILIKE '%%' || $7 || '%%' OR
+                lv.NOMBRE   ILIKE '%%' || $7 || '%%')
       ),
       -- Alcance una vez por (grupo, asignatura). MATERIALIZED: si no, el planner
       -- empuja el filtro bajo el DISTINCT y lo evalua por registro.
@@ -164,150 +196,156 @@ BEGIN
           FROM pares x
          WHERE academico_test.fn_asistencia_puede_ver_asignatura($1, x.fk_tgrupo, x.fk_tasignatura)
       ),
-      dia AS (
-        SELECT PK_LISTA_VALOR AS pk, VALOR AS valor
-          FROM academico_test.TLISTA_VALOR WHERE CATEGORIA = 'DIA_SEMANA'
+      -- Horario por (grupo, asignatura, bloque, dia), una vez y no por registro.
+      hor AS (
+        SELECT DISTINCT ON (th.FK_TGRUPO, th.FK_TASIGNATURA, th.NUMERO_BLOQUE, dia.VALOR)
+               th.FK_TGRUPO AS fk_tgrupo, th.FK_TASIGNATURA AS fk_tasignatura,
+               th.NUMERO_BLOQUE AS bloque, dia.VALOR AS dia,
+               th.HORA_INICIO AS hora_inicio, th.HORA_FIN AS hora_fin
+          FROM academico_test.THORARIO th
+          JOIN academico_test.TLISTA_VALOR dia ON dia.PK_LISTA_VALOR = th.FK_TLV_DIA_SEMANA
+                                              AND dia.CATEGORIA = 'DIA_SEMANA'
+         WHERE th.ACTIVE = TRUE
+           AND th.FK_TGRUPO IN (SELECT fk_tgrupo FROM pares)
       ),
       d AS (
         SELECT b.*, franja.hora_inicio, franja.hora_fin
           FROM base b
-          JOIN visibles v ON v.fk_tgrupo = b.fk_tgrupo
-                         AND v.fk_tasignatura = COALESCE(b.fk_tasignatura, 0)
-          -- Franja del bloque por dia de semana, como en v_asistencia_detalle.
-          LEFT JOIN LATERAL (
-              SELECT th.HORA_INICIO, th.HORA_FIN
-                FROM academico_test.THORARIO th
-                JOIN dia ON dia.pk = th.FK_TLV_DIA_SEMANA
-                        AND dia.valor = (EXTRACT(DOW FROM b.fecha)::INT + 1)::TEXT
-               WHERE th.FK_TGRUPO      = b.fk_tgrupo
-                 AND th.FK_TASIGNATURA = b.fk_tasignatura
-                 AND th.NUMERO_BLOQUE  = b.bloque
-                 AND th.ACTIVE = TRUE
-               LIMIT 1
-          ) h ON TRUE
+          LEFT JOIN hor h ON h.fk_tgrupo = b.fk_tgrupo
+                         AND h.fk_tasignatura = b.fk_tasignatura
+                         AND h.bloque = b.bloque
+                         AND h.dia = (EXTRACT(DOW FROM b.fecha)::INT + 1)::TEXT
           CROSS JOIN LATERAL academico_test.fn_asistencia_franja_bloque(
-              b.fecha, h.HORA_INICIO, h.HORA_FIN, b.jornada_inicio, b.jornada_fin) franja
-          -- Incluye ACTIVIDAD: en preescolar la asignatura viene NULL.
-         WHERE ($7 IS NULL OR (
-                   b.estudiante  ILIKE '%%' || $7 || '%%' OR
-                   b.documento   ILIKE '%%' || $7 || '%%' OR
-                   b.grupo       ILIKE '%%' || $7 || '%%' OR
-                   b.asignatura  ILIKE '%%' || $7 || '%%' OR
-                   b.actividad   ILIKE '%%' || $7 || '%%' OR
-                   b.tipo_nombre ILIKE '%%' || $7 || '%%'
-               ))
+              b.fecha, h.hora_inicio, h.hora_fin, b.jornada_inicio, b.jornada_fin) franja
+         WHERE (b.fk_tgrupo, COALESCE(b.fk_tasignatura, 0)) IN (SELECT fk_tgrupo, fk_tasignatura FROM visibles)
+           -- Con filtro de tipo solo entran las sesiones que lo contienen: el
+           -- estado de la corrida es el de alguno de sus registros.
+           AND ($6 IS NULL OR (b.fk_tmatricula, b.fecha, COALESCE(b.fk_tasignatura, 0),
+                               COALESCE(b.fk_tactividad, 0)) IN (
+                   SELECT x.fk_tmatricula, x.fecha, COALESCE(x.fk_tasignatura, 0),
+                          COALESCE(x.fk_tactividad, 0)
+                     FROM base x WHERE x.tipo_valor = $6::INT))
+      ),
+      -- Una fila por corrida. Un solo orden (bloque, pk) en todos los agregados.
+      g AS MATERIALIZED (
+        SELECT
+            (array_agg(b.pk_tasistencia ORDER BY b.bloque, b.pk_tasistencia))[1] AS pk_tasistencia,
+             array_agg(b.pk_tasistencia ORDER BY b.bloque, b.pk_tasistencia)     AS pks,
+             COUNT(*)::INTEGER                                                   AS registros,
+             b.fk_tmatricula, b.fk_tasignatura, b.fk_tactividad, b.fecha,
+             MIN(b.bloque)                                                       AS bloque,
+             array_remove(array_agg(b.bloque ORDER BY b.bloque, b.pk_tasistencia), NULL) AS bloques,
+             MIN(b.hora_inicio)                                                  AS hora_inicio,
+             MAX(b.hora_fin)                                                     AS hora_fin,
+             MIN(b.tipo_corrida)                                                 AS tipo_asistencia_valor,
+             MIN(b.fk_tipo_corrida)                                              AS fk_tipo,
+             array_remove(array_agg(b.bloque ORDER BY b.bloque, b.pk_tasistencia)
+                          FILTER (WHERE b.prioridad = b.prioridad_corrida), NULL)    AS bloques_estado,
+             MIN(b.hora_inicio) FILTER (WHERE b.prioridad = b.prioridad_corrida)     AS hora_inicio_estado,
+             MAX(b.hora_fin)    FILTER (WHERE b.prioridad = b.prioridad_corrida)     AS hora_fin_estado,
+             MIN(b.observacion_pk)                                               AS observacion_pk,
+             bool_or(b.fk_soporte_archivo IS NOT NULL)                           AS tiene_soporte,
+             MIN(b.soporte_corrida)                                              AS fk_soporte_archivo
+          FROM (
+           -- Ganadores por prioridad (tarde gana): estado, primera observacion
+           -- y primer soporte, aunque vivan en otro bloque de la corrida.
+           SELECT b0.*,
+                  first_value(b0.prioridad)  OVER wc                             AS prioridad_corrida,
+                  first_value(b0.tipo_valor) OVER wc                             AS tipo_corrida,
+                  first_value(b0.fk_tipo)    OVER wc                             AS fk_tipo_corrida,
+                  (array_agg(b0.pk_tasistencia) FILTER (WHERE b0.tiene_observacion) OVER wc)[1]
+                                                                                 AS observacion_pk,
+                  (array_agg(b0.fk_soporte_archivo) FILTER (WHERE b0.fk_soporte_archivo IS NOT NULL) OVER wc)[1]
+                                                                                 AS soporte_corrida
+             FROM (
+            SELECT d.*,
+                   academico_test.fn_asistencia_tipo_prioridad(d.tipo_valor)        AS prioridad,
+                   -- Isla: (bloque - posicion) es constante en una corrida;
+                   -- sin bloque, isla propia.
+                   CASE WHEN d.bloque IS NULL THEN -d.pk_tasistencia
+                        ELSE d.bloque - row_number() OVER (
+                                 PARTITION BY d.fk_tmatricula, d.fecha,
+                                              d.fk_tasignatura, d.fk_tactividad
+                                     ORDER BY d.bloque)
+                   END                                                              AS isla
+              FROM d
+             ) b0
+           WINDOW wc AS (PARTITION BY b0.fk_tmatricula, b0.fecha, b0.fk_tasignatura,
+                                      b0.fk_tactividad, b0.isla
+                             ORDER BY b0.prioridad, b0.bloque, b0.pk_tasistencia
+                             ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)
+          ) b
+         GROUP BY b.fk_tmatricula, b.fecha, b.fk_tasignatura, b.fk_tactividad, b.isla
+         -- El tipo filtra el estado de la corrida, antes de las tarjetas.
+        HAVING ($6 IS NULL OR MIN(b.tipo_corrida) = $6::INT)
+      ),
+      -- Tarjetas: estudiantes distintos sobre el set filtrado completo.
+      tot AS (
+        SELECT COUNT(DISTINCT fk_tmatricula)                                                AS total_estudiantes,
+               COUNT(DISTINCT fk_tmatricula) FILTER (WHERE tipo_asistencia_valor = 1)       AS asistieron,
+               COUNT(DISTINCT fk_tmatricula) FILTER (WHERE tipo_asistencia_valor IN (5,6))  AS tarde,
+               COUNT(DISTINCT fk_tmatricula) FILTER (WHERE tipo_asistencia_valor IN (2,3))  AS ausentes,
+               COUNT(*)                                                                     AS total_count
+          FROM g
+      ),
+      -- Para ordenar por estudiante/documento/grupo: una vez por matricula.
+      est AS MATERIALIZED (
+        SELECT m.PK_TMATRICULA AS fk_tmatricula,
+               NULLIF(TRIM(regexp_replace(
+                   concat_ws(' ', u.PRIMER_NOMBRE, u.SEGUNDO_NOMBRE,
+                                  u.PRIMER_APELLIDO, u.SEGUNDO_APELLIDO),
+                   '\s+', ' ', 'g')), '')                         AS estudiante,
+               u.IDENTIFICACION AS documento, gr.NOMBRE AS grupo,
+               gd.NOMBRE AS grado, gd.CODIGO AS grado_valor, jor.NOMBRE AS jornada
+          FROM academico_test.TMATRICULA m
+          JOIN academico_test.TESTUDIANTE es ON es.PK_TESTUDIANTE = m.FK_TESTUDIANTE
+          JOIN academico_test.TUSUARIO u     ON u.PK_TUSUARIO = es.FK_TUSUARIO
+          JOIN academico_test.TGRUPO gr      ON gr.PK_TGRUPO = m.FK_TGRUPO
+          JOIN academico_test.TGRADO gd      ON gd.PK_TGRADO = gr.FK_TGRADO
+          LEFT JOIN academico_test.TLISTA_VALOR jor ON jor.PK_LISTA_VALOR = gr.FK_TLV_JORNADA
+                                                   AND jor.CATEGORIA = 'JORNADA'
+         WHERE m.PK_TMATRICULA IN (SELECT fk_tmatricula FROM g)
+      ),
+      sel AS (
+        SELECT g.* FROM g %3$s
+         ORDER BY %4$s %2$s, g.pk_tasistencia
+         LIMIT NULLIF($9, 0)
+        OFFSET COALESCE($8, 0) * COALESCE(NULLIF($9, 0), 0)
       )
-      -- La solicitud pendiente se busca solo para la pagina, despues del LIMIT.
-      SELECT p.*,
+      -- Textos, observacion, soporte y solicitud pendiente solo para la pagina.
+      SELECT p.pk_tasistencia, p.pks, p.registros,
+             NULLIF(TRIM(regexp_replace(
+                 concat_ws(' ', u.PRIMER_NOMBRE, u.SEGUNDO_NOMBRE,
+                                u.PRIMER_APELLIDO, u.SEGUNDO_APELLIDO),
+                 '\s+', ' ', 'g')), '')                              AS estudiante,
+             u.IDENTIFICACION::VARCHAR AS documento, gr.NOMBRE::VARCHAR AS grupo,
+             gd.NOMBRE::VARCHAR AS grado, gd.CODIGO::VARCHAR AS grado_valor,
+             jor.NOMBRE::VARCHAR AS jornada, asig.NOMBRE::VARCHAR AS asignatura,
+             p.fk_tactividad, act.TITULO::VARCHAR AS actividad,
+             (p.fk_tactividad IS NOT NULL) AS es_formativa, p.fecha, p.bloque, p.bloques,
+             p.hora_inicio, p.hora_fin, p.bloques_estado, p.hora_inicio_estado, p.hora_fin_estado,
+             p.tipo_asistencia_valor, lvt.NOMBRE::VARCHAR AS tipo_asistencia,
+             obs.OBSERVACION::VARCHAR AS observacion,
+             p.tiene_soporte, p.fk_soporte_archivo, arch.NOMBRE::VARCHAR AS soporte_nombre,
+             t.total_estudiantes, t.asistieron, t.tarde, t.ausentes, t.total_count,
              EXISTS (SELECT 1 FROM unnest(p.pks) x
                       WHERE academico_test.fn_asistencia_solicitud_pendiente(x) IS NOT NULL) AS cambio_pendiente
-        FROM (
-        SELECT
-            pk_tasistencia, pks, registros, estudiante, documento, grupo, grado, grado_valor, jornada, asignatura,
-            fk_tactividad, actividad, es_formativa, fecha, bloque, bloques,
-            hora_inicio, hora_fin, bloques_estado, hora_inicio_estado, hora_fin_estado,
-            tipo_asistencia_valor, tipo_asistencia,
-            observacion, tiene_soporte, fk_soporte_archivo, soporte_nombre,
-            -- count(DISTINCT) OVER no existe: se cuenta rn_* = 1. Ventanas sobre
-            -- el set filtrado completo, no sobre la pagina.
-            SUM((rn_mat = 1)::int) OVER ()::BIGINT  AS total_estudiantes,
-            SUM((rn_pre = 1)::int) OVER ()::BIGINT  AS asistieron,
-            SUM((rn_tar = 1)::int) OVER ()::BIGINT  AS tarde,
-            SUM((rn_aus = 1)::int) OVER ()::BIGINT  AS ausentes,
-            COUNT(*) OVER ()::BIGINT                AS total_count
-        FROM (
-            SELECT g.*,
-                   row_number() OVER (PARTITION BY g.fk_tmatricula
-                                          ORDER BY g.pk_tasistencia)          AS rn_mat,
-                   CASE WHEN g.tipo_asistencia_valor = 1
-                        THEN row_number() OVER (PARTITION BY g.fk_tmatricula,
-                                                             (g.tipo_asistencia_valor = 1)
-                                                    ORDER BY g.pk_tasistencia)
-                        ELSE 0 END                                            AS rn_pre,
-                   CASE WHEN g.tipo_asistencia_valor IN (5,6)
-                        THEN row_number() OVER (PARTITION BY g.fk_tmatricula,
-                                                             (g.tipo_asistencia_valor IN (5,6))
-                                                    ORDER BY g.pk_tasistencia)
-                        ELSE 0 END                                            AS rn_tar,
-                   CASE WHEN g.tipo_asistencia_valor IN (2,3)
-                        THEN row_number() OVER (PARTITION BY g.fk_tmatricula,
-                                                             (g.tipo_asistencia_valor IN (2,3))
-                                                    ORDER BY g.pk_tasistencia)
-                        ELSE 0 END                                            AS rn_aus
-              FROM (
-                -- Un solo orden (bloque, pk) en todos los agregados: un sort, no uno por grupo.
-                SELECT
-                    (array_agg(b.pk_tasistencia ORDER BY b.bloque, b.pk_tasistencia))[1] AS pk_tasistencia,
-                     array_agg(b.pk_tasistencia ORDER BY b.bloque, b.pk_tasistencia)     AS pks,
-                     COUNT(*)::INTEGER                                                   AS registros,
-                     b.fk_tmatricula,
-                     MIN(b.estudiante)                                                   AS estudiante,
-                     MIN(b.documento)::VARCHAR                                           AS documento,
-                     MIN(b.grupo)::VARCHAR                                               AS grupo,
-                     MIN(b.grado)::VARCHAR                                               AS grado,
-                     MIN(b.grado_valor)::VARCHAR                                         AS grado_valor,
-                     MIN(b.jornada)::VARCHAR                                             AS jornada,
-                     MIN(b.asignatura)::VARCHAR                                          AS asignatura,
-                     b.fk_tactividad,
-                     MIN(b.actividad)::VARCHAR                                           AS actividad,
-                     (b.fk_tactividad IS NOT NULL)                                       AS es_formativa,
-                     b.fecha,
-                     MIN(b.bloque)                                                       AS bloque,
-                     array_remove(array_agg(b.bloque ORDER BY b.bloque, b.pk_tasistencia), NULL) AS bloques,
-                     MIN(b.hora_inicio)                                                  AS hora_inicio,
-                     MAX(b.hora_fin)                                                     AS hora_fin,
-                     MIN(b.tipo_corrida)                                                 AS tipo_asistencia_valor,
-                     MIN(b.tipo_nombre_corrida)::VARCHAR                                 AS tipo_asistencia,
-                     array_remove(array_agg(b.bloque ORDER BY b.bloque, b.pk_tasistencia)
-                                  FILTER (WHERE b.prioridad = b.prioridad_corrida), NULL)    AS bloques_estado,
-                     MIN(b.hora_inicio) FILTER (WHERE b.prioridad = b.prioridad_corrida)     AS hora_inicio_estado,
-                     MAX(b.hora_fin)    FILTER (WHERE b.prioridad = b.prioridad_corrida)     AS hora_fin_estado,
-                     MIN(b.observacion_corrida)::VARCHAR                                 AS observacion,
-                     bool_or(b.fk_soporte_archivo IS NOT NULL)                           AS tiene_soporte,
-                     MIN(b.soporte_corrida)                                              AS fk_soporte_archivo,
-                     MIN(b.soporte_nombre_corrida)::VARCHAR                              AS soporte_nombre
-                  FROM (
-                   -- Ganadores por prioridad (tarde gana): estado, primera observacion
-                   -- y primer soporte, aunque vivan en otro bloque de la corrida.
-                   SELECT b0.*,
-                          first_value(b0.prioridad)   OVER wc                            AS prioridad_corrida,
-                          first_value(b0.tipo_valor)  OVER wc                            AS tipo_corrida,
-                          first_value(b0.tipo_nombre) OVER wc                            AS tipo_nombre_corrida,
-                          (array_agg(b0.observacion) FILTER (WHERE b0.observacion IS NOT NULL) OVER wc)[1]
-                                                                                         AS observacion_corrida,
-                          (array_agg(b0.fk_soporte_archivo) FILTER (WHERE b0.fk_soporte_archivo IS NOT NULL) OVER wc)[1]
-                                                                                         AS soporte_corrida,
-                          (array_agg(b0.soporte_nombre) FILTER (WHERE b0.fk_soporte_archivo IS NOT NULL) OVER wc)[1]
-                                                                                         AS soporte_nombre_corrida
-                     FROM (
-                    SELECT d.*,
-                           academico_test.fn_asistencia_tipo_prioridad(d.tipo_valor)        AS prioridad,
-                           -- Isla: (bloque - posicion) es constante en una corrida;
-                           -- sin bloque, isla propia.
-                           CASE WHEN d.bloque IS NULL THEN -d.pk_tasistencia
-                                ELSE d.bloque - row_number() OVER (
-                                         PARTITION BY d.fk_tmatricula, d.fecha,
-                                                      d.fk_tasignatura, d.fk_tactividad
-                                             ORDER BY d.bloque)
-                           END                                                              AS isla
-                      FROM d
-                     ) b0
-                   WINDOW wc AS (PARTITION BY b0.fk_tmatricula, b0.fecha, b0.fk_tasignatura,
-                                              b0.fk_tactividad, b0.isla
-                                     ORDER BY b0.prioridad, b0.bloque, b0.pk_tasistencia
-                                     ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)
-                  ) b
-                 GROUP BY b.fk_tmatricula, b.fecha, b.fk_tasignatura, b.fk_tactividad, b.isla
-              ) g
-             -- El tipo filtra el estado de la corrida, antes de las ventanas.
-             WHERE ($6 IS NULL OR g.tipo_asistencia_valor = $6::INT)
-        ) q
-        ORDER BY %1$s %2$s, pk_tasistencia
-        LIMIT NULLIF($9, 0)
-       OFFSET COALESCE($8, 0) * COALESCE(NULLIF($9, 0), 0)
-        ) p
+        FROM sel p
+        CROSS JOIN tot t
+        JOIN academico_test.TMATRICULA m   ON m.PK_TMATRICULA = p.fk_tmatricula
+        JOIN academico_test.TESTUDIANTE es ON es.PK_TESTUDIANTE = m.FK_TESTUDIANTE
+        JOIN academico_test.TUSUARIO u     ON u.PK_TUSUARIO = es.FK_TUSUARIO
+        JOIN academico_test.TGRUPO gr      ON gr.PK_TGRUPO = m.FK_TGRUPO
+        JOIN academico_test.TGRADO gd      ON gd.PK_TGRADO = gr.FK_TGRADO
+        JOIN academico_test.TLISTA_VALOR lvt ON lvt.PK_LISTA_VALOR = p.fk_tipo
+        LEFT JOIN academico_test.TLISTA_VALOR jor ON jor.PK_LISTA_VALOR = gr.FK_TLV_JORNADA
+                                                 AND jor.CATEGORIA = 'JORNADA'
+        LEFT JOIN academico_test.TASIGNATURA asig ON asig.PK_TASIGNATURA = p.fk_tasignatura
+        LEFT JOIN academico_test.TACTIVIDAD  act  ON act.PK_TACTIVIDAD  = p.fk_tactividad
+        LEFT JOIN academico_test.TASISTENCIA obs  ON obs.PK_TASISTENCIA = p.observacion_pk
+        LEFT JOIN academico_test.TARCHIVO arch    ON arch.PK_TARCHIVO = p.fk_soporte_archivo
        ORDER BY %1$s %2$s, pk_tasistencia
-    $q$, v_col, v_dir)
+    $q$, v_col, v_dir, v_join, v_expr)
     USING p_pk_usuario, p_fecha_desde, p_fecha_hasta, p_fk_tgrupo, p_fk_tasignatura,
           p_tipo_asistencia, NULLIF(TRIM(p_search), ''), p_page_index, p_page_size,
           p_fk_tactividad, NULLIF(TRIM(p_jornada), ''), NULLIF(TRIM(p_grado), ''),
