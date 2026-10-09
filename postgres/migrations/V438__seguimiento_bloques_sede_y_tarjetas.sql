@@ -1,23 +1,15 @@
--- V438 -- Seguimiento: una fila por corrida de bloques CONSECUTIVOS (la misma
--- asignatura dictada en 5 bloques salia 5 veces), filtro por SEDE (el front ya
--- la mandaba pero no habia por donde recibirla, y un rector veia las de todas
--- sus sedes), y las tarjetas asistieron/tarde como ventanas sobre el set
--- filtrado completo -- la funcion no las devolvia y el front terminaba
--- contandolas sobre la pagina visible. Suma fn_asistencia_editar_bulk: una
--- fila agrupada son N registros de TASISTENCIA.
--- Va aparte de V220/V436 (ya aplicadas) por el mismo motivo que V436: se
--- revierte con un CREATE OR REPLACE. Cambia la aridad (14 -> 15) y el
--- RETURNS TABLE. Tras aplicar, REINICIAR query-service-eval-col (cachea el
--- catalogo) o la ruta nueva responde 404.
--- Depende de: V220 (modulo, vista, fn_asistencia_editar), V221 / V228 / V290
--- (catalogo HTTP), V436 (jornada/grado), V496.18 (solicitud pendiente, Regla 75).
+-- V438 -- Seguimiento: una fila por corrida de bloques consecutivos, filtro por
+-- sede y tarjetas sobre el set filtrado completo; fn_asistencia_editar_bulk
+-- para editar la corrida entera.
+-- Tras aplicar, reiniciar query-service-eval-col (cachea el catalogo).
+-- Depende de: V136 (alcance), V138 (fn_asistencia_editar), V140 (franja),
+-- V221/V228 (catalogo HTTP), V496.18 (solicitud pendiente, Regla 75).
 
 SET search_path TO public;
 
 
 -- ---------------------------------------------------------------------------
--- 1. Que estado manda en una corrida de bloques mezclada. Un solo sitio para
---    la regla, como las banderas es_presente/es_tarde/es_ausente de la vista.
+-- 1. Que estado manda en una corrida de bloques mezclada.
 -- ---------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION academico_test.fn_asistencia_tipo_prioridad(
     p_tipo_valor INTEGER
@@ -39,9 +31,7 @@ COMMENT ON FUNCTION academico_test.fn_asistencia_tipo_prioridad(INTEGER)
 -- ---------------------------------------------------------------------------
 -- 2. El listado.
 -- ---------------------------------------------------------------------------
--- Se sueltan las DOS firmas: la de V436 (14 params) porque cambia la aridad, y
--- la propia (15) porque al reaplicar la migracion cambia el RETURNS TABLE, y
--- eso CREATE OR REPLACE no lo permite ("cannot change return type").
+-- DROP de ambas firmas: CREATE OR REPLACE no puede cambiar el RETURNS TABLE.
 DROP FUNCTION IF EXISTS academico_test.fn_asistencia_listar_seguimiento(
     BIGINT, DATE, DATE, BIGINT, BIGINT, NUMERIC, TEXT, INT, INT, TEXT, TEXT, BIGINT, TEXT, TEXT);
 DROP FUNCTION IF EXISTS academico_test.fn_asistencia_listar_seguimiento(
@@ -67,8 +57,7 @@ CREATE OR REPLACE FUNCTION academico_test.fn_asistencia_listar_seguimiento(
     p_fk_tsede        BIGINT  DEFAULT NULL    -- acota, no autoriza (el gate sigue siendo el rol)
 )
 RETURNS TABLE (
-    -- Primer registro de la corrida: sigue siendo la clave de fila del front
-    -- y lo que espera /asistencias/export-all para el LEFT JOIN a la vista.
+    -- Primer registro de la corrida: la clave de fila del front.
     pk_tasistencia        BIGINT,
     pks                   BIGINT[],           -- TODOS los registros de la corrida
     registros             INTEGER,            -- cardinality(pks)
@@ -77,6 +66,7 @@ RETURNS TABLE (
     grupo                 VARCHAR,
     grado                 VARCHAR,            -- NOMBRE de TGRADO
     grado_valor           VARCHAR,            -- CODIGO de TGRADO ("2" -> la pantalla pinta "2 02")
+    jornada               VARCHAR,            -- NOMBRE de TLISTA_VALOR JORNADA del grupo
     asignatura            VARCHAR,
     fk_tactividad         BIGINT,
     actividad             VARCHAR,
@@ -86,9 +76,7 @@ RETURNS TABLE (
     bloques               NUMERIC[],
     hora_inicio           TIMESTAMP,          -- inicio del primer bloque
     hora_fin              TIMESTAMP,          -- fin del ultimo
-    -- Donde ocurrio lo que la fila reporta: los bloques de la corrida que
-    -- llevan el estado ganador, y su franja. Con la corrida entera en el mismo
-    -- estado son todos; si llego tarde solo al bloque 2 de cinco, es ese.
+    -- Bloques que llevan el estado ganador de la corrida, y su franja.
     bloques_estado        NUMERIC[],
     hora_inicio_estado    TIMESTAMP,
     hora_fin_estado       TIMESTAMP,
@@ -105,7 +93,8 @@ RETURNS TABLE (
     total_count           BIGINT,
     cambio_pendiente      BOOLEAN             -- Regla 75: algún registro de la corrida espera aprobación
 )
-LANGUAGE plpgsql STABLE AS $function$
+-- jit off: el estimado inflado dispara JIT y compilar costaba como la consulta.
+LANGUAGE plpgsql STABLE SET jit = off AS $function$
 DECLARE
     v_col TEXT;
     v_dir TEXT;
@@ -123,20 +112,104 @@ BEGIN
     v_dir := CASE WHEN lower(coalesce(p_sort_dir, '')) = 'asc' THEN 'ASC' ELSE 'DESC' END;
 
     RETURN QUERY EXECUTE format($q$
+      -- Entra por sede -> matriculas -> indice (matricula, fecha), no por la vista.
+      WITH base AS MATERIALIZED (
+        SELECT a.PK_TASISTENCIA AS pk_tasistencia, a.FK_TMATRICULA AS fk_tmatricula,
+               m.FK_TGRUPO AS fk_tgrupo,
+               NULLIF(TRIM(regexp_replace(
+                   concat_ws(' ', u.PRIMER_NOMBRE, u.SEGUNDO_NOMBRE,
+                                  u.PRIMER_APELLIDO, u.SEGUNDO_APELLIDO),
+                   '\s+', ' ', 'g')), '')                         AS estudiante,
+               u.IDENTIFICACION AS documento, gr.NOMBRE AS grupo,
+               g.NOMBRE AS grado, g.CODIGO AS grado_valor, jor.NOMBRE AS jornada,
+               a.FK_TASIGNATURA AS fk_tasignatura, asig.NOMBRE AS asignatura,
+               a.FK_TACTIVIDAD AS fk_tactividad, act.TITULO AS actividad,
+               a.FECHA AS fecha, a.BLOQUE AS bloque,
+               CASE lv.VALOR WHEN '1' THEN 1 WHEN '2' THEN 2 WHEN '3' THEN 3
+                             WHEN '5' THEN 5 WHEN '6' THEN 6 END       AS tipo_valor,
+               lv.NOMBRE AS tipo_nombre,
+               a.OBSERVACION AS observacion, a.FK_SOPORTE_ARCHIVO AS fk_soporte_archivo,
+               arch.NOMBRE AS soporte_nombre,
+               pa.HORA_INICIO AS jornada_inicio, pa.HORA_FIN AS jornada_fin
+          FROM academico_test.TPERIODO_ACADEMICO pa
+          JOIN academico_test.TGRADO g       ON g.FK_TPERIODO_ACADEMICO = pa.PK_TPERIODO_ACADEMICO
+          JOIN academico_test.TGRUPO gr      ON gr.FK_TGRADO = g.PK_TGRADO
+          JOIN academico_test.TMATRICULA m   ON m.FK_TGRUPO = gr.PK_TGRUPO
+          JOIN academico_test.TASISTENCIA a  ON a.FK_TMATRICULA = m.PK_TMATRICULA
+          JOIN academico_test.TESTUDIANTE es ON es.PK_TESTUDIANTE = m.FK_TESTUDIANTE
+          JOIN academico_test.TUSUARIO u     ON u.PK_TUSUARIO = es.FK_TUSUARIO
+          JOIN academico_test.TLISTA_VALOR lv ON lv.PK_LISTA_VALOR = a.FK_TLV_TIPO_ASISTENCIA
+          LEFT JOIN academico_test.TASIGNATURA asig ON asig.PK_TASIGNATURA = a.FK_TASIGNATURA
+          LEFT JOIN academico_test.TACTIVIDAD  act  ON act.PK_TACTIVIDAD  = a.FK_TACTIVIDAD
+          LEFT JOIN academico_test.TLISTA_VALOR jor ON jor.PK_LISTA_VALOR = gr.FK_TLV_JORNADA
+                                                   AND jor.CATEGORIA = 'JORNADA'
+          LEFT JOIN academico_test.TARCHIVO arch ON arch.PK_TARCHIVO = a.FK_SOPORTE_ARCHIVO
+         WHERE a.ACTIVE = TRUE
+           AND ($2  IS NULL OR a.FECHA >= $2)
+           AND ($3  IS NULL OR a.FECHA <= $3)
+           AND ($4  IS NULL OR gr.PK_TGRUPO = $4)
+           AND ($5  IS NULL OR a.FK_TASIGNATURA = $5)
+           AND ($10 IS NULL OR a.FK_TACTIVIDAD = $10)
+           AND ($11 IS NULL OR jor.NOMBRE = $11)
+           AND ($12 IS NULL OR g.NOMBRE = $12)
+           AND ($13 IS NULL OR pa.FK_TSEDE = $13)
+      ),
+      -- Alcance una vez por (grupo, asignatura). MATERIALIZED: si no, el planner
+      -- empuja el filtro bajo el DISTINCT y lo evalua por registro.
+      pares AS MATERIALIZED (
+        SELECT DISTINCT fk_tgrupo, fk_tasignatura FROM base
+      ),
+      visibles AS (
+        SELECT x.fk_tgrupo, COALESCE(x.fk_tasignatura, 0) AS fk_tasignatura
+          FROM pares x
+         WHERE academico_test.fn_asistencia_puede_ver_asignatura($1, x.fk_tgrupo, x.fk_tasignatura)
+      ),
+      dia AS (
+        SELECT PK_LISTA_VALOR AS pk, VALOR AS valor
+          FROM academico_test.TLISTA_VALOR WHERE CATEGORIA = 'DIA_SEMANA'
+      ),
+      d AS (
+        SELECT b.*, franja.hora_inicio, franja.hora_fin
+          FROM base b
+          JOIN visibles v ON v.fk_tgrupo = b.fk_tgrupo
+                         AND v.fk_tasignatura = COALESCE(b.fk_tasignatura, 0)
+          -- Franja del bloque por dia de semana, como en v_asistencia_detalle.
+          LEFT JOIN LATERAL (
+              SELECT th.HORA_INICIO, th.HORA_FIN
+                FROM academico_test.THORARIO th
+                JOIN dia ON dia.pk = th.FK_TLV_DIA_SEMANA
+                        AND dia.valor = (EXTRACT(DOW FROM b.fecha)::INT + 1)::TEXT
+               WHERE th.FK_TGRUPO      = b.fk_tgrupo
+                 AND th.FK_TASIGNATURA = b.fk_tasignatura
+                 AND th.NUMERO_BLOQUE  = b.bloque
+                 AND th.ACTIVE = TRUE
+               LIMIT 1
+          ) h ON TRUE
+          CROSS JOIN LATERAL academico_test.fn_asistencia_franja_bloque(
+              b.fecha, h.HORA_INICIO, h.HORA_FIN, b.jornada_inicio, b.jornada_fin) franja
+          -- Incluye ACTIVIDAD: en preescolar la asignatura viene NULL.
+         WHERE ($7 IS NULL OR (
+                   b.estudiante  ILIKE '%%' || $7 || '%%' OR
+                   b.documento   ILIKE '%%' || $7 || '%%' OR
+                   b.grupo       ILIKE '%%' || $7 || '%%' OR
+                   b.asignatura  ILIKE '%%' || $7 || '%%' OR
+                   b.actividad   ILIKE '%%' || $7 || '%%' OR
+                   b.tipo_nombre ILIKE '%%' || $7 || '%%'
+               ))
+      )
       -- La solicitud pendiente se busca solo para la pagina, despues del LIMIT.
       SELECT p.*,
              EXISTS (SELECT 1 FROM unnest(p.pks) x
                       WHERE academico_test.fn_asistencia_solicitud_pendiente(x) IS NOT NULL) AS cambio_pendiente
         FROM (
         SELECT
-            pk_tasistencia, pks, registros, estudiante, documento, grupo, grado, grado_valor, asignatura,
+            pk_tasistencia, pks, registros, estudiante, documento, grupo, grado, grado_valor, jornada, asignatura,
             fk_tactividad, actividad, es_formativa, fecha, bloque, bloques,
             hora_inicio, hora_fin, bloques_estado, hora_inicio_estado, hora_fin_estado,
             tipo_asistencia_valor, tipo_asistencia,
             observacion, tiene_soporte, fk_soporte_archivo, soporte_nombre,
-            -- DISTINCT no existe en funciones de ventana: se cuenta la primera
-            -- aparicion de cada matricula (rn_* = 1). Las cuatro son ventanas
-            -- sobre el SET FILTRADO COMPLETO, no sobre la pagina.
+            -- count(DISTINCT) OVER no existe: se cuenta rn_* = 1. Ventanas sobre
+            -- el set filtrado completo, no sobre la pagina.
             SUM((rn_mat = 1)::int) OVER ()::BIGINT  AS total_estudiantes,
             SUM((rn_pre = 1)::int) OVER ()::BIGINT  AS asistieron,
             SUM((rn_tar = 1)::int) OVER ()::BIGINT  AS tarde,
@@ -146,8 +219,6 @@ BEGIN
             SELECT g.*,
                    row_number() OVER (PARTITION BY g.fk_tmatricula
                                           ORDER BY g.pk_tasistencia)          AS rn_mat,
-                   -- Cada tarjeta cuenta estudiantes distintos con AL MENOS una
-                   -- fila en ese estado, sobre el estado YA resuelto de la corrida.
                    CASE WHEN g.tipo_asistencia_valor = 1
                         THEN row_number() OVER (PARTITION BY g.fk_tmatricula,
                                                              (g.tipo_asistencia_valor = 1)
@@ -164,95 +235,71 @@ BEGIN
                                                     ORDER BY g.pk_tasistencia)
                         ELSE 0 END                                            AS rn_aus
               FROM (
+                -- Un solo orden (bloque, pk) en todos los agregados: un sort, no uno por grupo.
                 SELECT
                     (array_agg(b.pk_tasistencia ORDER BY b.bloque, b.pk_tasistencia))[1] AS pk_tasistencia,
                      array_agg(b.pk_tasistencia ORDER BY b.bloque, b.pk_tasistencia)     AS pks,
                      COUNT(*)::INTEGER                                                   AS registros,
-                     b.fk_tmatricula, b.estudiante, b.documento, b.grupo, b.grado, b.grado_valor,
-                     b.asignatura, b.fk_tactividad, b.actividad, b.es_formativa, b.fecha,
+                     b.fk_tmatricula,
+                     MIN(b.estudiante)                                                   AS estudiante,
+                     MIN(b.documento)::VARCHAR                                           AS documento,
+                     MIN(b.grupo)::VARCHAR                                               AS grupo,
+                     MIN(b.grado)::VARCHAR                                               AS grado,
+                     MIN(b.grado_valor)::VARCHAR                                         AS grado_valor,
+                     MIN(b.jornada)::VARCHAR                                             AS jornada,
+                     MIN(b.asignatura)::VARCHAR                                          AS asignatura,
+                     b.fk_tactividad,
+                     MIN(b.actividad)::VARCHAR                                           AS actividad,
+                     (b.fk_tactividad IS NOT NULL)                                       AS es_formativa,
+                     b.fecha,
                      MIN(b.bloque)                                                       AS bloque,
-                     array_remove(array_agg(b.bloque ORDER BY b.bloque), NULL)           AS bloques,
+                     array_remove(array_agg(b.bloque ORDER BY b.bloque, b.pk_tasistencia), NULL) AS bloques,
                      MIN(b.hora_inicio)                                                  AS hora_inicio,
                      MAX(b.hora_fin)                                                     AS hora_fin,
-                     -- Estado de la corrida (fn_asistencia_tipo_prioridad: tarde gana).
-                     (array_agg(b.tipo_valor  ORDER BY b.prioridad, b.bloque))[1]        AS tipo_asistencia_valor,
-                     (array_agg(b.tipo_nombre ORDER BY b.prioridad, b.bloque))[1]        AS tipo_asistencia,
-                     array_remove(array_agg(b.bloque ORDER BY b.bloque)
+                     MIN(b.tipo_corrida)                                                 AS tipo_asistencia_valor,
+                     MIN(b.tipo_nombre_corrida)::VARCHAR                                 AS tipo_asistencia,
+                     array_remove(array_agg(b.bloque ORDER BY b.bloque, b.pk_tasistencia)
                                   FILTER (WHERE b.prioridad = b.prioridad_corrida), NULL)    AS bloques_estado,
                      MIN(b.hora_inicio) FILTER (WHERE b.prioridad = b.prioridad_corrida)     AS hora_inicio_estado,
                      MAX(b.hora_fin)    FILTER (WHERE b.prioridad = b.prioridad_corrida)     AS hora_fin_estado,
-                     -- La observacion y el soporte que se muestran son los del
-                     -- bloque que define el estado de la fila; el soporte se
-                     -- ordena ademas por "tiene archivo" para no perder la
-                     -- justificacion cuando vive en otro bloque de la corrida.
-                     (array_remove(array_agg(b.observacion ORDER BY b.prioridad, b.bloque), NULL))[1] AS observacion,
-                     bool_or(b.tiene_soporte)                                            AS tiene_soporte,
-                     (array_agg(b.fk_soporte_archivo
-                                ORDER BY (b.fk_soporte_archivo IS NULL), b.prioridad, b.bloque))[1]  AS fk_soporte_archivo,
-                     (array_agg(b.soporte_nombre
-                                ORDER BY (b.fk_soporte_archivo IS NULL), b.prioridad, b.bloque))[1]  AS soporte_nombre
+                     MIN(b.observacion_corrida)::VARCHAR                                 AS observacion,
+                     bool_or(b.fk_soporte_archivo IS NOT NULL)                           AS tiene_soporte,
+                     MIN(b.soporte_corrida)                                              AS fk_soporte_archivo,
+                     MIN(b.soporte_nombre_corrida)::VARCHAR                              AS soporte_nombre
                   FROM (
-                   -- La prioridad ganadora de la corrida, para saber CUALES
-                   -- bloques son los que la fila esta reportando.
+                   -- Ganadores por prioridad (tarde gana): estado, primera observacion
+                   -- y primer soporte, aunque vivan en otro bloque de la corrida.
                    SELECT b0.*,
-                          MIN(b0.prioridad) OVER (PARTITION BY b0.fk_tmatricula, b0.fecha,
-                                                               b0.fk_tasignatura, b0.fk_tactividad,
-                                                               b0.isla)              AS prioridad_corrida
+                          first_value(b0.prioridad)   OVER wc                            AS prioridad_corrida,
+                          first_value(b0.tipo_valor)  OVER wc                            AS tipo_corrida,
+                          first_value(b0.tipo_nombre) OVER wc                            AS tipo_nombre_corrida,
+                          (array_agg(b0.observacion) FILTER (WHERE b0.observacion IS NOT NULL) OVER wc)[1]
+                                                                                         AS observacion_corrida,
+                          (array_agg(b0.fk_soporte_archivo) FILTER (WHERE b0.fk_soporte_archivo IS NOT NULL) OVER wc)[1]
+                                                                                         AS soporte_corrida,
+                          (array_agg(b0.soporte_nombre) FILTER (WHERE b0.fk_soporte_archivo IS NOT NULL) OVER wc)[1]
+                                                                                         AS soporte_nombre_corrida
                      FROM (
-                    SELECT
-                        d.pk_tasistencia, d.fk_tmatricula, d.estudiante, d.documento,
-                        d.grupo, d.grado, d.grado_valor,
-                        d.fk_tasignatura, d.asignatura, d.fk_tactividad, d.actividad,
-                        d.es_formativa, d.fecha, d.bloque, d.hora_inicio, d.hora_fin,
-                        d.tipo_valor, d.tipo_nombre,
-                        d.observacion, d.tiene_soporte, d.fk_soporte_archivo, d.soporte_nombre,
-                        academico_test.fn_asistencia_tipo_prioridad(d.tipo_valor)        AS prioridad,
-                        -- Islas de bloques CONSECUTIVOS: dentro de una corrida,
-                        -- (bloque - su posicion) es constante. Una toma sin
-                        -- bloque (manual suelta o formativa) no se agrupa con
-                        -- nadie -- se le da una isla propia con su PK.
-                        CASE WHEN d.bloque IS NULL THEN -d.pk_tasistencia
-                             ELSE d.bloque - row_number() OVER (
-                                      PARTITION BY d.fk_tmatricula, d.fecha,
-                                                   d.fk_tasignatura, d.fk_tactividad
-                                          ORDER BY d.bloque)
-                        END                                                              AS isla
-                      FROM academico_test.v_asistencia_detalle d
-                     WHERE ($2  IS NULL OR d.fecha >= $2)
-                       AND ($3  IS NULL OR d.fecha <= $3)
-                       AND ($4  IS NULL OR d.fk_tgrupo = $4)
-                       AND ($5  IS NULL OR d.fk_tasignatura = $5)
-                       AND ($10 IS NULL OR d.fk_tactividad = $10)
-                       AND ($11 IS NULL OR d.jornada = $11)
-                       AND ($12 IS NULL OR d.grado   = $12)
-                       AND ($13 IS NULL OR d.fk_tsede = $13)
-                       -- La busqueda libre incluye la ACTIVIDAD: en preescolar
-                       -- es lo que la pantalla muestra en esa columna, y buscar
-                       -- por asignatura ahi no encuentra nada (viene NULL).
-                       AND ($7 IS NULL OR (
-                               d.estudiante  ILIKE '%%' || $7 || '%%' OR
-                               d.documento   ILIKE '%%' || $7 || '%%' OR
-                               d.grupo       ILIKE '%%' || $7 || '%%' OR
-                               d.asignatura  ILIKE '%%' || $7 || '%%' OR
-                               d.actividad   ILIKE '%%' || $7 || '%%' OR
-                               d.tipo_nombre ILIKE '%%' || $7 || '%%'
-                           ))
-                       -- Alcance por rol. Se evalua al final y una sola vez por
-                       -- grupo distinto (fn_asistencia_puede_ver es STABLE).
-                       AND academico_test.fn_asistencia_puede_ver_asignatura($1, d.fk_tgrupo, d.fk_tasignatura)
+                    SELECT d.*,
+                           academico_test.fn_asistencia_tipo_prioridad(d.tipo_valor)        AS prioridad,
+                           -- Isla: (bloque - posicion) es constante en una corrida;
+                           -- sin bloque, isla propia.
+                           CASE WHEN d.bloque IS NULL THEN -d.pk_tasistencia
+                                ELSE d.bloque - row_number() OVER (
+                                         PARTITION BY d.fk_tmatricula, d.fecha,
+                                                      d.fk_tasignatura, d.fk_tactividad
+                                             ORDER BY d.bloque)
+                           END                                                              AS isla
+                      FROM d
                      ) b0
+                   WINDOW wc AS (PARTITION BY b0.fk_tmatricula, b0.fecha, b0.fk_tasignatura,
+                                              b0.fk_tactividad, b0.isla
+                                     ORDER BY b0.prioridad, b0.bloque, b0.pk_tasistencia
+                                     ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)
                   ) b
-                 -- fk_tasignatura no sale a la pantalla pero agrupa: dos
-                 -- asignaturas homonimas no tienen por que fusionarse.
-                 GROUP BY b.fk_tmatricula, b.estudiante, b.documento, b.grupo,
-                          b.grado, b.grado_valor,
-                          b.fk_tasignatura, b.asignatura, b.fk_tactividad, b.actividad,
-                          b.es_formativa, b.fecha, b.isla
+                 GROUP BY b.fk_tmatricula, b.fecha, b.fk_tasignatura, b.fk_tactividad, b.isla
               ) g
-             -- El tipo filtra el estado de la FILA, no el de cada bloque: pedir
-             -- "Llego tarde" devuelve la corrida entera marcada asi, no solo el
-             -- bloque en el que llego tarde. Va antes que las ventanas (WHERE
-             -- se evalua primero), asi que las tarjetas cuentan lo filtrado.
+             -- El tipo filtra el estado de la corrida, antes de las ventanas.
              WHERE ($6 IS NULL OR g.tipo_asistencia_valor = $6::INT)
         ) q
         ORDER BY %1$s %2$s, pk_tasistencia
@@ -270,15 +317,12 @@ $function$;
 
 COMMENT ON FUNCTION academico_test.fn_asistencia_listar_seguimiento(
     BIGINT, DATE, DATE, BIGINT, BIGINT, NUMERIC, TEXT, INT, INT, TEXT, TEXT, BIGINT, TEXT, TEXT, BIGINT
-) IS 'Pantalla Seguimiento: listado paginado sobre v_asistencia_detalle. UNA FILA POR CORRIDA DE BLOQUES: los bloques CONSECUTIVOS de la misma (matricula, fecha, asignatura/actividad) colapsan en una sola fila -- antes la misma asignatura dictada en 5 bloques salia 5 veces. La fila trae grado/grado_valor (antes solo salia el grupo, y la pantalla pinta el curso junto al grupo), pks (todos los registros de la corrida, para editarla entera con fn_asistencia_editar_bulk), registros, bloques, y hora_inicio/hora_fin del bloque formado; su tipo_asistencia sale de fn_asistencia_tipo_prioridad, donde la tardanza manda sobre la inasistencia: llegar tarde a un bloque marca toda la corrida como Llego tarde aunque en otro bloque figure ausente. bloques_estado + hora_inicio_estado/hora_fin_estado dicen DONDE ocurrio eso: los bloques que llevan el estado ganador (todos, si la corrida entera comparte estado) -- es lo que la pantalla pinta bajo el estado ("Bloque 2 (8:30 - 10:00)"). Una toma sin bloque (manual suelta) no se agrupa con nadie. Filtros INDEPENDIENTES y combinables en AND: rango de fecha / SEDE / JORNADA / GRADO / grupo / asignatura / ACTIVIDAD / tipo (VALOR, comparado contra el estado YA resuelto de la fila: pedir "Llego tarde" trae la corrida entera, no solo el bloque tarde) / busqueda libre (estudiante, documento, grupo, asignatura, actividad, estado); p_jornada y p_grado comparan contra el NOMBRE (TLISTA_VALOR.NOMBRE / TGRADO.NOMBRE), los mismos valores que devuelve fn_asistencia_calendario. p_fk_tsede ACOTA, no autoriza: el alcance por rol sigue siendo fn_asistencia_puede_ver. total_estudiantes, asistieron (tipo 1), tarde (5/6) y ausentes (2/3) cuentan ESTUDIANTES DISTINTOS del set filtrado completo y NO suman entre si (un estudiante puede asistir a una sesion y faltar a otra); total_count cuenta FILAS AGRUPADAS, para que la paginacion del front cuadre. cambio_pendiente (Regla 75): algun registro de la corrida tiene una correccion esperando al Coordinador; se calcula solo para la pagina. Orden por estudiante|documento|fecha|tipo|grupo|asignatura|actividad.';
+) IS 'Pantalla Seguimiento: listado paginado directo sobre TASISTENCIA (mismas columnas y reglas que v_asistencia_detalle; entra por sede/grupo -> matriculas, y el alcance por rol se evalua una vez por grupo+asignatura). UNA FILA POR CORRIDA DE BLOQUES: los bloques CONSECUTIVOS de la misma (matricula, fecha, asignatura/actividad) colapsan en una sola fila -- antes la misma asignatura dictada en 5 bloques salia 5 veces. La fila trae grado/grado_valor (antes solo salia el grupo, y la pantalla pinta el curso junto al grupo) y jornada (NOMBRE, la que exporta /asistencias/export-all), pks (todos los registros de la corrida, para editarla entera con fn_asistencia_editar_bulk), registros, bloques, y hora_inicio/hora_fin del bloque formado; su tipo_asistencia sale de fn_asistencia_tipo_prioridad, donde la tardanza manda sobre la inasistencia: llegar tarde a un bloque marca toda la corrida como Llego tarde aunque en otro bloque figure ausente. bloques_estado + hora_inicio_estado/hora_fin_estado dicen DONDE ocurrio eso: los bloques que llevan el estado ganador (todos, si la corrida entera comparte estado) -- es lo que la pantalla pinta bajo el estado ("Bloque 2 (8:30 - 10:00)"). Una toma sin bloque (manual suelta) no se agrupa con nadie. Filtros INDEPENDIENTES y combinables en AND: rango de fecha / SEDE / JORNADA / GRADO / grupo / asignatura / ACTIVIDAD / tipo (VALOR, comparado contra el estado YA resuelto de la fila: pedir "Llego tarde" trae la corrida entera, no solo el bloque tarde) / busqueda libre (estudiante, documento, grupo, asignatura, actividad, estado); p_jornada y p_grado comparan contra el NOMBRE (TLISTA_VALOR.NOMBRE / TGRADO.NOMBRE), los mismos valores que devuelve fn_asistencia_calendario. p_fk_tsede ACOTA, no autoriza: el alcance por rol sigue siendo fn_asistencia_puede_ver. total_estudiantes, asistieron (tipo 1), tarde (5/6) y ausentes (2/3) cuentan ESTUDIANTES DISTINTOS del set filtrado completo y NO suman entre si (un estudiante puede asistir a una sesion y faltar a otra); total_count cuenta FILAS AGRUPADAS, para que la paginacion del front cuadre. cambio_pendiente (Regla 75): algun registro de la corrida tiene una correccion esperando al Coordinador; se calcula solo para la pagina. Orden por estudiante|documento|fecha|tipo|grupo|asignatura|actividad.';
 
 
 -- ---------------------------------------------------------------------------
--- 3. Editar la corrida completa.
---    Se delega en fn_asistencia_editar registro por registro: asi los gates
---    (capability + scope + periodo cerrado + validacion del soporte) siguen
---    viviendo en un solo sitio. Va todo en la misma transaccion, asi que si
---    un registro falla no queda la corrida a medio editar.
+-- 3. Editar la corrida completa: fn_asistencia_editar por registro (un solo
+--    sitio para los gates), todo en una transaccion.
 -- ---------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION academico_test.fn_asistencia_editar_bulk(
     p_pk_usuario_solicitante BIGINT,
@@ -323,11 +367,7 @@ COMMENT ON FUNCTION academico_test.fn_asistencia_editar_bulk(
 
 -- ---------------------------------------------------------------------------
 -- 4. Catalogo HTTP.
---    4a. SEDE en el listado y en el export -- se parchea el texto almacenado
---        en vez de reescribir la fila, para no duplicar el SQL del que
---        V221/V228 son duenas; el guard NOT LIKE hace el UPDATE idempotente.
---        /asistencias/reporte (V290) no la necesita: ahi GRUPO es obligatorio
---        y el grupo ya determina la sede.
+--    4a. SEDE en el listado (la fila es de V221); idempotente por el NOT LIKE.
 -- ---------------------------------------------------------------------------
 UPDATE public.query
    SET query = replace(
@@ -340,22 +380,13 @@ UPDATE public.query
    AND query LIKE '%p_search          => CAST(:BODY.FILTERS.SEARCH AS TEXT),%'
    AND query NOT LIKE '%p_fk_tsede%';
 
--- 4a-bis. El export (V228) agregaba grado/grado_valor con un LEFT JOIN a la
---     vista porque la funcion no los devolvia; ahora si, y repetirlos daria dos
---     columnas con el mismo nombre en el payload del reporte. El JOIN se queda:
---     jornada sigue viniendo solo de ahi.
-UPDATE public.query
-   SET query = replace(query, 'SELECT t.*, d.grado, d.grado_valor, d.jornada', 'SELECT t.*, d.jornada')
- WHERE uuid = 'eval-col-asistencias-seguimiento-export-all-001'
-   AND query LIKE '%SELECT t.*, d.grado, d.grado_valor, d.jornada%';
-
--- 4b. El endpoint de la edicion masiva. POST y no PATCH /asistencias/:ID para
---     que el gateway no tenga que desempatar 'editar-masivo' contra un :ID.
+-- 4b. Edicion masiva. POST para no chocar con PATCH /asistencias/:ID. Nace con
+--     el envoltorio de solicitudes de V496.21: re-aplicar esto solo no lo pierde.
 INSERT INTO public.query (uuid, query, type, public_end, captcha, microservice_id,
                           path_template, execution_mode, http_method, param_types, detail)
 SELECT
     'asis-editar-masivo',
-    $q$SELECT academico_test.fn_asistencia_editar_bulk(
+    $q$WITH w AS MATERIALIZED (SELECT academico_test.fn_asistencia_editar_bulk(
     p_pk_usuario_solicitante => public.fn_get_academico_usuario_id(:CONTEXT.USER_ID::BIGINT),
     p_pks                    => CAST(:BODY.IDS AS BIGINT[]),
     p_tipo_asistencia_valor  => CAST(:BODY.TIPO_ASISTENCIA AS NUMERIC),
@@ -363,7 +394,8 @@ SELECT
     p_fk_soporte_archivo     => CAST(:BODY.SOPORTE_ARCHIVO AS BIGINT),
     p_limpiar_archivo        => COALESCE(CAST(:BODY.LIMPIAR_ARCHIVO AS BOOLEAN), FALSE),
     p_limpiar_observacion    => COALESCE(CAST(:BODY.LIMPIAR_OBSERVACION AS BOOLEAN), FALSE)
-) AS registros_afectados$q$,
+) AS registros_afectados)
+SELECT w.*, academico_test.fn_solicitud_aprobacion_creadas() AS solicitudes_pendientes FROM w;$q$,
     'postgres', false, false, m.id_microservice,
     '/asistencias/editar-masivo', 'SELECT', 'POST',
     '{
@@ -374,7 +406,7 @@ SELECT
        "BODY.LIMPIAR_ARCHIVO":      "BOOLEAN",
        "BODY.LIMPIAR_OBSERVACION":  "BOOLEAN"
      }'::jsonb,
-    'V438 -- edita de una vez todos los registros de una fila agrupada de Seguimiento (IDS = la columna pks que devuelve fn_asistencia_listar_seguimiento para la corrida de bloques). Mismos campos y mismas reglas que PATCH /asistencias/:ID: campos ausentes = no se tocan, LIMPIAR_ARCHIVO / LIMPIAR_OBSERVACION = true los ponen en NULL, TIPO_ASISTENCIA es el VALOR del catalogo (1,2,3,5,6). Cada registro pasa por su propio gate y todo corre en una transaccion. Devuelve cuantos registros toco. RECHAZA (22023) si el TPERIODO_ACADEMICO del grupo esta Cerrado, o si IDS viene vacio.'
+    'V438 -- edita de una vez todos los registros de una fila agrupada de Seguimiento (IDS = la columna pks que devuelve fn_asistencia_listar_seguimiento para la corrida de bloques). Mismos campos y mismas reglas que PATCH /asistencias/:ID: campos ausentes = no se tocan, LIMPIAR_ARCHIVO / LIMPIAR_OBSERVACION = true los ponen en NULL, TIPO_ASISTENCIA es el VALOR del catalogo (1,2,3,5,6). Cada registro pasa por su propio gate y todo corre en una transaccion. Devuelve cuantos registros toco. RECHAZA (22023) si el TPERIODO_ACADEMICO del grupo esta Cerrado, o si IDS viene vacio. Si el cambio exige aprobación del Coordinador (Reglas 55, 69, 75) no se aplica todavía: solicitudes_pendientes trae el PK de la solicitud abierta (vacío = se aplicó).'
   FROM public.microservice m
  WHERE m.serviceid = 'eval-col'
 ON CONFLICT (uuid) DO UPDATE
@@ -383,8 +415,7 @@ ON CONFLICT (uuid) DO UPDATE
        execution_mode = EXCLUDED.execution_mode, microservice_id = EXCLUDED.microservice_id,
        detail = EXCLUDED.detail;
 
--- "Quien puede editar un registro puede editar la corrida": se copian los
--- roles de 'asis-editar' tal cual, nunca por nombre de rol.
+-- Mismos roles que 'asis-editar', copiados, nunca por nombre.
 INSERT INTO public.role_query (query_id, role_id)
 SELECT masivo.id_query, rq.role_id
   FROM public.query masivo
@@ -393,8 +424,7 @@ SELECT masivo.id_query, rq.role_id
  WHERE masivo.uuid = 'asis-editar-masivo'
 ON CONFLICT (query_id, role_id) DO NOTHING;
 
--- 4c. Formato de los parametros caller-controlled (V70/V83). Sin fila aqui el
---     parametro pasa sin validar.
+-- 4c. Formato de los parametros (sin fila aqui el parametro pasa sin validar).
 INSERT INTO public.query_param_constraint
        (query_id, param_key, only_positive, allow_decimals, max_digits,
         numeric_text, min_length, max_length, min_value, max_value)

@@ -26,7 +26,7 @@ hay que regenerarlo a otro tamaño. No lo referencia el correo.
 |---|---|---|---|
 | logo.png | 480x132 | 160x44 | cabecera |
 | ilustracion.png | 288x288 | 96x96 | sin usar — se quitó del titular |
-| reloj.png | 64x64 | 20x20 / 22x22 | vigencia del enlace y horario del pie |
+| reloj.png | 64x64 | 22x22 | horario del pie (la vigencia del enlace ya no lleva icono: va en una caja de texto) |
 | escudo.png | 64x64 | 22x22 | aviso verde |
 | enlace.png | 64x64 | 22x22 | enlace alternativo |
 | ayuda.png | 64x64 | 22x22 | pie |
