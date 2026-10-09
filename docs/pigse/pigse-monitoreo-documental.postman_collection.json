@@ -1,0 +1,200 @@
+{
+  "info": {
+    "name": "PIGSE - monitoreo documental (detalle por establecimiento)",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "description": "V523/V524/V555.1: tablero de Monitoreo con avance por anexos y plazo, y detalle documental por establecimiento x tipo. Requiere un usuario con un rol que tenga /cumplimiento/query (Secretaria Territorial, roles de ente territorial, administrador). Solo lecturas: la corrida no deja datos."
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:8080"
+    },
+    {
+      "key": "emailMonitor",
+      "value": ""
+    },
+    {
+      "key": "passwordMonitor",
+      "value": ""
+    },
+    {
+      "key": "tokenMonitor",
+      "value": ""
+    },
+    {
+      "key": "establecimientoId",
+      "value": ""
+    },
+    {
+      "key": "tipo",
+      "value": "PEI"
+    }
+  ],
+  "item": [
+    {
+      "name": "Login monitor (rol con acceso al tablero)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/auth/login",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "auth",
+            "login"
+          ]
+        },
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"email\": \"{{emailMonitor}}\",\n  \"password\": \"{{passwordMonitor}}\"\n}"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200', () => pm.response.to.have.status(200));",
+              "pm.collectionVariables.set('tokenMonitor', pm.response.json().token);"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Tablero paginado con filtros nuevos",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{tokenMonitor}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/pigse/cumplimiento/query",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "pigse",
+            "cumplimiento",
+            "query"
+          ]
+        },
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"filters\": {\n    \"search\": \"\",\n    \"pei\": [],\n    \"pec\": [\n      \"PARCIAL\"\n    ],\n    \"pmi\": [],\n    \"pfi\": [],\n    \"municipios\": [],\n    \"etnias\": null,\n    \"plazo\": [\n      \"VENCIDO\"\n    ]\n  },\n  \"sorting\": {\n    \"id\": \"establishmentName\",\n    \"desc\": false\n  },\n  \"pageIndex\": 0,\n  \"pageSize\": 10\n}"
+        },
+        "description": "Filtros opcionales nuevos: municipios (BIGINT[]), etnias ('S'|'N'), plazo (VENCIDO|PRORROGA|VIGENTE|SIN_FECHA). Los estados por tipo aceptan COMPLETO/PENDIENTE/NO_APLICA o PARCIAL/SIN_CARGAR."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200', () => pm.response.to.have.status(200));",
+              "const r = pm.response.json().rows[0];",
+              "pm.test('fila con plazo', () => pm.expect(r.rows).to.be.an('array'));",
+              "const f = r.rows[0];",
+              "if (f) { pm.collectionVariables.set('establecimientoId', f.id); pm.collectionVariables.set('tipo', f.etnoeducativo ? 'PEC' : 'PEI'); }"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Detalle documental de un establecimiento",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{tokenMonitor}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/pigse/cumplimiento/establecimientos/{{establecimientoId}}/documentos/{{tipo}}",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "pigse",
+            "cumplimiento",
+            "establecimientos",
+            "{{establecimientoId}}",
+            "documentos",
+            "{{tipo}}"
+          ]
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200', () => pm.response.to.have.status(200));",
+              "const d = pm.response.json().rows[0];",
+              "pm.test('trae categorias', () => pm.expect(d.categorias).to.be.an('array').and.not.empty);"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Tipo invalido -> 400 (22023)",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{tokenMonitor}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/pigse/cumplimiento/establecimientos/{{establecimientoId}}/documentos/XXX",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "pigse",
+            "cumplimiento",
+            "establecimientos",
+            "{{establecimientoId}}",
+            "documentos",
+            "XXX"
+          ]
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('4xx', () => pm.expect(pm.response.code).to.be.within(400,499));"
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}
