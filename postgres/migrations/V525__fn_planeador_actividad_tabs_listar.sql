@@ -64,11 +64,16 @@ COMMENT ON FUNCTION academico_test.fn_planeador_rotulo_pluralizar(VARCHAR) IS
 --    pueden compartir el mismo texto de rotulo y deben caer en la misma
 --    pestana. grado_asignatura_pares es la fuente para filtrar sin fuga.
 -- ---------------------------------------------------------------------------
+-- Firmas previas a p_periodos_lectura / p_fk_tfuncionario (planeador de otro docente, V553).
+DROP FUNCTION IF EXISTS academico_test.fn_planeador_actividad_tabs_listar_interno(BIGINT[], BOOLEAN, BOOLEAN, BIGINT);
+DROP FUNCTION IF EXISTS academico_test.fn_planeador_actividad_tabs_listar(BIGINT);
+
 CREATE OR REPLACE FUNCTION academico_test.fn_planeador_actividad_tabs_listar_interno(
     p_sedes_lectura    BIGINT[],
     p_alcance_total    BOOLEAN,
     p_solo_propias     BOOLEAN,
-    p_fk_tfuncionario  BIGINT
+    p_fk_tfuncionario  BIGINT,
+    p_periodos_lectura BIGINT[] DEFAULT NULL
 )
 RETURNS TABLE (
     rotulo_ejecucion         VARCHAR,
@@ -105,6 +110,20 @@ BEGIN
          WHERE p_fk_tfuncionario IS NOT NULL
            AND da.FK_TFUNCIONARIO = p_fk_tfuncionario
            AND da.ACTIVE = TRUE
+           AND (p_periodos_lectura IS NULL OR gr.FK_TPERIODO_ACADEMICO = ANY(p_periodos_lectura))
+
+        UNION
+
+        -- Rama 1b: grados de los grupos que dirige (director de grupo), sin
+        -- asignatura puntual.
+        SELECT DISTINCT
+               gr.PK_TGRADO, gr.NOMBRE, NULL::BIGINT, NULL::VARCHAR
+          FROM academico_test.TGRUPO g
+          JOIN academico_test.TGRADO gr ON gr.PK_TGRADO = g.FK_TGRADO AND gr.ACTIVE = TRUE
+         WHERE p_fk_tfuncionario IS NOT NULL
+           AND g.FK_TFUNCIONARIO = p_fk_tfuncionario
+           AND g.ACTIVE = TRUE
+           AND (p_periodos_lectura IS NULL OR gr.FK_TPERIODO_ACADEMICO = ANY(p_periodos_lectura))
 
         UNION
 
@@ -118,6 +137,7 @@ BEGIN
          WHERE gr.ACTIVE = TRUE
            AND NOT p_solo_propias
            AND (p_alcance_total OR pa.FK_TSEDE = ANY(p_sedes_lectura))
+           AND (p_periodos_lectura IS NULL OR pa.PK_TPERIODO_ACADEMICO = ANY(p_periodos_lectura))
     ), con_rotulo AS (
         SELECT p.*,
                academico_test.fn_unidad_referente_aplicable(p.pk_tgrado, p.pk_tasignatura) AS pk_referente
@@ -164,7 +184,7 @@ BEGIN
 END;
 $$;
 
-COMMENT ON FUNCTION academico_test.fn_planeador_actividad_tabs_listar_interno(BIGINT[], BOOLEAN, BOOLEAN, BIGINT) IS
+COMMENT ON FUNCTION academico_test.fn_planeador_actividad_tabs_listar_interno(BIGINT[], BOOLEAN, BOOLEAN, BIGINT, BIGINT[]) IS
     'INTERNO: pestañas de Actividades sin gate, recibe el alcance ya resuelto
      (mismo shape que fn_planeador_listado_alcance, V481). Agrupa por el
      TEXTO del rotulo_ejecucion resuelto POR PAR grado+asignatura
@@ -172,13 +192,17 @@ COMMENT ON FUNCTION academico_test.fn_planeador_actividad_tabs_listar_interno(BI
      solo. grado_asignatura_pares trae los pares reales de cada pestaña:
      filtrar por grados/asignaturas sueltos puede filtrar de más (un grado
      puede caer en dos pestañas si sus asignaturas resuelven distinto). Lo
-     usa fn_planeador_actividad_tabs_listar.';
+     usa fn_planeador_actividad_tabs_listar. p_periodos_lectura (NULL = sin
+     restriccion) acota las dos ramas a esos periodos academicos (alcance
+     sede+jornada del coordinador, fn_planeador_alcance_docente). Rama 1b:
+     grados de los grupos que dirige p_fk_tfuncionario, sin asignatura.';
 
 -- ---------------------------------------------------------------------------
 -- 3. Wrapper: gate + alcance + delegar.
 -- ---------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION academico_test.fn_planeador_actividad_tabs_listar(
-    p_pk_usuario_solicitante BIGINT
+    p_pk_usuario_solicitante BIGINT,
+    p_fk_tfuncionario        BIGINT DEFAULT NULL
 )
 RETURNS TABLE (
     rotulo_ejecucion         VARCHAR,
@@ -200,21 +224,36 @@ BEGIN
         p_pk_usuario_solicitante, 'PLANEADOR', 'VER'
     );
 
-    SELECT * INTO v_alc FROM academico_test.fn_planeador_listado_alcance(p_pk_usuario_solicitante);
+    SELECT * INTO v_alc
+      FROM academico_test.fn_planeador_alcance_docente(p_pk_usuario_solicitante, p_fk_tfuncionario);
+
+    -- Docente elegido por quien administra: solo lo que ese docente dicta
+    -- (sin la rama territorial), dentro del alcance.
+    IF v_alc.fk_tfuncionario IS NOT NULL AND NOT v_alc.solo_propias THEN
+        RETURN QUERY
+        SELECT * FROM academico_test.fn_planeador_actividad_tabs_listar_interno(
+            v_alc.sedes_lectura, v_alc.alcance_total, TRUE, v_alc.fk_tfuncionario,
+            v_alc.periodos_lectura
+        );
+        RETURN;
+    END IF;
 
     RETURN QUERY
     SELECT * FROM academico_test.fn_planeador_actividad_tabs_listar_interno(
-        v_alc.sedes_lectura, v_alc.alcance_total, v_alc.solo_propias, v_alc.fk_tfuncionario
+        v_alc.sedes_lectura, v_alc.alcance_total, v_alc.solo_propias, v_alc.fk_tfuncionario_propio,
+        v_alc.periodos_lectura
     );
 END;
 $$;
 
-COMMENT ON FUNCTION academico_test.fn_planeador_actividad_tabs_listar(BIGINT) IS
+COMMENT ON FUNCTION academico_test.fn_planeador_actividad_tabs_listar(BIGINT, BIGINT) IS
     'GET /planeador/actividades/tabs: las pestañas de Actividades del usuario
      autenticado, una por Rotulo de Ejecucion. Gate VER sobre PLANEADOR;
-     alcance via fn_planeador_listado_alcance (V481, la misma que usan los
-     listados de actividades y unidades); lógica en
-     fn_planeador_actividad_tabs_listar_interno.';
+     alcance via fn_planeador_alcance_docente (el de los listados, y en
+     nivel 3 solo sus pares sede+jornada); lógica en
+     fn_planeador_actividad_tabs_listar_interno. p_fk_tfuncionario
+     (?funcionario=): solo las pestañas de lo que dicta ese docente dentro
+     del alcance (42501 si no dicta nada en él); un docente puro lo ignora.';
 
 -- ---------------------------------------------------------------------------
 -- 4. GET /planeador/actividades/tabs

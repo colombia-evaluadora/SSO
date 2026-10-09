@@ -117,6 +117,8 @@ COMMENT ON TYPE academico_test.t_unidad_listado_fila
     IS 'Fila de GET /planeador/unidades y su export. rotulo_ejecucion: como se llama la actividad para el grado de la unidad (Regla 13, mismo calculo que fn_planeador_rotulo_actividad_interno V511, sin llamarla: V511 es posterior a este archivo). Una columna nueva: ALTER TYPE ... ADD ATTRIBUTE y agregarla al SELECT de fn_unidad_listar_interno.';
 
 DROP FUNCTION IF EXISTS academico_test.fn_unidad_listar(BIGINT, VARCHAR, BIGINT, BIGINT, BIGINT, BOOLEAN, VARCHAR, BOOLEAN, INT, INT, DATE, INT);
+-- Firma previa a p_periodos_lectura (alcance sede+jornada del coordinador, V553).
+DROP FUNCTION IF EXISTS academico_test.fn_unidad_listar_interno(BIGINT[], BOOLEAN, BOOLEAN, BIGINT, VARCHAR, BIGINT, BIGINT, BIGINT, BOOLEAN, VARCHAR, BOOLEAN, INT, INT, DATE, INT);
 
 CREATE OR REPLACE FUNCTION academico_test.fn_unidad_listar_interno(
     -- Alcance ya resuelto (fn_planeador_listado_alcance).
@@ -135,7 +137,8 @@ CREATE OR REPLACE FUNCTION academico_test.fn_unidad_listar_interno(
     p_limite                      INT       DEFAULT 20,
     p_offset                      INT       DEFAULT 0,
     p_dia                         DATE      DEFAULT NULL,
-    p_dias_gracia                 INT       DEFAULT 2
+    p_dias_gracia                 INT       DEFAULT 2,
+    p_periodos_lectura            BIGINT[]  DEFAULT NULL
 )
 RETURNS SETOF academico_test.t_unidad_listado_fila
 LANGUAGE plpgsql
@@ -164,7 +167,9 @@ BEGIN
                           ON s_sc.PK_TSEDE = pa_sc.FK_TSEDE AND s_sc.ACTIVE = TRUE
                        WHERE pa_sc.PK_TPERIODO_ACADEMICO = bgr.FK_TPERIODO_ACADEMICO
                          AND (p_alcance_total
-                              OR pa_sc.FK_TSEDE = ANY(p_sedes_lectura)))
+                              OR pa_sc.FK_TSEDE = ANY(p_sedes_lectura))
+                         AND (p_periodos_lectura IS NULL
+                              OR pa_sc.PK_TPERIODO_ACADEMICO = ANY(p_periodos_lectura)))
            AND (p_search IS NULL OR
                 (COALESCE(u.NOMBRE,'') || ' ' || COALESCE(u.DESCRIPCION,''))
                     ILIKE '%' || p_search || '%')
@@ -286,8 +291,8 @@ BEGIN
 END;
 $$;
 
-COMMENT ON FUNCTION academico_test.fn_unidad_listar_interno(BIGINT[], BOOLEAN, BOOLEAN, BIGINT, VARCHAR, BIGINT, BIGINT, BIGINT, BOOLEAN, VARCHAR, BOOLEAN, INT, INT, DATE, INT)
-    IS 'INTERNO: página de TUNIDAD sin gate; recibe el alcance ya resuelto (fn_planeador_listado_alcance). Lo reutiliza fn_unidad_listar (GET /planeador/unidades y su export). ALCANCE: grado en una sede de lectura (o alcance total); docente puro solo SUS unidades. Nombres resueltos, referente solo si está vivo (referente_vigente), totales, fechas y estado DERIVADOS de las actividades (fn_unidad_estado con p_dias_gracia), instrumento derivado (fn_unidad_instrumento_derivado). p_dia: unidades con alguna actividad vigente ese día, con dia_anterior/dia_siguiente saltando los días vacíos. Orden por whitelist nombre|asignatura|grado. total_count via COUNT(*) OVER().';
+COMMENT ON FUNCTION academico_test.fn_unidad_listar_interno(BIGINT[], BOOLEAN, BOOLEAN, BIGINT, VARCHAR, BIGINT, BIGINT, BIGINT, BOOLEAN, VARCHAR, BOOLEAN, INT, INT, DATE, INT, BIGINT[])
+    IS 'INTERNO: página de TUNIDAD sin gate; recibe el alcance ya resuelto (fn_planeador_alcance_docente). Lo reutiliza fn_unidad_listar (GET /planeador/unidades y su export). ALCANCE: grado en una sede de lectura (o alcance total) y, si p_periodos_lectura no es NULL, en uno de esos periodos académicos (pares sede+jornada del coordinador); docente puro solo SUS unidades. Nombres resueltos, referente solo si está vivo (referente_vigente), totales, fechas y estado DERIVADOS de las actividades (fn_unidad_estado con p_dias_gracia), instrumento derivado (fn_unidad_instrumento_derivado). p_dia: unidades con alguna actividad vigente ese día, con dia_anterior/dia_siguiente saltando los días vacíos. Orden por whitelist nombre|asignatura|grado. total_count via COUNT(*) OVER().';
 
 CREATE OR REPLACE FUNCTION academico_test.fn_unidad_listar(
     p_pk_usuario_solicitante      BIGINT,
@@ -314,19 +319,23 @@ BEGIN
         p_pk_usuario_solicitante, 'PLANEADOR', 'VER'
     );
 
-    SELECT * INTO v_alc FROM academico_test.fn_planeador_listado_alcance(p_pk_usuario_solicitante);
+    -- p_fk_tfuncionario (?funcionario=) se valida contra el alcance (42501 si
+    -- ese docente no dicta nada en él); un docente puro queda en el suyo.
+    SELECT * INTO v_alc
+      FROM academico_test.fn_planeador_alcance_docente(p_pk_usuario_solicitante, p_fk_tfuncionario);
 
     RETURN QUERY
     SELECT * FROM academico_test.fn_unidad_listar_interno(
-        v_alc.sedes_lectura, v_alc.alcance_total, v_alc.solo_propias, v_alc.fk_tfuncionario,
-        p_search, p_fk_tasignatura, p_fk_tgrado, p_fk_tfuncionario, p_incluir_inactivos,
-        p_orden_por, p_orden_asc, p_limite, p_offset, p_dia, p_dias_gracia
+        v_alc.sedes_lectura, v_alc.alcance_total, v_alc.solo_propias, v_alc.fk_tfuncionario_propio,
+        p_search, p_fk_tasignatura, p_fk_tgrado, v_alc.fk_tfuncionario, p_incluir_inactivos,
+        p_orden_por, p_orden_asc, p_limite, p_offset, p_dia, p_dias_gracia,
+        v_alc.periodos_lectura
     );
 END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_unidad_listar(BIGINT, VARCHAR, BIGINT, BIGINT, BIGINT, BOOLEAN, VARCHAR, BOOLEAN, INT, INT, DATE, INT)
-    IS 'GET /planeador/unidades y su export: gate VER sobre PLANEADOR, alcance del usuario (fn_planeador_listado_alcance) y delega en fn_unidad_listar_interno, que documenta filtros, orden y paginado por día. Devuelve t_unidad_listado_fila.';
+    IS 'GET /planeador/unidades y su export: gate VER sobre PLANEADOR, alcance del usuario (fn_planeador_alcance_docente: sedes y, en nivel 3, pares sede+jornada; ?funcionario= validado contra ese alcance, 42501 si no) y delega en fn_unidad_listar_interno, que documenta filtros, orden y paginado por día. Devuelve t_unidad_listado_fila.';
 
 -- ---------------------------------------------------------------------------
 -- 4. Detalle.

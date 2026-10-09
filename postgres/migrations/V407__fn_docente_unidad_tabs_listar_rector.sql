@@ -52,8 +52,16 @@
 
 SET search_path TO academico_test, public;
 
-CREATE OR REPLACE FUNCTION academico_test.fn_docente_unidad_tabs_listar(
-    p_pk_usuario_solicitante BIGINT
+-- Firma previa a p_fk_tfuncionario (planeador de otro docente, V553); la
+-- lógica pasa a un núcleo sin gate con el alcance ya resuelto.
+DROP FUNCTION IF EXISTS academico_test.fn_docente_unidad_tabs_listar(BIGINT);
+
+CREATE OR REPLACE FUNCTION academico_test.fn_docente_unidad_tabs_listar_interno(
+    p_sedes_lectura    BIGINT[],
+    p_alcance_total    BOOLEAN,
+    p_solo_propias     BOOLEAN,
+    p_fk_tfuncionario  BIGINT,
+    p_periodos_lectura BIGINT[] DEFAULT NULL
 )
 RETURNS TABLE (
     instrumento                 VARCHAR,
@@ -75,33 +83,14 @@ LANGUAGE plpgsql
 STABLE
 AS $$
 DECLARE
-    v_fk_tfuncionario BIGINT;
-    v_alcance_total   BOOLEAN;
-    v_sedes_lectura   BIGINT[];
-    v_solo_propias    BOOLEAN;
-BEGIN
-    PERFORM academico_test.fn_assert_permiso_seccion(
-        p_pk_usuario_solicitante, 'PLANEADOR', 'VER'
-    );
-
-    v_fk_tfuncionario := academico_test.fn_funcionario_actual(p_pk_usuario_solicitante);
-
-    -- V407: mismo alcance de LECTURA que fn_unidad_listar (V216/V277) --
-    -- nivel 0/1 todas las sedes, nivel 2 (rector/secretaria) las de sus
-    -- establecimientos, nivel 3 (coordinador) las suyas, nivel 4 (docente
-    -- puro) ninguna. Un docente puro sigue resolviendo TODO por la rama
-    -- TDOCENTE_ASIGNATURA de abajo, como en V281.
-    v_alcance_total := COALESCE(
-        academico_test.fn_usuario_categoria_rol_nivel(p_pk_usuario_solicitante), 99) <= 1;
-    v_sedes_lectura := ARRAY(
-        SELECT sl.sede_id
-          FROM academico_test.fn_usuario_sedes_lectura(p_pk_usuario_solicitante) sl);
-
+    v_fk_tfuncionario BIGINT   := p_fk_tfuncionario;
+    v_alcance_total   BOOLEAN  := p_alcance_total;
+    v_sedes_lectura   BIGINT[] := p_sedes_lectura;
     -- La rama territorial es de quien ADMINISTRA. Un docente puro puede tener
     -- sedes de lectura por su categoria de rol y aun asi no administrar nada:
     -- sin esto le salian pestanas de referentes que no dicta.
-    v_solo_propias := academico_test.fn_usuario_es_docente_puro(p_pk_usuario_solicitante);
-
+    v_solo_propias    BOOLEAN  := p_solo_propias;
+BEGIN
     -- V407: 0 filas solo si NO es docente activo Y TAMPOCO tiene alcance
     -- territorial alguno -- antes (V281) bastaba con no tener funcionario.
     -- Fail-closed se conserva: fn_usuario_sedes_lectura ya devuelve 0 sedes
@@ -132,6 +121,24 @@ BEGIN
          WHERE v_fk_tfuncionario IS NOT NULL
            AND da.FK_TFUNCIONARIO = v_fk_tfuncionario
            AND da.ACTIVE = TRUE
+           AND (p_periodos_lectura IS NULL OR gr.FK_TPERIODO_ACADEMICO = ANY(p_periodos_lectura))
+
+        UNION
+
+        -- Rama 1b: grados de los grupos que dirige (director de grupo), sin
+        -- asignatura puntual.
+        SELECT DISTINCT
+               gr.PK_TGRADO           AS pk_tgrado,
+               gr.NOMBRE              AS grado_nombre,
+               gr.FK_TNIVEL_ENSENANZA AS pk_nivel,
+               NULL::BIGINT           AS pk_tasignatura,
+               NULL::VARCHAR          AS asignatura_nombre
+          FROM academico_test.TGRUPO g
+          JOIN academico_test.TGRADO gr ON gr.PK_TGRADO = g.FK_TGRADO AND gr.ACTIVE = TRUE
+         WHERE v_fk_tfuncionario IS NOT NULL
+           AND g.FK_TFUNCIONARIO = v_fk_tfuncionario
+           AND g.ACTIVE = TRUE
+           AND (p_periodos_lectura IS NULL OR gr.FK_TPERIODO_ACADEMICO = ANY(p_periodos_lectura))
 
         UNION
 
@@ -155,6 +162,7 @@ BEGIN
          WHERE gr.ACTIVE = TRUE
            AND NOT v_solo_propias
            AND (v_alcance_total OR pa.FK_TSEDE = ANY(v_sedes_lectura))
+           AND (p_periodos_lectura IS NULL OR pa.PK_TPERIODO_ACADEMICO = ANY(p_periodos_lectura))
     ), con_referente AS (
         SELECT a.*,
                academico_test.fn_unidad_referente_aplicable(
@@ -200,5 +208,57 @@ BEGIN
 END;
 $$;
 
-COMMENT ON FUNCTION academico_test.fn_docente_unidad_tabs_listar(BIGINT)
-    IS 'Las PESTANAS de unidad que le corresponden al usuario autenticado: una por referente curricular de los niveles educativos que dicta (docente) o que administra (rector/secretaria/coordinador/super-admin/territorial, V407). El rotulo NO es fijo ("Unidad tematica"): lo define TREFERENTE_CURRICULAR.INSTRUMENTO del nivel ("Proyecto pedagogico" en Preescolar...). Para un docente los niveles salen de TDOCENTE_ASIGNATURA (igual que V281/V242/V250); para un usuario con alcance territorial (fn_usuario_categoria_rol_nivel/fn_usuario_sedes_lectura, V29, mismo criterio que fn_unidad_listar V216) salen de TODOS los grados de las sedes que alcanza a leer, sin asignatura puntual. Ambas ramas se UNEN: la territorial esta explicitamente cerrada para el docente puro (fn_usuario_es_docente_puro, V29), que por su categoria de rol puede tener sedes de lectura sin administrar nada y antes recibia pestanas de referentes que no dicta; un rector ve una pestana por cada enfoque pedagogico presente en su establecimiento aunque no dicte nada. Por cada par se deriva el referente con fn_unidad_referente_aplicable (V216, tolera asignatura NULL) y se agrupa por referente (o por nivel si no hay referente aplicable). 0 filas solo si el usuario no es docente activo Y tampoco tiene ningun alcance territorial. Gate VER sobre PLANEADOR. V407 (reemplaza V281).';
+COMMENT ON FUNCTION academico_test.fn_docente_unidad_tabs_listar_interno(BIGINT[], BOOLEAN, BOOLEAN, BIGINT, BIGINT[])
+    IS 'INTERNO: pestañas de unidad sin gate; recibe el alcance ya resuelto (fn_planeador_alcance_docente). Rama docente: lo que dicta p_fk_tfuncionario y los grados de los grupos que dirige (TGRUPO.FK_TFUNCIONARIO); rama territorial (si NOT p_solo_propias): todos los grados de las sedes de lectura. p_periodos_lectura (NULL = sin restricción) acota las dos ramas a esos periodos académicos (alcance sede+jornada del coordinador). Lo usa fn_docente_unidad_tabs_listar; la regla de pestañas está en su COMMENT.';
+
+CREATE OR REPLACE FUNCTION academico_test.fn_docente_unidad_tabs_listar(
+    p_pk_usuario_solicitante BIGINT,
+    p_fk_tfuncionario        BIGINT DEFAULT NULL
+)
+RETURNS TABLE (
+    instrumento                 VARCHAR,
+    instrumento_info_adicional  VARCHAR,
+    pk_referente_curricular     BIGINT,
+    referente_nombre            VARCHAR,
+    enfoque_valor               VARCHAR,
+    es_evaluativo               BOOLEAN,
+    tipo_evaluacion_valor       VARCHAR,
+    nivel_1_etiqueta            VARCHAR,
+    nivel_2_etiqueta            VARCHAR,
+    niveles                     JSONB,
+    grados                      JSONB,
+    asignaturas                 JSONB,
+    total_grados                BIGINT,
+    total_count                 BIGINT
+)
+LANGUAGE plpgsql
+STABLE
+AS $$
+DECLARE
+    v_alc RECORD;
+BEGIN
+    PERFORM academico_test.fn_assert_permiso_seccion(
+        p_pk_usuario_solicitante, 'PLANEADOR', 'VER'
+    );
+
+    SELECT * INTO v_alc
+      FROM academico_test.fn_planeador_alcance_docente(p_pk_usuario_solicitante, p_fk_tfuncionario);
+
+    -- Docente elegido por quien administra: solo lo que ese docente dicta.
+    IF v_alc.fk_tfuncionario IS NOT NULL AND NOT v_alc.solo_propias THEN
+        RETURN QUERY
+        SELECT * FROM academico_test.fn_docente_unidad_tabs_listar_interno(
+            v_alc.sedes_lectura, v_alc.alcance_total, TRUE, v_alc.fk_tfuncionario,
+            v_alc.periodos_lectura);
+        RETURN;
+    END IF;
+
+    RETURN QUERY
+    SELECT * FROM academico_test.fn_docente_unidad_tabs_listar_interno(
+        v_alc.sedes_lectura, v_alc.alcance_total, v_alc.solo_propias, v_alc.fk_tfuncionario_propio,
+        v_alc.periodos_lectura);
+END;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_docente_unidad_tabs_listar(BIGINT, BIGINT)
+    IS 'GET /planeador/unidades/tabs. p_fk_tfuncionario (?funcionario=): solo las pestañas de lo que dicta ese docente dentro del alcance (42501 si no dicta nada en él; un docente puro lo ignora). Alcance via fn_planeador_alcance_docente (nivel 3: sus pares sede+jornada); lógica en fn_docente_unidad_tabs_listar_interno. Las PESTANAS de unidad que le corresponden al usuario autenticado: una por referente curricular de los niveles educativos que dicta (docente) o que administra (rector/secretaria/coordinador/super-admin/territorial, V407). El rotulo NO es fijo ("Unidad tematica"): lo define TREFERENTE_CURRICULAR.INSTRUMENTO del nivel ("Proyecto pedagogico" en Preescolar...). Para un docente los niveles salen de TDOCENTE_ASIGNATURA (igual que V281/V242/V250); para un usuario con alcance territorial (fn_usuario_categoria_rol_nivel/fn_usuario_sedes_lectura, V29, mismo criterio que fn_unidad_listar V216) salen de TODOS los grados de las sedes que alcanza a leer, sin asignatura puntual. Ambas ramas se UNEN: la territorial esta explicitamente cerrada para el docente puro (fn_usuario_es_docente_puro, V29), que por su categoria de rol puede tener sedes de lectura sin administrar nada y antes recibia pestanas de referentes que no dicta; un rector ve una pestana por cada enfoque pedagogico presente en su establecimiento aunque no dicte nada. Por cada par se deriva el referente con fn_unidad_referente_aplicable (V216, tolera asignatura NULL) y se agrupa por referente (o por nivel si no hay referente aplicable). 0 filas solo si el usuario no es docente activo Y tampoco tiene ningun alcance territorial. Gate VER sobre PLANEADOR. V407 (reemplaza V281).';
