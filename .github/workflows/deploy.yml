@@ -134,6 +134,14 @@ jobs:
           chmod 600 ~/.ssh/deploy_key
           # SSH_TARGET es 'usuario@host'; keyscan sólo quiere el host.
           ssh-keyscan -H "${SSH_TARGET#*@}" >> ~/.ssh/known_hosts
+          # Keepalive para todas las conexiones ssh/rsync del deploy. Sin esto,
+          # una migración re-aplicada que pasa varios minutos sin escribir nada
+          # (el backfill de tunidad_nota al re-aplicar V488/V492.3 en prod) deja
+          # la conexión ociosa, se corta ("Broken pipe", exit 255) y el deploy
+          # queda a mitad: funciones re-aplicadas sin las migraciones pendientes
+          # de las que dependen (prod, v1.1.68).
+          printf 'Host *\n  ServerAliveInterval 30\n  ServerAliveCountMax 120\n  TCPKeepAlive yes\n' >> ~/.ssh/config
+          chmod 600 ~/.ssh/config
 
       - name: Migraciones editadas desde el último deploy
         # Qué migraciones YA aplicadas cambiaron desde el último deploy que
