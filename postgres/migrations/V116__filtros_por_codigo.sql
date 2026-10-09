@@ -163,6 +163,46 @@ DROP FUNCTION IF EXISTS academico_test.fn_usu_empleados_listar(bigint, character
 -- TABLE, y CREATE OR REPLACE no puede cambiar la forma de una funcion ya
 -- creada -- por eso se dropea tambien la firma vigente antes de recrearla.
 DROP FUNCTION IF EXISTS academico_test.fn_usu_empleados_listar(bigint, character varying, character varying[], character varying[], character varying[], bigint, character varying, boolean, integer, integer);
+CREATE OR REPLACE FUNCTION academico_test.fn_usuario_coincide_busqueda(
+    p_search           VARCHAR,
+    p_primer_nombre    VARCHAR,
+    p_segundo_nombre   VARCHAR,
+    p_primer_apellido  VARCHAR,
+    p_segundo_apellido VARCHAR,
+    p_identificacion   VARCHAR
+)
+RETURNS BOOLEAN
+LANGUAGE plpgsql
+IMMUTABLE
+AS $function$
+DECLARE
+    -- Minusculas y sin tildes: "pena" encuentra a "Peña" y "jose" a "José".
+    c_con   CONSTANT TEXT := 'áéíóúüàèìòùñ';
+    c_sin   CONSTANT TEXT := 'aeiouuaeioun';
+    v_texto TEXT;
+    v_palabra TEXT;
+BEGIN
+    IF NULLIF(TRIM(p_search), '') IS NULL THEN
+        RETURN TRUE;
+    END IF;
+    v_texto := translate(lower(concat_ws(' ', p_primer_nombre, p_segundo_nombre,
+                                              p_primer_apellido, p_segundo_apellido,
+                                              p_identificacion)), c_con, c_sin);
+    -- Cada palabra tiene que aparecer en algun nombre, apellido o documento,
+    -- en cualquier orden: "yovany zhu", "zhu yovany" y "yovany zhu ye".
+    FOREACH v_palabra IN ARRAY regexp_split_to_array(translate(lower(TRIM(p_search)), c_con, c_sin), '\s+')
+    LOOP
+        IF position(v_palabra IN v_texto) = 0 THEN
+            RETURN FALSE;
+        END IF;
+    END LOOP;
+    RETURN TRUE;
+END;
+$function$;
+
+COMMENT ON FUNCTION academico_test.fn_usuario_coincide_busqueda(VARCHAR, VARCHAR, VARCHAR, VARCHAR, VARCHAR, VARCHAR)
+    IS 'Si un usuario coincide con la busqueda libre del listado de funcionarios: cada palabra del texto tiene que aparecer en alguno de sus nombres, apellidos o documento, en cualquier orden, sin distinguir mayusculas ni tildes. Busqueda vacia = coincide. La usan fn_usu_empleados_listar y fn_usu_empleados_contar, para que la lista y el total no diverjan (antes cada una tenia su condicion: la lista concatenaba los cuatro nombres y con un segundo nombre vacio quedaba un doble espacio, asi que "nombre apellido" no encontraba a nadie aunque el total dijera que si).';
+
 CREATE OR REPLACE FUNCTION academico_test.fn_usu_empleados_listar(p_pk_usuario_solicitante bigint, p_search character varying DEFAULT NULL::character varying, p_roles character varying[] DEFAULT NULL::character varying[], p_work_schedules character varying[] DEFAULT NULL::character varying[], p_statuses character varying[] DEFAULT NULL::character varying[], p_campus_id bigint DEFAULT NULL::bigint, p_sort_campo character varying DEFAULT NULL::character varying, p_sort_desc boolean DEFAULT false, p_page_index integer DEFAULT 0, p_page_size integer DEFAULT 10)
  RETURNS TABLE(pk_empleado bigint, numero_documento character varying, primer_nombre character varying, segundo_nombre character varying, primer_apellido character varying, segundo_apellido character varying, nombre_completo character varying, fk_estado character varying, estado_label character varying, jornada_id bigint, jornada_nombre character varying, roles jsonb, sedes jsonb, estados_permisos jsonb, correo_electronico character varying)
  LANGUAGE plpgsql
@@ -301,9 +341,9 @@ BEGIN
            -- texto de idx_tusuario_busqueda_trgm (V112, sigue vivo en el
            -- servidor) y el planner pueda usarlo en vez de Seq Scan.
            AND (NULLIF(TRIM(p_search), '') IS NULL
-                OR (COALESCE(u.PRIMER_NOMBRE,'') || ' ' || COALESCE(u.SEGUNDO_NOMBRE,'') || ' ' ||
-                    COALESCE(u.PRIMER_APELLIDO,'') || ' ' || COALESCE(u.SEGUNDO_APELLIDO,'') || ' ' ||
-                    COALESCE(u.IDENTIFICACION,'')) ILIKE '%' || p_search || '%'
+                OR academico_test.fn_usuario_coincide_busqueda(
+                       p_search, u.PRIMER_NOMBRE, u.SEGUNDO_NOMBRE, u.PRIMER_APELLIDO,
+                       u.SEGUNDO_APELLIDO, u.IDENTIFICACION)
                 OR EXISTS (
                     SELECT 1 FROM academico_test.TSEDE_USUARIO su2
                       JOIN academico_test.TSEDE  s ON s.PK_TSEDE = su2.FK_TSEDE
@@ -534,10 +574,9 @@ BEGIN
           JOIN academico_test.TUSUARIO      u ON u.PK_TUSUARIO = f.FK_TUSUARIO
          WHERE f.ACTIVE = TRUE
            AND (NULLIF(TRIM(p_search), '') IS NULL
-                OR u.PRIMER_NOMBRE || ' ' || COALESCE(u.SEGUNDO_NOMBRE,'') ILIKE '%' || p_search || '%'
-                OR u.PRIMER_APELLIDO || ' ' || COALESCE(u.SEGUNDO_APELLIDO,'') ILIKE '%' || p_search || '%'
-                OR (u.PRIMER_NOMBRE || ' ' || COALESCE(u.PRIMER_APELLIDO,'')) ILIKE '%' || p_search || '%'
-                OR u.IDENTIFICACION ILIKE '%' || p_search || '%'
+                OR academico_test.fn_usuario_coincide_busqueda(
+                       p_search, u.PRIMER_NOMBRE, u.SEGUNDO_NOMBRE, u.PRIMER_APELLIDO,
+                       u.SEGUNDO_APELLIDO, u.IDENTIFICACION)
                 OR EXISTS (
                     SELECT 1 FROM academico_test.TSEDE_USUARIO su2
                       JOIN academico_test.TSEDE  s ON s.PK_TSEDE = su2.FK_TSEDE
@@ -635,10 +674,9 @@ BEGIN
       JOIN academico_test.TUSUARIO      u ON u.PK_TUSUARIO = f.FK_TUSUARIO
      WHERE f.ACTIVE = TRUE
        AND (NULLIF(TRIM(p_search), '') IS NULL
-            OR u.PRIMER_NOMBRE || ' ' || COALESCE(u.SEGUNDO_NOMBRE,'') ILIKE '%' || p_search || '%'
-            OR u.PRIMER_APELLIDO || ' ' || COALESCE(u.SEGUNDO_APELLIDO,'') ILIKE '%' || p_search || '%'
-            OR (u.PRIMER_NOMBRE || ' ' || COALESCE(u.PRIMER_APELLIDO,'')) ILIKE '%' || p_search || '%'
-            OR u.IDENTIFICACION ILIKE '%' || p_search || '%'
+            OR academico_test.fn_usuario_coincide_busqueda(
+                   p_search, u.PRIMER_NOMBRE, u.SEGUNDO_NOMBRE, u.PRIMER_APELLIDO,
+                   u.SEGUNDO_APELLIDO, u.IDENTIFICACION)
             OR EXISTS (
                 SELECT 1 FROM academico_test.TSEDE_USUARIO su2
                   JOIN academico_test.TSEDE  s ON s.PK_TSEDE = su2.FK_TSEDE
