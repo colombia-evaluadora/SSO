@@ -1,70 +1,13 @@
 -- ===========================================================================
--- V140 - fn_asistencia_calendario: REGISTRADA exige el padron completo (antes
--- bastaba 1 fila de TASISTENCIA; ahora exige registrados >= padron activo).
--- Incluye fn_asistencia_puede_ver, v_asistencia_detalle, sus 3 helpers de
--- duracion/franja y fn_asistencia_resumen_horas, que vivian solo en V220
--- (eliminada: su contenido quedo consolidado en V136-V141).
--- Depende de: V29/V40 (helpers de rol/scope), V489 (fn_usuario_solo_sus_grupos/
--- _grupos_dirigidos), V457 (sesiones programadas), V436 (grupo_es_formativo), V22.
+-- V140 - Lectura de la pantalla Asistencia: v_asistencia_detalle y sus 3
+-- helpers de duracion/franja, el nucleo fn_asistencia_sesiones_registradas_
+-- interno, fn_asistencia_calendario (REGISTRADA exige el padron completo) y
+-- fn_asistencia_resumen_horas.
+-- Depende de: V136 (alcance), V457 (sesiones programadas), V436
+-- (grupo_es_formativo), V22.
 -- ===========================================================================
 
 SET search_path TO academico_test, public;
-
--- Definiciones sin cambios respecto a la V220 original (eliminada).
-CREATE OR REPLACE FUNCTION academico_test.fn_asistencia_puede_ver(
-    p_pk_usuario  BIGINT,
-    p_fk_tgrupo   BIGINT
-)
-RETURNS BOOLEAN LANGUAGE plpgsql STABLE AS $$
-DECLARE
-    v_nivel INT;
-BEGIN
-    IF p_pk_usuario IS NULL THEN
-        RETURN TRUE;
-    END IF;
-
-    v_nivel := COALESCE(academico_test.fn_usuario_categoria_rol_nivel(p_pk_usuario), 99);
-
-    IF v_nivel = 0 THEN
-        RETURN TRUE;
-    END IF;
-
-    IF NOT academico_test.fn_usuario_puede_en_menu(p_pk_usuario, 'ASISTENCIAS', 'VER') THEN
-        RETURN FALSE;
-    END IF;
-
-    IF v_nivel = 1 THEN
-        RETURN TRUE;
-    ELSIF v_nivel = 2 THEN
-        RETURN academico_test.fn_grupo_establecimiento(p_fk_tgrupo) IN (
-                   SELECT establecimiento_id
-                     FROM academico_test.fn_usuario_ee_accesibles(p_pk_usuario));
-    ELSIF v_nivel = 3 THEN
-        IF NOT academico_test.fn_usuario_solo_sus_grupos(p_pk_usuario) THEN
-            RETURN (
-                       academico_test.fn_periodo_sede(academico_test.fn_grupo_periodo(p_fk_tgrupo)),
-                       academico_test.fn_grupo_jornada(p_fk_tgrupo)
-                   ) IN (
-                       SELECT sede_id, jornada_id
-                         FROM academico_test.fn_usuario_sedes_jornadas_accesibles(p_pk_usuario));
-        END IF;
-
-        RETURN p_fk_tgrupo IN (SELECT grupo_id FROM academico_test.fn_usuario_grupos_dirigidos(p_pk_usuario))
-            OR EXISTS (
-                SELECT 1
-                  FROM academico_test.TDOCENTE_ASIGNATURA da
-                  JOIN academico_test.TFUNCIONARIO f ON f.PK_TFUNCIONARIO = da.FK_TFUNCIONARIO
-                 WHERE f.FK_TUSUARIO = p_pk_usuario AND f.ACTIVE = TRUE
-                   AND da.FK_TGRUPO = p_fk_tgrupo AND da.ACTIVE = TRUE
-            );
-    END IF;
-
-    RETURN FALSE;
-END;
-$$;
-
-COMMENT ON FUNCTION academico_test.fn_asistencia_puede_ver(BIGINT, BIGINT)
-    IS 'BOOLEAN para el WHERE de listados: capability ''VER'' + scope por categoria de rol (0/1 => todo, 2 => fn_usuario_ee_accesibles, 3 => sede/jornada si fn_usuario_solo_sus_grupos es FALSE (coordinador/jefe de area/psico orientador, V489), si no solo fn_usuario_grupos_dirigidos + TDOCENTE_ASIGNATURA propia (director de grupo/docente), 4/sin categoria => FALSE). p_pk_usuario NULL => TRUE. Redefinida aqui (V140, antes copia identica de V220) para acotar nivel 3 a grupo propio -- ver Regla 74.';
 
 CREATE OR REPLACE FUNCTION academico_test.fn_asistencia_horas_bloque(
     p_hora_inicio         TIMESTAMP,
@@ -83,7 +26,7 @@ LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_asistencia_horas_bloque(TIMESTAMP, TIMESTAMP, TIME, TIME, BIGINT)
-    IS 'Duracion en horas de un bloque de THORARIO; sin HORA_INICIO/HORA_FIN propias, se estima con la jornada del TPERIODO_ACADEMICO / BLOQUES_POR_DEFECTO. Copia identica de V220, redefinida aqui (V140) -- la usa v_asistencia_detalle.';
+    IS 'Duracion en horas de un bloque de THORARIO; sin HORA_INICIO/HORA_FIN propias, se estima con la jornada del TPERIODO_ACADEMICO / BLOQUES_POR_DEFECTO. La usan v_asistencia_detalle y fn_asistencia_sesiones_registradas_interno.';
 
 CREATE OR REPLACE FUNCTION academico_test.fn_asistencia_franja_bloque(
     p_fecha          DATE,
@@ -99,7 +42,7 @@ LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_asistencia_franja_bloque(DATE, TIMESTAMP, TIMESTAMP, TIME, TIME)
-    IS 'Franja horaria (reloj) de un bloque de THORARIO estampada sobre la FECHA de la sesion, con la misma reserva de jornada que fn_asistencia_horas_bloque. Copia identica de V220, redefinida aqui (V140) -- la usa v_asistencia_detalle.';
+    IS 'Franja horaria (reloj) de un bloque de THORARIO estampada sobre la FECHA de la sesion, con la misma reserva de jornada que fn_asistencia_horas_bloque. La usan v_asistencia_detalle, fn_asistencia_sesiones_registradas_interno y fn_asistencia_listar_seguimiento.';
 
 CREATE OR REPLACE FUNCTION academico_test.fn_asistencia_horas_actividad(
     p_duracion_estimada NUMERIC,
@@ -115,9 +58,8 @@ LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_asistencia_horas_actividad(NUMERIC, DATE, DATE)
-    IS 'Horas que aporta UN dia de una actividad: DURACION_ESTIMADA (duracion de la actividad COMPLETA) repartida entre los dias de su rango. Copia identica de V220, redefinida aqui (V140) -- la usa v_asistencia_detalle.';
+    IS 'Horas que aporta UN dia de una actividad: DURACION_ESTIMADA (duracion de la actividad COMPLETA) repartida entre los dias de su rango. La usan v_asistencia_detalle y fn_asistencia_sesiones_registradas_interno.';
 
--- Copia de V220 (sin cambios). Unico dueño real: nadie mas la redefine.
 CREATE OR REPLACE VIEW academico_test.v_asistencia_detalle AS
 SELECT
     a.PK_TASISTENCIA                          AS pk_tasistencia,
@@ -211,7 +153,114 @@ SELECT
  WHERE a.ACTIVE = TRUE;
 
 COMMENT ON VIEW academico_test.v_asistencia_detalle
-    IS 'Detalle plano de TASISTENCIA (solo ACTIVE), evaluativo y formativo. Cadena de joins: estudiante, grupo, grado, periodo academico, sede, jornada, asignatura, soporte, franja horaria + duracion via THORARIO por (grupo, asignatura, bloque, dia de semana). Expone banderas de estado (es_presente/es_tarde/es_ausente/es_justificado). Copia identica de V220, redefinida aqui (V140) para trazabilidad -- la usa fn_asistencia_calendario.';
+    IS 'Detalle plano de TASISTENCIA (solo ACTIVE), evaluativo y formativo. Cadena de joins: estudiante, grupo, grado, periodo academico, sede, jornada, asignatura, soporte, franja horaria + duracion via THORARIO por (grupo, asignatura, bloque, dia de semana). Expone banderas de estado (es_presente/es_tarde/es_ausente/es_justificado).';
+
+CREATE OR REPLACE FUNCTION academico_test.fn_asistencia_sesiones_registradas_interno(
+    p_fk_tsede       BIGINT,
+    p_fecha_desde    DATE,
+    p_fecha_hasta    DATE,
+    p_fk_tgrupo      BIGINT DEFAULT NULL,
+    p_fk_tasignatura BIGINT DEFAULT NULL
+)
+RETURNS TABLE (
+    fecha          DATE,
+    fk_tgrupo      BIGINT,
+    grupo          VARCHAR,
+    fk_tgrado      BIGINT,
+    grado          VARCHAR,
+    grado_valor    VARCHAR,
+    fk_tlv_jornada BIGINT,
+    jornada        VARCHAR,
+    jornada_valor  VARCHAR,
+    fk_tasignatura BIGINT,
+    asignatura     VARCHAR,
+    fk_tactividad  BIGINT,
+    actividad      VARCHAR,
+    bloque         NUMERIC,
+    hora_inicio    TIMESTAMP,
+    hora_fin       TIMESTAMP,
+    horas          NUMERIC,
+    n_total        BIGINT,
+    n_presentes    BIGINT,
+    n_a_tiempo     BIGINT,
+    n_tarde        BIGINT,
+    n_ausentes     BIGINT
+)
+-- jit off: el estimado de filas por matricula sale inflado y la compilacion
+-- JIT costaba mas que la consulta (700 ms frente a 30 ms con 20M filas).
+LANGUAGE plpgsql STABLE SET jit = off AS $$
+#variable_conflict use_column
+BEGIN
+-- Se agrega sobre TASISTENCIA entrando por las matriculas de la sede, y la
+-- franja/horas de v_asistencia_detalle se calculan una vez por sesion y no
+-- por fila: por la vista se leia el mes de toda la institucion.
+RETURN QUERY
+WITH conteo AS (
+    SELECT a.FECHA AS fecha, m.FK_TGRUPO AS fk_tgrupo,
+           a.FK_TASIGNATURA AS fk_tasignatura, a.FK_TACTIVIDAD AS fk_tactividad,
+           a.BLOQUE AS bloque,
+           COUNT(*)                                          AS n_total,
+           COUNT(*) FILTER (WHERE lv.VALOR IN ('1','5','6')) AS n_presentes,
+           COUNT(*) FILTER (WHERE lv.VALOR = '1')            AS n_a_tiempo,
+           COUNT(*) FILTER (WHERE lv.VALOR IN ('5','6'))     AS n_tarde,
+           COUNT(*) FILTER (WHERE lv.VALOR IN ('2','3'))     AS n_ausentes
+      FROM academico_test.TPERIODO_ACADEMICO pa
+      JOIN academico_test.TGRADO g      ON g.FK_TPERIODO_ACADEMICO = pa.PK_TPERIODO_ACADEMICO
+      JOIN academico_test.TGRUPO gr     ON gr.FK_TGRADO = g.PK_TGRADO
+      JOIN academico_test.TMATRICULA m  ON m.FK_TGRUPO = gr.PK_TGRUPO
+      JOIN academico_test.TASISTENCIA a ON a.FK_TMATRICULA = m.PK_TMATRICULA
+      JOIN academico_test.TLISTA_VALOR lv ON lv.PK_LISTA_VALOR = a.FK_TLV_TIPO_ASISTENCIA
+     WHERE pa.FK_TSEDE = p_fk_tsede
+       AND a.ACTIVE = TRUE
+       AND a.FECHA BETWEEN p_fecha_desde AND p_fecha_hasta
+       AND (p_fk_tgrupo      IS NULL OR gr.PK_TGRUPO = p_fk_tgrupo)
+       AND (p_fk_tasignatura IS NULL OR a.FK_TASIGNATURA = p_fk_tasignatura)
+     GROUP BY a.FECHA, m.FK_TGRUPO, a.FK_TASIGNATURA, a.FK_TACTIVIDAD, a.BLOQUE
+)
+    SELECT c.fecha, c.fk_tgrupo, gr.NOMBRE AS grupo, g.PK_TGRADO AS fk_tgrado,
+           g.NOMBRE AS grado, g.CODIGO AS grado_valor,
+           gr.FK_TLV_JORNADA AS fk_tlv_jornada, jor.NOMBRE AS jornada, jor.VALOR AS jornada_valor,
+           c.fk_tasignatura, asig.NOMBRE AS asignatura,
+           c.fk_tactividad, act.TITULO AS actividad,
+           c.bloque,
+           franja.hora_inicio, franja.hora_fin,
+           CASE WHEN c.fk_tactividad IS NOT NULL
+                THEN academico_test.fn_asistencia_horas_actividad(
+                         act.DURACION_ESTIMADA,
+                         COALESCE(act.FECHA_INICIO, act.FECHA_CREACION),
+                         COALESCE(act.FECHA_CIERRE, act.FECHA_INICIO, act.FECHA_CREACION))
+                ELSE academico_test.fn_asistencia_horas_bloque(
+                         h.HORA_INICIO, h.HORA_FIN, pa.HORA_INICIO, pa.HORA_FIN, pa.BLOQUES_POR_DEFECTO)
+           END AS horas,
+           c.n_total, c.n_presentes, c.n_a_tiempo, c.n_tarde, c.n_ausentes
+      FROM conteo c
+      JOIN academico_test.TGRUPO gr ON gr.PK_TGRUPO = c.fk_tgrupo
+      JOIN academico_test.TGRADO g  ON g.PK_TGRADO = gr.FK_TGRADO
+      JOIN academico_test.TPERIODO_ACADEMICO pa ON pa.PK_TPERIODO_ACADEMICO = g.FK_TPERIODO_ACADEMICO
+      LEFT JOIN academico_test.TASIGNATURA asig ON asig.PK_TASIGNATURA = c.fk_tasignatura
+      LEFT JOIN academico_test.TACTIVIDAD  act  ON act.PK_TACTIVIDAD  = c.fk_tactividad
+      LEFT JOIN academico_test.TLISTA_VALOR jor ON jor.PK_LISTA_VALOR = gr.FK_TLV_JORNADA
+                                               AND jor.CATEGORIA = 'JORNADA'
+      LEFT JOIN LATERAL (
+          SELECT th.HORA_INICIO, th.HORA_FIN
+            FROM academico_test.THORARIO th
+            JOIN academico_test.TLISTA_VALOR dia
+              ON dia.PK_LISTA_VALOR = th.FK_TLV_DIA_SEMANA
+             AND dia.CATEGORIA = 'DIA_SEMANA'
+             AND dia.VALOR = (EXTRACT(DOW FROM c.fecha)::INT + 1)::TEXT
+           WHERE th.FK_TGRUPO      = c.fk_tgrupo
+             AND th.FK_TASIGNATURA = c.fk_tasignatura
+             AND th.NUMERO_BLOQUE  = c.bloque
+             AND th.ACTIVE = TRUE
+           LIMIT 1
+      ) h ON TRUE
+      CROSS JOIN LATERAL academico_test.fn_asistencia_franja_bloque(
+          c.fecha, h.HORA_INICIO, h.HORA_FIN, pa.HORA_INICIO, pa.HORA_FIN) franja;
+END;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_asistencia_sesiones_registradas_interno(BIGINT, DATE, DATE, BIGINT, BIGINT)
+    IS 'INTERNO: sesiones con asistencia registrada (ACTIVE) de una sede en un rango, una fila por (fecha, grupo, asignatura, actividad, bloque) con nombres, franja/horas (mismas reglas que v_asistencia_detalle) y conteos por estado. Sin alcance: el llamador filtra por rol/docente. La usan fn_asistencia_calendario y fn_asistencia_resumen_horas.';
 
 CREATE OR REPLACE FUNCTION academico_test.fn_asistencia_calendario(
     p_pk_usuario      BIGINT,
@@ -286,37 +335,26 @@ BEGIN
          WHERE p_fk_tasignatura IS NULL OR ap.fk_tasignatura = p_fk_tasignatura
     ),
     registradas AS (
-        SELECT d.fecha, d.fk_tgrupo, d.grupo, d.fk_tgrado, d.grado, d.grado_valor,
-               d.fk_tlv_jornada, d.jornada, d.jornada_valor, d.fk_tasignatura, d.asignatura,
-               d.fk_tactividad, d.actividad,
-               d.bloque,
-               MIN(d.hora_inicio)                            AS hora_inicio,
-               MIN(d.hora_fin)                               AS hora_fin,
-               MIN(d.horas)                                  AS horas,
-               COUNT(*)                                      AS n_total,
-               COUNT(*) FILTER (WHERE d.tipo_valor = 1)      AS n_a_tiempo,
-               COUNT(*) FILTER (WHERE d.es_tarde)            AS n_tarde,
-               COUNT(*) FILTER (WHERE d.es_ausente)          AS n_ausentes
-          FROM academico_test.v_asistencia_detalle d
-         WHERE d.fecha >= v_ini AND d.fecha < v_fin
-           AND d.fk_tsede = p_fk_tsede
-           AND (p_fk_tgrupo      IS NULL OR d.fk_tgrupo = p_fk_tgrupo)
-           AND (p_fk_tasignatura IS NULL OR d.fk_tasignatura = p_fk_tasignatura)
-           AND (p_fk_tfuncionario IS NULL OR EXISTS (
+        SELECT r.fecha, r.fk_tgrupo, r.grupo, r.fk_tgrado, r.grado, r.grado_valor,
+               r.fk_tlv_jornada, r.jornada, r.jornada_valor, r.fk_tasignatura, r.asignatura,
+               r.fk_tactividad, r.actividad, r.bloque, r.hora_inicio, r.hora_fin, r.horas,
+               r.n_total, r.n_a_tiempo, r.n_tarde, r.n_ausentes
+          FROM academico_test.fn_asistencia_sesiones_registradas_interno(
+                   p_fk_tsede, v_ini, v_fin - 1, p_fk_tgrupo, p_fk_tasignatura) r
+         WHERE (p_fk_tfuncionario IS NULL OR EXISTS (
                    SELECT 1 FROM academico_test.TDOCENTE_ASIGNATURA da
                     WHERE da.FK_TFUNCIONARIO = p_fk_tfuncionario
-                      AND da.FK_TGRUPO       = d.fk_tgrupo
-                      AND da.FK_TASIGNATURA  = d.fk_tasignatura
+                      AND da.FK_TGRUPO       = r.fk_tgrupo
+                      AND da.FK_TASIGNATURA  = r.fk_tasignatura
                       AND da.ACTIVE = TRUE))
-           AND academico_test.fn_asistencia_puede_ver_asignatura(p_pk_usuario, d.fk_tgrupo, d.fk_tasignatura)
-         GROUP BY d.fecha, d.fk_tgrupo, d.grupo, d.fk_tgrado, d.grado, d.grado_valor,
-                  d.fk_tlv_jornada, d.jornada, d.jornada_valor, d.fk_tasignatura, d.asignatura,
-                  d.fk_tactividad, d.actividad, d.bloque
+           AND academico_test.fn_asistencia_puede_ver_asignatura(p_pk_usuario, r.fk_tgrupo, r.fk_tasignatura)
     ),
     padron AS (
         SELECT m.FK_TGRUPO AS fk_tgrupo, COUNT(*)::BIGINT AS matriculas
           FROM academico_test.TMATRICULA m
          WHERE m.ACTIVE = TRUE
+           AND m.FK_TGRUPO IN (SELECT pg.fk_tgrupo FROM programadas pg
+                               UNION SELECT rg.fk_tgrupo FROM registradas rg)
          GROUP BY m.FK_TGRUPO
     )
     SELECT
@@ -343,7 +381,7 @@ BEGIN
         COALESCE(r.n_a_tiempo, 0)::BIGINT,
         COALESCE(r.n_tarde, 0)::BIGINT,
         COALESCE(r.n_ausentes, 0)::BIGINT,
-        -- V140 -- REGISTRADA exige que TODO el padron activo del grupo tenga
+        -- REGISTRADA exige que TODO el padron activo del grupo tenga
         -- fila de asistencia, no solo que exista alguna. Con registro parcial
         -- (ej. 1 de 7) la sesion sigue contando lo que falte, igual que si no
         -- se hubiera tomado nada.
@@ -370,10 +408,9 @@ COMMENT ON FUNCTION academico_test.fn_asistencia_calendario(
     BIGINT, BIGINT, INTEGER, INTEGER, BIGINT, BIGINT, DATE, BIGINT
 ) IS 'Pantalla Asistencia (calendario mensual por sede). Una fila por SESION del mes: las PROGRAMADAS (fn_asistencia_sesiones_programadas) en FULL OUTER JOIN con las REGISTRADAS, de modo que tambien aparecen las tomas manuales sin bloque programado. Incluye grado (fk_tgrado/grado/grado_valor -- CODIGO de TGRADO) y jornada (fk_tlv_jornada/jornada/jornada_valor -- NOMBRE/VALOR de TLISTA_VALOR CATEGORIA=''JORNADA'') del grupo de cada sesion. estado_sesion = REGISTRADA (registrados >= matriculas del padron activo del grupo -- V140, antes bastaba con que existiera una sola fila y un registro PARCIAL ya se veia como completo) | RETRASADA (fecha < p_fecha_hoy sin registro completo, contada desde el DIA ANTERIOR, V464) | PENDIENTE (hoy o futuro, o registro parcial sin vencer). p_fk_tfuncionario no NULL acota a las asignaturas asignadas a ese docente en TDOCENTE_ASIGNATURA (vista "mis clases"). Rango de fechas sargable. Alcance por rol via fn_asistencia_puede_ver.';
 
--- Copia de V220 (sin cambios). Unico dueño real: nadie mas la redefine.
--- Depende de esta misma migracion (v_asistencia_detalle, fn_asistencia_
--- puede_ver, fn_asistencia_calendario) y de V457 (sesiones/actividades
--- programadas), V436 (grupo_es_formativo).
+-- Depende de esta misma migracion (fn_asistencia_sesiones_registradas_interno,
+-- fn_asistencia_calendario) y de V457 (sesiones/
+-- actividades programadas), V436 (grupo_es_formativo).
 CREATE OR REPLACE FUNCTION academico_test.fn_asistencia_resumen_horas(
     p_pk_usuario      BIGINT,
     p_fk_tsede        BIGINT,
@@ -409,26 +446,23 @@ DECLARE
 BEGIN
     RETURN QUERY
     WITH sesion AS (
-        SELECT d.fecha,
-               MIN(d.horas)                          AS horas_sesion,
-               COUNT(*)                              AS n_total,
-               COUNT(*) FILTER (WHERE d.es_presente) AS n_presentes,
-               COUNT(*) FILTER (WHERE d.tipo_valor = 1) AS n_a_tiempo,
-               COUNT(*) FILTER (WHERE d.es_tarde)    AS n_tarde,
-               COUNT(*) FILTER (WHERE d.es_ausente)  AS n_ausentes
-          FROM academico_test.v_asistencia_detalle d
-         WHERE d.fecha >= v_anio_ini AND d.fecha < v_anio_fin
-           AND d.fk_tsede = p_fk_tsede
-           AND (p_fk_tgrupo      IS NULL OR d.fk_tgrupo = p_fk_tgrupo)
-           AND (p_fk_tasignatura IS NULL OR d.fk_tasignatura = p_fk_tasignatura)
-           AND (p_fk_tfuncionario IS NULL OR EXISTS (
+        SELECT r.fecha,
+               MIN(r.horas)              AS horas_sesion,
+               SUM(r.n_total)            AS n_total,
+               SUM(r.n_presentes)        AS n_presentes,
+               SUM(r.n_a_tiempo)         AS n_a_tiempo,
+               SUM(r.n_tarde)            AS n_tarde,
+               SUM(r.n_ausentes)         AS n_ausentes
+          FROM academico_test.fn_asistencia_sesiones_registradas_interno(
+                   p_fk_tsede, v_anio_ini, v_anio_fin - 1, p_fk_tgrupo, p_fk_tasignatura) r
+         WHERE (p_fk_tfuncionario IS NULL OR EXISTS (
                    SELECT 1 FROM academico_test.TDOCENTE_ASIGNATURA da
                     WHERE da.FK_TFUNCIONARIO = p_fk_tfuncionario
-                      AND da.FK_TGRUPO       = d.fk_tgrupo
-                      AND da.FK_TASIGNATURA  = d.fk_tasignatura
+                      AND da.FK_TGRUPO       = r.fk_tgrupo
+                      AND da.FK_TASIGNATURA  = r.fk_tasignatura
                       AND da.ACTIVE = TRUE))
-           AND academico_test.fn_asistencia_puede_ver_asignatura(p_pk_usuario, d.fk_tgrupo, d.fk_tasignatura)
-         GROUP BY d.fecha, d.fk_tgrupo, d.fk_tasignatura, d.bloque
+           AND academico_test.fn_asistencia_puede_ver_asignatura(p_pk_usuario, r.fk_tgrupo, r.fk_tasignatura)
+         GROUP BY r.fecha, r.fk_tgrupo, r.fk_tasignatura, r.bloque
     ),
     programadas AS (
         SELECT sp.fecha, sp.horas
@@ -483,4 +517,4 @@ $$;
 
 COMMENT ON FUNCTION academico_test.fn_asistencia_resumen_horas(
     BIGINT, BIGINT, DATE, BIGINT, BIGINT, BIGINT
-) IS 'Tarjetas del encabezado de la pantalla Asistencia. Horas DICTADAS (registradas) de semana/mes/anio + horas PROGRAMADAS del horario de semana/mes. horas_efectivas_mes ponderada por fraccion de presentes. Los 3 contadores de estado (registradas/retrasadas/pendientes) delegados en fn_asistencia_calendario. p_fk_tfuncionario no NULL acota todo a las asignaturas asignadas a ese docente. Alcance por rol via fn_asistencia_puede_ver. Copia identica de V220, redefinida aqui (V140) para trazabilidad.';
+) IS 'Tarjetas del encabezado de la pantalla Asistencia. Horas DICTADAS (registradas) de semana/mes/anio + horas PROGRAMADAS del horario de semana/mes. horas_efectivas_mes ponderada por fraccion de presentes. Los 3 contadores de estado (registradas/retrasadas/pendientes) delegados en fn_asistencia_calendario. p_fk_tfuncionario no NULL acota todo a las asignaturas asignadas a ese docente. Alcance por rol via fn_asistencia_puede_ver.';
