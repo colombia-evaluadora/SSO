@@ -523,6 +523,40 @@ class DownloadControllerTest {
         verify(viewTokens, org.mockito.Mockito.never()).acunar(anyLong());
     }
 
+    // ---------- bucket legado (archivos migrados sin copiar) ----------
+
+    @Test
+    void extraeElBucketDeCadaFormaDeUrls3() {
+        assertThat(DownloadController.extraerBucket("s3://coleva-files/SED/1/a.pdf")).isEqualTo("coleva-files");
+        assertThat(DownloadController.extraerBucket(
+                "https://coleva-files.s3.amazonaws.com/SED/perfilUsuario/1.jpg")).isEqualTo("coleva-files");
+        assertThat(DownloadController.extraerBucket(
+                "https://coleva-files.s3.us-east-1.amazonaws.com/a.jpg")).isEqualTo("coleva-files");
+        assertThat(DownloadController.extraerBucket("http://garage:3900/eval-col/a/b.jpg")).isEqualTo("eval-col");
+        assertThat(DownloadController.extraerBucket("ACADEMICO_VALLEDUPAR/perfilUsuario/1.jpg")).isNull();
+        assertThat(DownloadController.extraerBucket(null)).isNull();
+    }
+
+    @Test
+    void unArchivoDelBucketLegadoSeLeeDeEseBucket() {
+        var jwt = mock(JwtTokenService.class);
+        var repo = mock(ArchivoRepository.class);
+        var almacen = mock(AlmacenObjetos.class);
+        when(repo.buscarActivo(1L)).thenReturn(Optional.of(new ArchivoRepository.Archivo(
+                1L, "a.pdf", 3L, "s3://coleva-files/SEDCARTAUSER2015/1/actividad/a.pdf")));
+        when(almacen.esLegado("coleva-files")).thenReturn(true);
+        GetObjectResponse respuestaS3 = GetObjectResponse.builder().contentLength(3L).build();
+        var stream = new ResponseInputStream<>(respuestaS3,
+                AbortableInputStream.create(new ByteArrayInputStream("abc".getBytes())));
+        when(almacen.abrirLegado("SEDCARTAUSER2015/1/actividad/a.pdf")).thenReturn(stream);
+
+        var respuesta = controller(jwt, repo, almacen, mock(ViewTokenService.class))
+                .descargar(TOKEN_INTERNO, null, 1L, null);
+
+        assertThat(respuesta.getStatusCode().value()).isEqualTo(200);
+        verify(almacen, org.mockito.Mockito.never()).abrir(anyString());
+    }
+
     // ---------- ?mimeType= ----------
 
     @Test

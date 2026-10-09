@@ -1651,6 +1651,10 @@ services:
       S3_ACCESS_KEY: "${S3_ACCESS_KEY:-}"
       S3_SECRET_KEY: "${S3_SECRET_KEY:-}"
       S3_PATH_STYLE: "${S3_PATH_STYLE:-true}"
+      S3_LEGADO_BUCKET: "${S3_LEGADO_BUCKET:-}"
+      S3_LEGADO_REGION: "${S3_LEGADO_REGION:-us-east-1}"
+      S3_LEGADO_ACCESS_KEY: "${S3_LEGADO_ACCESS_KEY:-}"
+      S3_LEGADO_SECRET_KEY: "${S3_LEGADO_SECRET_KEY:-}"
       # Sin límite, un cliente llena el disco: el servidor está al 85%.
       FILES_MAX_FILE_SIZE: "${FILES_MAX_FILE_SIZE:-25MB}"
       FILES_MAX_REQUEST_SIZE: "${FILES_MAX_REQUEST_SIZE:-30MB}"
