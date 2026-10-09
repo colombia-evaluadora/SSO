@@ -40,6 +40,24 @@ RETURNS TABLE (
 LANGUAGE plpgsql STABLE AS $$
 BEGIN
     RETURN QUERY
+    -- Alcance una vez por (grupo, asignatura) del horario, no por sesion.
+    -- MATERIALIZED: si no, el planner empuja el filtro bajo el DISTINCT.
+    WITH pares AS MATERIALIZED (
+        SELECT DISTINCT th0.FK_TGRUPO, th0.FK_TASIGNATURA
+          FROM academico_test.THORARIO th0
+          JOIN academico_test.TGRUPO gr0             ON gr0.PK_TGRUPO = th0.FK_TGRUPO
+          JOIN academico_test.TGRADO g0              ON g0.PK_TGRADO = gr0.FK_TGRADO
+          JOIN academico_test.TPERIODO_ACADEMICO pa0 ON pa0.PK_TPERIODO_ACADEMICO = g0.FK_TPERIODO_ACADEMICO
+         WHERE th0.ACTIVE = TRUE
+           AND pa0.FK_TSEDE = p_fk_tsede
+           AND (p_fk_tgrupo      IS NULL OR th0.FK_TGRUPO = p_fk_tgrupo)
+           AND (p_fk_tasignatura IS NULL OR th0.FK_TASIGNATURA = p_fk_tasignatura)
+    ),
+    visibles AS MATERIALIZED (
+        SELECT x.FK_TGRUPO AS fk_tgrupo, x.FK_TASIGNATURA AS fk_tasignatura
+          FROM pares x
+         WHERE academico_test.fn_asistencia_puede_ver_asignatura(p_pk_usuario, x.FK_TGRUPO, x.FK_TASIGNATURA)
+    )
     SELECT dd::date,
            th.FK_TGRUPO,      gr.NOMBRE,
            g.PK_TGRADO,       g.NOMBRE,        g.CODIGO,
@@ -95,7 +113,7 @@ BEGIN
                   AND da.FK_TGRUPO       = th.FK_TGRUPO
                   AND da.FK_TASIGNATURA  = th.FK_TASIGNATURA
                   AND da.ACTIVE = TRUE))
-       AND academico_test.fn_asistencia_puede_ver_asignatura(p_pk_usuario, th.FK_TGRUPO, th.FK_TASIGNATURA)
+       AND (th.FK_TGRUPO, th.FK_TASIGNATURA) IN (SELECT v.fk_tgrupo, v.fk_tasignatura FROM visibles v)
      GROUP BY dd::date, th.FK_TGRUPO, gr.NOMBRE, g.PK_TGRADO, g.NOMBRE, g.CODIGO,
               gr.FK_TLV_JORNADA, jor.NOMBRE, jor.VALOR, th.FK_TASIGNATURA, asig.NOMBRE,
               th.NUMERO_BLOQUE, th.HORA_INICIO, th.HORA_FIN,
