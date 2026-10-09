@@ -17,6 +17,7 @@ DROP FUNCTION IF EXISTS academico_test.fn_actividad_resumen_estados_docente(BIGI
 DROP FUNCTION IF EXISTS academico_test.fn_actividad_resumen_estados_docente(BIGINT, BIGINT, BIGINT, BIGINT, DATE, DATE, INT, VARCHAR[]);
 DROP FUNCTION IF EXISTS academico_test.fn_actividad_resumen_estados(BIGINT, BIGINT, BIGINT, BIGINT, DATE, DATE, INT, BIGINT);
 
+DROP FUNCTION IF EXISTS academico_test.fn_actividad_resumen_estados(BIGINT, BIGINT, BIGINT, BIGINT, DATE, DATE, INT, BIGINT, VARCHAR[]);
 CREATE OR REPLACE FUNCTION academico_test.fn_actividad_resumen_estados(
     p_pk_usuario_solicitante   BIGINT,
     p_fk_tasignatura           BIGINT    DEFAULT NULL,
@@ -26,7 +27,9 @@ CREATE OR REPLACE FUNCTION academico_test.fn_actividad_resumen_estados(
     p_fecha_hasta              DATE      DEFAULT NULL,
     p_dias_gracia              INT       DEFAULT 2,
     p_fk_tfuncionario          BIGINT    DEFAULT NULL,
-    p_grado_asignatura_pares   VARCHAR[] DEFAULT NULL
+    p_grado_asignatura_pares   VARCHAR[] DEFAULT NULL,
+    p_fk_sede                  BIGINT DEFAULT NULL,
+    p_fk_periodo               BIGINT DEFAULT NULL
 )
 RETURNS TABLE (
     pendientes_por_evaluar  BIGINT,
@@ -52,7 +55,7 @@ BEGIN
     -- Mismo alcance que los listados; en nivel 3, solo sus pares sede+jornada.
     SELECT alc.alcance_total, alc.sedes_lectura, alc.periodos_lectura, alc.grupos_lectura
       INTO v_alcance_total, v_sedes_lectura, v_periodos_lectura, v_grupos_lectura
-      FROM academico_test.fn_planeador_alcance_docente(p_pk_usuario_solicitante) alc;
+      FROM academico_test.fn_planeador_alcance_docente(p_pk_usuario_solicitante, NULL, p_fk_sede, p_fk_periodo) alc;
 
     RETURN QUERY
     WITH est AS (
@@ -130,9 +133,10 @@ BEGIN
 END;
 $$;
 
-COMMENT ON FUNCTION academico_test.fn_actividad_resumen_estados(BIGINT, BIGINT, BIGINT, BIGINT, DATE, DATE, INT, BIGINT, VARCHAR[])
+COMMENT ON FUNCTION academico_test.fn_actividad_resumen_estados(BIGINT, BIGINT, BIGINT, BIGINT, DATE, DATE, INT, BIGINT, VARCHAR[], BIGINT, BIGINT)
     IS 'Contadores del tablero del Planeador (Pendientes por evaluar / En evaluacion vigentes / Finalizadas / Vencidas > p_dias_gracia dias) en UNA sola pasada con COUNT(*) FILTER sobre el estado derivado por fn_actividad_estado. Filtros opcionales por asignatura, grupo, unidad, ventana de fechas, docente que DICTA (p_fk_tfuncionario) y (V530) pestaña de Rotulo de Ejecucion activa: p_grado_asignatura_pares, VARCHAR[] de "grado:asignatura" (asignatura vacío = comodín), mismo contrato que fn_actividad_listar_interno (V526)/fn_actividad_calendario (V528), nunca JSONB. Gate VER sobre PLANEADOR. V224/V250/V530. Alcance via fn_planeador_alcance_docente: en nivel 3 solo periodos de sus pares sede+jornada.';
 
+DROP FUNCTION IF EXISTS academico_test.fn_actividad_resumen_estados_docente(BIGINT, BIGINT, BIGINT, BIGINT, DATE, DATE, INT, VARCHAR[], BIGINT);
 CREATE OR REPLACE FUNCTION academico_test.fn_actividad_resumen_estados_docente(
     p_pk_usuario_solicitante   BIGINT,
     p_fk_tasignatura           BIGINT    DEFAULT NULL,
@@ -142,7 +146,9 @@ CREATE OR REPLACE FUNCTION academico_test.fn_actividad_resumen_estados_docente(
     p_fecha_hasta              DATE      DEFAULT NULL,
     p_dias_gracia              INT       DEFAULT 2,
     p_grado_asignatura_pares   VARCHAR[] DEFAULT NULL,
-    p_fk_tfuncionario          BIGINT    DEFAULT NULL
+    p_fk_tfuncionario          BIGINT    DEFAULT NULL,
+    p_fk_sede                  BIGINT DEFAULT NULL,
+    p_fk_periodo               BIGINT DEFAULT NULL
 )
 RETURNS TABLE (
     pendientes_por_evaluar  BIGINT,
@@ -162,7 +168,7 @@ BEGIN
     );
 
     SELECT * INTO v_alc
-      FROM academico_test.fn_planeador_alcance_docente(p_pk_usuario_solicitante, p_fk_tfuncionario);
+      FROM academico_test.fn_planeador_alcance_docente(p_pk_usuario_solicitante, p_fk_tfuncionario, p_fk_sede, p_fk_periodo);
 
     IF v_alc.fk_tfuncionario IS NULL AND (v_alc.solo_propias OR v_alc.alcance_total) THEN
         RETURN QUERY SELECT 0::BIGINT, 0::BIGINT, 0::BIGINT, 0::BIGINT, 0::BIGINT;
@@ -173,10 +179,10 @@ BEGIN
     SELECT * FROM academico_test.fn_actividad_resumen_estados(
         p_pk_usuario_solicitante, p_fk_tasignatura, p_fk_tgrupo, p_fk_tunidad,
         p_fecha_desde, p_fecha_hasta, p_dias_gracia, v_alc.fk_tfuncionario,
-        p_grado_asignatura_pares
+        p_grado_asignatura_pares, p_fk_sede, p_fk_periodo
     );
 END;
 $$;
 
-COMMENT ON FUNCTION academico_test.fn_actividad_resumen_estados_docente(BIGINT, BIGINT, BIGINT, BIGINT, DATE, DATE, INT, VARCHAR[], BIGINT)
+COMMENT ON FUNCTION academico_test.fn_actividad_resumen_estados_docente(BIGINT, BIGINT, BIGINT, BIGINT, DATE, DATE, INT, VARCHAR[], BIGINT, BIGINT, BIGINT)
     IS 'Tablero del Planeador (las CUATRO tarjetas, mas el total). Wrapper delgado: resuelve el docente con fn_planeador_alcance_docente y delega en fn_actividad_resumen_estados. Docente puro: el suyo (ignora p_fk_tfuncionario; sin funcionario, contadores en 0). Otros con p_fk_tfuncionario (?funcionario=): ese docente, 42501 si no dicta nada en su alcance. Otros sin él: todo su alcance (nivel 3: pares sede+jornada); alcance total sin docente elegido: contadores en 0. p_grado_asignatura_pares (V530): acota a una pestaña de Rotulo de Ejecucion, mismo contrato que fn_actividad_listar_docente (V526/V527)/fn_actividad_calendario_docente (V528/V529). Gate VER sobre PLANEADOR. V250/V530.';
