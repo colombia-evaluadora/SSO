@@ -61,7 +61,8 @@ CREATE OR REPLACE FUNCTION academico_test.fn_docente_unidad_tabs_listar_interno(
     p_alcance_total    BOOLEAN,
     p_solo_propias     BOOLEAN,
     p_fk_tfuncionario  BIGINT,
-    p_periodos_lectura BIGINT[] DEFAULT NULL
+    p_periodos_lectura BIGINT[] DEFAULT NULL,
+    p_grupos_lectura   BIGINT[] DEFAULT NULL
 )
 RETURNS TABLE (
     instrumento                 VARCHAR,
@@ -122,6 +123,7 @@ BEGIN
            AND da.FK_TFUNCIONARIO = v_fk_tfuncionario
            AND da.ACTIVE = TRUE
            AND (p_periodos_lectura IS NULL OR gr.FK_TPERIODO_ACADEMICO = ANY(p_periodos_lectura))
+           AND (p_grupos_lectura IS NULL OR g.PK_TGRUPO = ANY(p_grupos_lectura))
 
         UNION
 
@@ -139,6 +141,7 @@ BEGIN
            AND g.FK_TFUNCIONARIO = v_fk_tfuncionario
            AND g.ACTIVE = TRUE
            AND (p_periodos_lectura IS NULL OR gr.FK_TPERIODO_ACADEMICO = ANY(p_periodos_lectura))
+           AND (p_grupos_lectura IS NULL OR g.PK_TGRUPO = ANY(p_grupos_lectura))
 
         UNION
 
@@ -208,7 +211,7 @@ BEGIN
 END;
 $$;
 
-COMMENT ON FUNCTION academico_test.fn_docente_unidad_tabs_listar_interno(BIGINT[], BOOLEAN, BOOLEAN, BIGINT, BIGINT[])
+COMMENT ON FUNCTION academico_test.fn_docente_unidad_tabs_listar_interno(BIGINT[], BOOLEAN, BOOLEAN, BIGINT, BIGINT[], BIGINT[])
     IS 'INTERNO: pestañas de unidad sin gate; recibe el alcance ya resuelto (fn_planeador_alcance_docente). Rama docente: lo que dicta p_fk_tfuncionario y los grados de los grupos que dirige (TGRUPO.FK_TFUNCIONARIO); rama territorial (si NOT p_solo_propias): todos los grados de las sedes de lectura. p_periodos_lectura (NULL = sin restricción) acota las dos ramas a esos periodos académicos (alcance sede+jornada del coordinador). Lo usa fn_docente_unidad_tabs_listar; la regla de pestañas está en su COMMENT.';
 
 CREATE OR REPLACE FUNCTION academico_test.fn_docente_unidad_tabs_listar(
@@ -249,14 +252,14 @@ BEGIN
         RETURN QUERY
         SELECT * FROM academico_test.fn_docente_unidad_tabs_listar_interno(
             v_alc.sedes_lectura, v_alc.alcance_total, TRUE, v_alc.fk_tfuncionario,
-            v_alc.periodos_lectura);
+            v_alc.periodos_lectura, v_alc.grupos_lectura);
         RETURN;
     END IF;
 
     RETURN QUERY
     SELECT * FROM academico_test.fn_docente_unidad_tabs_listar_interno(
         v_alc.sedes_lectura, v_alc.alcance_total, v_alc.solo_propias, v_alc.fk_tfuncionario_propio,
-        v_alc.periodos_lectura);
+        v_alc.periodos_lectura, v_alc.grupos_lectura);
 END;
 $$;
 

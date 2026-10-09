@@ -14,13 +14,35 @@
 SET search_path TO academico_test, public;
 
 -- ---------------------------------------------------------------------------
+-- 0. Jornada "Completa" (o sin jornada): no acota a una jornada concreta.
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION academico_test.fn_planeador_jornada_completa(
+    p_fk_tlv_jornada BIGINT
+)
+RETURNS BOOLEAN
+LANGUAGE sql
+STABLE
+AS $$
+    SELECT p_fk_tlv_jornada IS NULL
+        OR EXISTS (SELECT 1
+                     FROM academico_test.TLISTA_VALOR lv
+                    WHERE lv.PK_LISTA_VALOR = p_fk_tlv_jornada
+                      AND lv.CATEGORIA = 'JORNADA'
+                      AND (UPPER(TRIM(lv.NOMBRE)) = 'COMPLETA' OR UPPER(TRIM(lv.VALOR)) = 'COMPLETA'));
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_planeador_jornada_completa(BIGINT)
+    IS 'INTERNO: TRUE si la jornada es NULL o la "Completa" del catálogo JORNADA (por texto, no por pk). En los años viejos el periodo académico se creaba con jornada "Completa" y la jornada real vive en el grupo (ver V537). Lo usa fn_planeador_alcance_docente para el alcance sede+jornada del coordinador.';
+
+-- ---------------------------------------------------------------------------
 -- 1. Docentes que dictan algo (TDOCENTE_ASIGNATURA activa) dentro de un alcance.
 -- ---------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION academico_test.fn_planeador_docentes_listar_interno(
     p_fk_establecimiento BIGINT,
     p_alcance_total      BOOLEAN,
     p_periodos_lectura   BIGINT[],
-    p_fk_tfuncionario    BIGINT DEFAULT NULL
+    p_fk_tfuncionario    BIGINT DEFAULT NULL,
+    p_grupos_lectura     BIGINT[] DEFAULT NULL
 )
 RETURNS TABLE (
     pk_tfuncionario BIGINT,
@@ -49,12 +71,13 @@ AS $$
               WHERE da.FK_TFUNCIONARIO = f.PK_TFUNCIONARIO
                 AND da.ACTIVE = TRUE
                 AND (p_fk_establecimiento IS NULL OR s.FK_TESTABLECIMIENTO = p_fk_establecimiento)
-                AND (p_alcance_total OR pa.PK_TPERIODO_ACADEMICO = ANY(p_periodos_lectura)))
+                AND (p_alcance_total OR pa.PK_TPERIODO_ACADEMICO = ANY(p_periodos_lectura))
+                AND (p_grupos_lectura IS NULL OR g.PK_TGRUPO = ANY(p_grupos_lectura)))
      ORDER BY 2, 1;
 $$;
 
-COMMENT ON FUNCTION academico_test.fn_planeador_docentes_listar_interno(BIGINT, BOOLEAN, BIGINT[], BIGINT)
-    IS 'INTERNO: funcionarios activos con alguna asignación activa (TDOCENTE_ASIGNATURA, grupo activo) en un periodo académico activo de una sede activa: del establecimiento pedido (NULL = cualquiera) y dentro del alcance (p_alcance_total, o el periodo en p_periodos_lectura). p_fk_tfuncionario acota a uno. Lo usan fn_planeador_docentes_listar (GET /planeador/docentes) y fn_planeador_alcance_docente (validar ?funcionario=).';
+COMMENT ON FUNCTION academico_test.fn_planeador_docentes_listar_interno(BIGINT, BOOLEAN, BIGINT[], BIGINT, BIGINT[])
+    IS 'INTERNO: funcionarios activos con alguna asignación activa (TDOCENTE_ASIGNATURA, grupo activo) en un periodo académico activo de una sede activa: del establecimiento pedido (NULL = cualquiera) y dentro del alcance (p_alcance_total, o el periodo en p_periodos_lectura y, si no es NULL, el grupo en p_grupos_lectura). p_fk_tfuncionario acota a uno. Lo usan fn_planeador_docentes_listar (GET /planeador/docentes) y fn_planeador_alcance_docente (validar ?funcionario=).';
 
 -- ---------------------------------------------------------------------------
 -- 2. Alcance de lectura + docente objetivo, resuelto una vez por petición.
@@ -69,7 +92,8 @@ RETURNS TABLE (
     solo_propias           BOOLEAN,
     fk_tfuncionario_propio BIGINT,
     periodos_lectura       BIGINT[],
-    fk_tfuncionario        BIGINT
+    fk_tfuncionario        BIGINT,
+    grupos_lectura         BIGINT[]
 )
 LANGUAGE plpgsql
 STABLE
@@ -77,12 +101,16 @@ AS $$
 DECLARE
     v_alc      RECORD;
     v_nivel    INT;
+    v_sedes    BIGINT[];
+    v_rector   BIGINT[] := '{}';
     v_periodos BIGINT[];
+    v_grupos   BIGINT[];
     v_objetivo BIGINT;
     v_solo     BOOLEAN;
 BEGIN
     SELECT * INTO v_alc FROM academico_test.fn_planeador_listado_alcance(p_pk_usuario_solicitante);
     v_nivel := COALESCE(academico_test.fn_usuario_categoria_rol_nivel(p_pk_usuario_solicitante), 99);
+    v_sedes := v_alc.sedes_lectura;
 
     -- En el Planeador el director de grupo (peso 3) tampoco administra: como
     -- el docente (peso 4), solo ve lo suyo. fn_usuario_es_docente_puro lo deja
@@ -96,21 +124,64 @@ BEGIN
                          AND su.ACTIVE = TRUE
                          AND academico_test.fn_rol_categoria_nivel(su.FK_TROL) = 3), 4) >= 3);
 
+    -- Rector solo por TESTABLECIMIENTO.FK_TFUNCIONARIO_RECTOR (sin TSEDE_USUARIO
+    -- de nivel 2): nivel 2 sobre todas las sedes y jornadas de ese EE.
+    IF NOT v_alc.alcance_total THEN
+        v_rector := ARRAY(
+            SELECT s.PK_TSEDE
+              FROM academico_test.TESTABLECIMIENTO e
+              JOIN academico_test.TFUNCIONARIO f
+                ON f.PK_TFUNCIONARIO = e.FK_TFUNCIONARIO_RECTOR AND f.ACTIVE = TRUE
+              JOIN academico_test.TSEDE s
+                ON s.FK_TESTABLECIMIENTO = e.PK_ESTABLECIMIENTO AND s.ACTIVE = TRUE
+             WHERE e.ACTIVE = TRUE
+               AND f.FK_TUSUARIO = p_pk_usuario_solicitante);
+        IF cardinality(v_rector) > 0 THEN
+            v_sedes := ARRAY(SELECT DISTINCT x
+                               FROM unnest(v_rector || CASE WHEN v_solo THEN '{}'::BIGINT[]
+                                                            ELSE v_sedes END) x
+                              ORDER BY x);
+            v_solo := FALSE;
+        END IF;
+    END IF;
+
     -- El docente puro sigue acotado a lo que dicta (sin periodos); el nivel 3
     -- que administra (coordinador) alcanza por PAR sede+jornada, no por sede.
+    -- Periodo "Completa": la jornada real vive en el grupo, así que entra el
+    -- periodo (sus unidades) y grupos_lectura deja solo los grupos de la jornada.
     IF NOT v_alc.alcance_total AND NOT v_solo THEN
         v_periodos := ARRAY(
-            WITH sj AS MATERIALIZED (
-                SELECT x.sede_id, x.jornada_id
-                  FROM academico_test.fn_usuario_sedes_jornadas_accesibles(p_pk_usuario_solicitante) x
-            )
             SELECT pa.PK_TPERIODO_ACADEMICO
               FROM academico_test.TPERIODO_ACADEMICO pa
-             WHERE pa.FK_TSEDE = ANY(v_alc.sedes_lectura)
+             WHERE pa.FK_TSEDE = ANY(v_sedes)
                AND (v_nivel <> 3
-                    OR EXISTS (SELECT 1 FROM sj
+                    OR pa.FK_TSEDE = ANY(v_rector)
+                    OR EXISTS (SELECT 1
+                                 FROM academico_test.fn_usuario_sedes_jornadas_accesibles(p_pk_usuario_solicitante) sj
                                 WHERE sj.sede_id = pa.FK_TSEDE
-                                  AND sj.jornada_id = pa.FK_TLV_JORNADA)));
+                                  AND (sj.jornada_id = pa.FK_TLV_JORNADA
+                                       OR academico_test.fn_planeador_jornada_completa(pa.FK_TLV_JORNADA)
+                                       OR (sj.jornada_id IS NOT NULL
+                                           AND academico_test.fn_planeador_jornada_completa(sj.jornada_id))))));
+
+        IF v_nivel = 3 THEN
+            v_grupos := ARRAY(
+                SELECT g.PK_TGRUPO
+                  FROM academico_test.TGRUPO g
+                  JOIN academico_test.TGRADO gr ON gr.PK_TGRADO = g.FK_TGRADO
+                  JOIN academico_test.TPERIODO_ACADEMICO pa
+                    ON pa.PK_TPERIODO_ACADEMICO = gr.FK_TPERIODO_ACADEMICO
+                 WHERE pa.PK_TPERIODO_ACADEMICO = ANY(v_periodos)
+                   AND (pa.FK_TSEDE = ANY(v_rector)
+                        OR NOT academico_test.fn_planeador_jornada_completa(pa.FK_TLV_JORNADA)
+                        OR academico_test.fn_planeador_jornada_completa(g.FK_TLV_JORNADA)
+                        OR EXISTS (SELECT 1
+                                     FROM academico_test.fn_usuario_sedes_jornadas_accesibles(p_pk_usuario_solicitante) sj
+                                    WHERE sj.sede_id = pa.FK_TSEDE
+                                      AND (sj.jornada_id = g.FK_TLV_JORNADA
+                                           OR (sj.jornada_id IS NOT NULL
+                                               AND academico_test.fn_planeador_jornada_completa(sj.jornada_id))))));
+        END IF;
     END IF;
 
     IF v_solo THEN
@@ -118,7 +189,7 @@ BEGIN
     ELSIF p_fk_tfuncionario IS NOT NULL THEN
         IF NOT EXISTS (SELECT 1
                          FROM academico_test.fn_planeador_docentes_listar_interno(
-                                  NULL, v_alc.alcance_total, v_periodos, p_fk_tfuncionario)) THEN
+                                  NULL, v_alc.alcance_total, v_periodos, p_fk_tfuncionario, v_grupos)) THEN
             RAISE EXCEPTION 'No tienes acceso al planeador de ese docente'
                 USING ERRCODE = '42501',
                       HINT = 'El docente debe dictar alguna asignatura en una sede y jornada de tu alcance';
@@ -126,13 +197,13 @@ BEGIN
         v_objetivo := p_fk_tfuncionario;
     END IF;
 
-    RETURN QUERY SELECT v_alc.sedes_lectura, v_alc.alcance_total, v_solo,
-                        v_alc.fk_tfuncionario, v_periodos, v_objetivo;
+    RETURN QUERY SELECT v_sedes, v_alc.alcance_total, v_solo,
+                        v_alc.fk_tfuncionario, v_periodos, v_objetivo, v_grupos;
 END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_planeador_alcance_docente(BIGINT, BIGINT)
-    IS 'INTERNO: alcance de lectura del Planeador (fn_planeador_listado_alcance) más periodos_lectura y el docente objetivo. solo_propias: docente puro (fn_usuario_es_docente_puro) o nivel 3 cuyo mejor rol pesa >= 3 (docente y/o director de grupo, sin coordinador ni jefe de área). periodos_lectura: NULL para alcance_total y solo_propias (sin restricción extra); si no, los periodos académicos de sus sedes de lectura y, en nivel 3, solo los de sus pares (sede, jornada) (fn_usuario_sedes_jornadas_accesibles contra TPERIODO_ACADEMICO.FK_TLV_JORNADA). fk_tfuncionario: solo_propias -> el suyo (ignora p_fk_tfuncionario); con p_fk_tfuncionario -> ese, si dicta algo en el alcance (fn_planeador_docentes_listar_interno), si no 42501; sin él -> NULL (todo el alcance). Lo usan los wrappers de lectura del tablero del Planeador. No valida permisos.';
+    IS 'INTERNO: alcance de lectura del Planeador (fn_planeador_listado_alcance) más periodos_lectura, grupos_lectura y el docente objetivo. Rector solo por TESTABLECIMIENTO.FK_TFUNCIONARIO_RECTOR (sin TSEDE_USUARIO de nivel 2): suma las sedes activas de ese EE sin restricción de jornada y deja de ser solo_propias (si además era docente puro, sus otras sedes no se suman). solo_propias: docente puro (fn_usuario_es_docente_puro) o nivel 3 cuyo mejor rol pesa >= 3 (docente y/o director de grupo, sin coordinador ni jefe de área). periodos_lectura: NULL para alcance_total y solo_propias; si no, los periodos académicos de sus sedes de lectura y, en nivel 3 (fuera de las sedes de rector), solo los de sus pares (sede, jornada) de fn_usuario_sedes_jornadas_accesibles contra TPERIODO_ACADEMICO.FK_TLV_JORNADA; un periodo o un par con jornada "Completa" (fn_planeador_jornada_completa; periodo sin jornada también) casa con cualquier jornada de esa sede. grupos_lectura: solo en nivel 3 (si no, NULL = sin restricción extra): los grupos de esos periodos; en un periodo "Completa" se mira la jornada del GRUPO contra los pares (grupo sin jornada o "Completa": entra). Los listados la aplican a lo que cuelga de un grupo; las unidades (sin grupo) se quedan con periodos_lectura. fk_tfuncionario: solo_propias -> el suyo (ignora p_fk_tfuncionario); con p_fk_tfuncionario -> ese, si dicta algo en el alcance (fn_planeador_docentes_listar_interno), si no 42501; sin él -> NULL (todo el alcance). Lo usan los wrappers de lectura del tablero del Planeador. No valida permisos.';
 
 -- ---------------------------------------------------------------------------
 -- 3. Periodos de los selectores grupo/grado-asignatura del tablero.
@@ -263,7 +334,7 @@ BEGIN
 
     RETURN QUERY
     SELECT * FROM academico_test.fn_planeador_docentes_listar_interno(
-        p_fk_establecimiento, v_alc.alcance_total, v_alc.periodos_lectura);
+        p_fk_establecimiento, v_alc.alcance_total, v_alc.periodos_lectura, NULL, v_alc.grupos_lectura);
 END;
 $$;
 
@@ -305,8 +376,8 @@ ON CONFLICT DO NOTHING;
 -- ---------------------------------------------------------------------------
 -- 6. ?funcionario= en las lecturas del tablero. Texto completo con
 --    dollar-quoting, como V527/V529/V531. mias, calendario y unidades agregan
---    fk_tfuncionario_docente, docente_nombre y es_propia (S/N): el LATERAL
---    sobre una función obliga a un nested loop, que conserva el orden.
+--    fk_tfuncionario_docente, docente_nombre y es_propia (S/N). mias y
+--    calendario ordenan por WITH ORDINALITY (el orden de la función).
 -- ---------------------------------------------------------------------------
 UPDATE public.query q
    SET query = $q$SELECT u.*,
@@ -354,10 +425,11 @@ UPDATE public.query q
     CAST(:QUERY.DIA AS DATE),
     string_to_array(NULLIF(TRIM(CAST(:QUERY.GRADO_ASIGNATURA_PARES AS VARCHAR)), ''), ','),
     CAST(:QUERY.FUNCIONARIO AS BIGINT)
-) f
+) WITH ORDINALITY f
   LEFT JOIN LATERAL academico_test.fn_actividad_docente_dicta(
            f.pk_tactividad,
-           academico_test.fn_funcionario_actual(public.fn_get_academico_usuario_id(:CONTEXT.USER_ID::BIGINT))) d ON TRUE;$q$,
+           academico_test.fn_funcionario_actual(public.fn_get_academico_usuario_id(:CONTEXT.USER_ID::BIGINT))) d ON TRUE
+ ORDER BY f.ordinality;$q$,
        param_types = COALESCE(q.param_types, '{}'::jsonb) || '{"QUERY.FUNCIONARIO": "BIGINT"}'::jsonb
   FROM public.microservice m
  WHERE m.id_microservice = q.microservice_id
@@ -378,10 +450,11 @@ UPDATE public.query q
     COALESCE(CAST(:QUERY.DIAS_GRACIA AS INT), 2),
     string_to_array(NULLIF(TRIM(CAST(:QUERY.GRADO_ASIGNATURA_PARES AS VARCHAR)), ''), ','),
     CAST(:QUERY.FUNCIONARIO AS BIGINT)
-) c
+) WITH ORDINALITY c
   LEFT JOIN LATERAL academico_test.fn_actividad_docente_dicta(
            c.pk_tactividad,
-           academico_test.fn_funcionario_actual(public.fn_get_academico_usuario_id(:CONTEXT.USER_ID::BIGINT))) d ON TRUE;$q$,
+           academico_test.fn_funcionario_actual(public.fn_get_academico_usuario_id(:CONTEXT.USER_ID::BIGINT))) d ON TRUE
+ ORDER BY c.ordinality;$q$,
        param_types = COALESCE(q.param_types, '{}'::jsonb) || '{"QUERY.FUNCIONARIO": "BIGINT"}'::jsonb
   FROM public.microservice m
  WHERE m.id_microservice = q.microservice_id

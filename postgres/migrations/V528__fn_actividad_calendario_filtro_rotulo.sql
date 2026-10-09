@@ -52,6 +52,7 @@ DECLARE
     v_sedes_lectura BIGINT[];
     v_alcance_total BOOLEAN;
     v_periodos_lectura BIGINT[];
+    v_grupos_lectura   BIGINT[];
     v_hoy DATE := CURRENT_DATE;
 BEGIN
     PERFORM academico_test.fn_assert_permiso_seccion(
@@ -59,8 +60,8 @@ BEGIN
     );
 
     -- Mismo alcance que los listados; en nivel 3, solo sus pares sede+jornada.
-    SELECT alc.alcance_total, alc.sedes_lectura, alc.periodos_lectura
-      INTO v_alcance_total, v_sedes_lectura, v_periodos_lectura
+    SELECT alc.alcance_total, alc.sedes_lectura, alc.periodos_lectura, alc.grupos_lectura
+      INTO v_alcance_total, v_sedes_lectura, v_periodos_lectura, v_grupos_lectura
       FROM academico_test.fn_planeador_alcance_docente(p_pk_usuario_solicitante) alc;
 
     IF p_fecha_desde IS NULL OR p_fecha_hasta IS NULL THEN
@@ -110,7 +111,9 @@ BEGIN
                             AND (v_alcance_total
                                  OR pa_sc.FK_TSEDE = ANY(v_sedes_lectura))
                             AND (v_periodos_lectura IS NULL
-                                 OR pa_sc.PK_TPERIODO_ACADEMICO = ANY(v_periodos_lectura)))
+                                 OR pa_sc.PK_TPERIODO_ACADEMICO = ANY(v_periodos_lectura))
+                            AND (v_grupos_lectura IS NULL
+                                 OR g_sc.PK_TGRUPO = ANY(v_grupos_lectura)))
               OR EXISTS (SELECT 1
                            FROM academico_test.TUNIDAD u_sc
                            JOIN academico_test.TGRADO gr_sc

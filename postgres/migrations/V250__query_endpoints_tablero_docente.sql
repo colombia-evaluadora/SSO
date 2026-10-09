@@ -116,7 +116,8 @@ DROP FUNCTION IF EXISTS academico_test.fn_docente_grupos_listar(BIGINT, BIGINT, 
 -- resueltos; p_fk_tfuncionario NULL = todos los docentes de esos periodos.
 CREATE OR REPLACE FUNCTION academico_test.fn_docente_grupos_listar_interno(
     p_fk_tfuncionario BIGINT,
-    p_periodos        BIGINT[]
+    p_periodos        BIGINT[],
+    p_grupos          BIGINT[] DEFAULT NULL
 )
 RETURNS TABLE (
     grupo_id                 BIGINT,
@@ -155,12 +156,13 @@ AS $$
       JOIN academico_test.TLISTA_VALOR mp     ON mp.PK_LISTA_VALOR = gr.FK_TLV_MODELO_PEDAGOGICO
      WHERE (p_fk_tfuncionario IS NULL OR da.FK_TFUNCIONARIO = p_fk_tfuncionario)
        AND da.FK_TPERIODO_ACADEMICO = ANY(p_periodos)
+       AND (p_grupos IS NULL OR gr.PK_TGRUPO = ANY(p_grupos))
        AND da.ACTIVE = TRUE
      ORDER BY g.NOMBRE, gr.NOMBRE;
 $$;
 
-COMMENT ON FUNCTION academico_test.fn_docente_grupos_listar_interno(BIGINT, BIGINT[])
-    IS 'INTERNO: grupos (con grado, jornada, modelo pedagógico y nivel) donde p_fk_tfuncionario dicta algo (NULL = cualquier docente) en los periodos dados, sin gate. Lo usa fn_docente_grupos_listar (GET /planeador/docentes/grupos), que resuelve docente y periodos con fn_planeador_alcance_docente / fn_planeador_docente_periodos.';
+COMMENT ON FUNCTION academico_test.fn_docente_grupos_listar_interno(BIGINT, BIGINT[], BIGINT[])
+    IS 'INTERNO: grupos (con grado, jornada, modelo pedagógico y nivel) donde p_fk_tfuncionario dicta algo (NULL = cualquier docente) en los periodos dados, sin gate. p_grupos (grupos_lectura de fn_planeador_alcance_docente, NULL = sin restricción) acota además por grupo. Lo usa fn_docente_grupos_listar (GET /planeador/docentes/grupos), que resuelve docente y periodos con fn_planeador_alcance_docente / fn_planeador_docente_periodos.';
 
 CREATE OR REPLACE FUNCTION academico_test.fn_docente_grupos_listar(
     p_pk_usuario_solicitante BIGINT,
@@ -216,7 +218,8 @@ BEGIN
     RETURN QUERY
     SELECT * FROM academico_test.fn_docente_grupos_listar_interno(
         v_func,
-        academico_test.fn_planeador_docente_periodos(v_func, v_alc.periodos_lectura, p_fk_periodo));
+        academico_test.fn_planeador_docente_periodos(v_func, v_alc.periodos_lectura, p_fk_periodo),
+        v_alc.grupos_lectura);
 END;
 $$;
 

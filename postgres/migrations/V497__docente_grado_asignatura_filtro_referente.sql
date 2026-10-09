@@ -17,7 +17,8 @@ DROP FUNCTION IF EXISTS academico_test.fn_docente_grado_asignatura_listar_intern
 CREATE OR REPLACE FUNCTION academico_test.fn_docente_grado_asignatura_listar_interno(
     p_fk_tfuncionario BIGINT,
     p_periodos        BIGINT[],
-    p_fk_referente    BIGINT DEFAULT NULL
+    p_fk_referente    BIGINT DEFAULT NULL,
+    p_grupos          BIGINT[] DEFAULT NULL
 )
 RETURNS TABLE (
     grado_id          BIGINT,
@@ -40,6 +41,7 @@ AS $$
               JOIN academico_test.TASIGNATURA s ON s.PK_TASIGNATURA = da.FK_TASIGNATURA AND s.ACTIVE = TRUE
              WHERE (p_fk_tfuncionario IS NULL OR da.FK_TFUNCIONARIO = p_fk_tfuncionario)
                AND da.FK_TPERIODO_ACADEMICO = ANY(p_periodos)
+               AND (p_grupos IS NULL OR gr.PK_TGRUPO = ANY(p_grupos))
                AND da.ACTIVE = TRUE
            ) p (grado_id, grado_codigo, grado_nombre, asignatura_id, asignatura_codigo, asignatura_nombre)
      -- El referente se deriva despues del DISTINCT: una vez por par, no por grupo.
@@ -48,8 +50,8 @@ AS $$
      ORDER BY p.grado_nombre, p.asignatura_nombre;
 $$;
 
-COMMENT ON FUNCTION academico_test.fn_docente_grado_asignatura_listar_interno(BIGINT, BIGINT[], BIGINT)
-    IS 'INTERNO: pares (grado, asignatura) distintos que un funcionario dicta (NULL = cualquier docente) en los periodos academicos dados, sin gate. Lo usa fn_docente_grado_asignatura_listar (GET /planeador/docentes/grado-asignatura). p_fk_referente (opcional) deja solo los pares cuyo referente curricular aplicable (fn_unidad_referente_aplicable, anio en curso) es ese: la misma regla con la que fn_docente_unidad_tabs_listar arma las pestanas de unidad.';
+COMMENT ON FUNCTION academico_test.fn_docente_grado_asignatura_listar_interno(BIGINT, BIGINT[], BIGINT, BIGINT[])
+    IS 'INTERNO: pares (grado, asignatura) distintos que un funcionario dicta (NULL = cualquier docente) en los periodos academicos dados, sin gate. p_grupos (grupos_lectura de fn_planeador_alcance_docente, NULL = sin restriccion) acota ademas por grupo. Lo usa fn_docente_grado_asignatura_listar (GET /planeador/docentes/grado-asignatura). p_fk_referente (opcional) deja solo los pares cuyo referente curricular aplicable (fn_unidad_referente_aplicable, anio en curso) es ese: la misma regla con la que fn_docente_unidad_tabs_listar arma las pestanas de unidad.';
 
 
 DROP FUNCTION IF EXISTS academico_test.fn_docente_grado_asignatura_listar(BIGINT, BIGINT, BIGINT);
@@ -94,7 +96,8 @@ BEGIN
     SELECT * FROM academico_test.fn_docente_grado_asignatura_listar_interno(
                       v_func,
                       academico_test.fn_planeador_docente_periodos(v_func, v_alc.periodos_lectura, p_fk_periodo),
-                      p_fk_referente);
+                      p_fk_referente,
+                      v_alc.grupos_lectura);
 END;
 $$;
 
