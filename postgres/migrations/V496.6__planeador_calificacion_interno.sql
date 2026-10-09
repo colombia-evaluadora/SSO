@@ -576,6 +576,7 @@ AS $$
 DECLARE
     v_pk  BIGINT := academico_test.fn_actividad_estudiante_actividad(p_pk_tactividad_estudiante);
     v_pct TEXT;
+    v_res NUMERIC;
 BEGIN
     PERFORM academico_test.fn_actividad_validar_calificacion(p_pk_tactividad_estudiante, p_fecha);
     IF p_calificacion IS NULL OR jsonb_typeof(p_calificacion) <> 'object' THEN
@@ -585,14 +586,13 @@ BEGIN
     BEGIN
     CASE academico_test.fn_actividad_instrumento_efectivo(v_pk)
         WHEN 'RUBRICA' THEN
-            RETURN academico_test.fn_actividad_nota_calificar_rubrica_interno(
+            v_res := academico_test.fn_actividad_nota_calificar_rubrica_interno(
                 p_pk_usuario_solicitante, p_pk_tactividad_estudiante, p_calificacion->'niveles');
         WHEN 'LISTA_COTEJO' THEN
-            RETURN academico_test.fn_actividad_nota_calificar_cotejo_interno(
+            v_res := academico_test.fn_actividad_nota_calificar_cotejo_interno(
                 p_pk_usuario_solicitante, p_pk_tactividad_estudiante,
                 ARRAY(SELECT jsonb_array_elements_text(COALESCE(p_calificacion->'itemsMarcados', '[]'::jsonb))::BIGINT));
         WHEN 'ESCALA_VALORACION' THEN
-            -- Con varios criterios, un valor suelto vale para cada uno (igual que en bloque).
             IF NOT p_calificacion ? 'criterios' AND academico_test.fn_actividad_escala_criterios_cantidad(v_pk) > 1 THEN
                 PERFORM academico_test.fn_actividad_validar_escala_valor(v_pk, (p_calificacion->>'pkNivel')::BIGINT,
                     (p_calificacion->>'valorNumerico')::NUMERIC, 'la calificación');
@@ -602,16 +602,24 @@ BEGIN
                       FROM generate_series(0, academico_test.fn_actividad_escala_criterios_cantidad(v_pk) - 1) AS i));
             END IF;
             IF p_calificacion ? 'criterios' THEN
-                RETURN academico_test.fn_actividad_nota_calificar_escala_criterios_interno(
+                v_res := academico_test.fn_actividad_nota_calificar_escala_criterios_interno(
                     p_pk_usuario_solicitante, p_pk_tactividad_estudiante, p_calificacion->'criterios');
+            ELSE
+                v_res := academico_test.fn_actividad_nota_calificar_escala_interno(
+                    p_pk_usuario_solicitante, p_pk_tactividad_estudiante,
+                    (p_calificacion->>'pkNivel')::BIGINT, (p_calificacion->>'valorNumerico')::NUMERIC);
             END IF;
-            RETURN academico_test.fn_actividad_nota_calificar_escala_interno(
-                p_pk_usuario_solicitante, p_pk_tactividad_estudiante,
-                (p_calificacion->>'pkNivel')::BIGINT, (p_calificacion->>'valorNumerico')::NUMERIC);
         ELSE
-            RETURN academico_test.fn_actividad_nota_calificar_otro_interno(
+            v_res := academico_test.fn_actividad_nota_calificar_otro_interno(
                 p_pk_usuario_solicitante, p_pk_tactividad_estudiante, (p_calificacion->>'porcentaje')::NUMERIC);
     END CASE;
+    -- Solo la nota completa cancela: en bloque se perderían criterios ya corregidos.
+    IF v_res IS NOT NULL
+       AND current_setting('academico_test.aprobacion_en_curso', TRUE) IS DISTINCT FROM 'on' THEN
+        PERFORM academico_test.fn_actividad_resultado_correccion_cancelar_interno(
+            p_pk_usuario_solicitante, p_pk_tactividad_estudiante);
+    END IF;
+    RETURN v_res;
     EXCEPTION WHEN SQLSTATE 'PA055' THEN
         GET STACKED DIAGNOSTICS v_pct = PG_EXCEPTION_DETAIL;
         RETURN academico_test.fn_actividad_resultado_correccion_diferir_interno(p_pk_usuario_solicitante,
@@ -803,6 +811,9 @@ BEGIN
                 THEN academico_test.fn_actividad_nota_calificar_escala_criterios_interno(p_pk_usuario_solicitante, v_ae, v_criterios)
                 ELSE academico_test.fn_actividad_nota_calificar_escala_interno(p_pk_usuario_solicitante, v_ae, p_pk_nivel, p_valor_numerico)
             END;
+            IF calificacion IS NOT NULL THEN
+                PERFORM academico_test.fn_actividad_resultado_correccion_cancelar_interno(p_pk_usuario_solicitante, v_ae);
+            END IF;
         EXCEPTION WHEN SQLSTATE 'PA055' THEN
             GET STACKED DIAGNOSTICS v_det = PG_EXCEPTION_DETAIL;
             -- Se guarda con la forma del calificar individual, que es la que se repite al aprobar.
