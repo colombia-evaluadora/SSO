@@ -61,6 +61,7 @@ class UserAdminServiceTest {
     @Mock SessionInvalidationClient sessionInvalidationClient;
     @Mock CacheManager cacheManager;
     @Mock org.springframework.jdbc.core.JdbcTemplate jdbc;
+    @Mock FuncionarioAccountProvisioner funcionarioProvisioner;
 
     UserAdminService service;
 
@@ -87,7 +88,7 @@ class UserAdminServiceTest {
                 "restore-password-account.html");
         service = new UserAdminService(userRepository, roleRepository,
                 appRepository, passwordEncoder, tokenService, emailService,
-                emailProps, events, sessionInvalidationClient, cacheManager, jdbc);
+                emailProps, events, sessionInvalidationClient, cacheManager, jdbc, funcionarioProvisioner);
     }
 
     /* ====================== createAccount ====================== */
@@ -263,6 +264,55 @@ class UserAdminServiceTest {
         UserResponse resp = service.updateAccount(req);
         assertThat(resp.roleNames()).containsExactly("ADMIN");
         verify(roleRepository, never()).findByName(anyString());
+    }
+
+    @Test
+    void updateAccountOfPendingUserWithNewEmailReissuesInvitationToNewEmail() {
+        User existing = new User();
+        existing.setId(8L);
+        existing.setEmail("old@example.com");
+        existing.setActive(true);
+        existing.setEnabled(false);
+        when(userRepository.findById(8L)).thenReturn(Optional.of(existing));
+        when(userRepository.save(any(User.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        service.updateAccount(new UpdateAccountRequest(8L, null, "new@example.com", null, null, null), "PIGSE");
+
+        verify(tokenService).issueActivationToken(existing);
+        verify(events).publish(eq("email"), eq("8"), eq("new@example.com"),
+                eq("account-activation"), any(), any(), eq("PIGSE"));
+    }
+
+    @Test
+    void updateAccountOfActiveUserWithNewEmailDoesNotSendInvitation() {
+        User existing = new User();
+        existing.setId(9L);
+        existing.setEmail("old@example.com");
+        existing.setActive(true);
+        existing.setEnabled(true);
+        when(userRepository.findById(9L)).thenReturn(Optional.of(existing));
+        when(userRepository.save(any(User.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        service.updateAccount(new UpdateAccountRequest(9L, null, "new@example.com", null, null, null), null);
+
+        verify(tokenService, never()).issueActivationToken(any());
+        verify(events, never()).publish(any(), any(), any(),
+                eq("account-activation"), any(), any(), any());
+    }
+
+    @Test
+    void updateAccountOfPendingUserWithSameEmailDoesNotSendInvitation() {
+        User existing = new User();
+        existing.setId(10L);
+        existing.setEmail("same@example.com");
+        existing.setActive(true);
+        existing.setEnabled(false);
+        when(userRepository.findById(10L)).thenReturn(Optional.of(existing));
+        when(userRepository.save(any(User.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        service.updateAccount(new UpdateAccountRequest(10L, "Nuevo", "SAME@example.com", null, null, null), null);
+
+        verify(tokenService, never()).issueActivationToken(any());
     }
 
     /* ====================== activateAccount ====================== */
@@ -699,6 +749,259 @@ class UserAdminServiceTest {
     }
 
     /* ====================== helpers ====================== */
+
+    /* ============ reactivateAfterEmailChange ============ */
+
+    private static User activeUser(String email) {
+        User u = new User();
+        u.setId(9L);
+        u.setEmail(email);
+        u.setActive(true);
+        u.setEnabled(true);
+        return u;
+    }
+
+    @Test
+    void reactivateAfterEmailChangeSendsActivationToNewEmail() {
+        User u = activeUser("nuevo@example.com");
+        when(userRepository.findByEmail("viejo@example.com")).thenReturn(Optional.empty());
+        when(userRepository.findByEmail("nuevo@example.com")).thenReturn(Optional.of(u));
+        when(userRepository.save(any(User.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        service.reactivateAfterEmailChange(new com.co.eurekatic.ssoadmin.dto.EmailChangeReactivationRequest(
+                "viejo@example.com", "nuevo@example.com"), "PIGSE");
+
+        assertThat(u.getStatus()).isEqualTo(User.UserStatus.PENDING_ACTIVATION);
+        verify(tokenService).issueActivationToken(u);
+        verify(sessionInvalidationClient).invalidate("viejo@example.com");
+        verify(sessionInvalidationClient).invalidate("nuevo@example.com");
+        verify(events).publish(eq("email"), eq("9"), eq("nuevo@example.com"),
+                eq("account-activation"), any(), any(), eq("PIGSE"));
+    }
+
+    @Test
+    void reactivateAfterEmailChangeRejectsSameEmailIgnoringCase() {
+        assertThatThrownBy(() -> service.reactivateAfterEmailChange(
+                new com.co.eurekatic.ssoadmin.dto.EmailChangeReactivationRequest(
+                        "Nuevo@Example.com", "nuevo@example.com"), null))
+                .isInstanceOf(IllegalArgumentException.class);
+        verify(userRepository, never()).save(any());
+    }
+
+    @Test
+    void reactivateAfterEmailChangeRejectsWhenOldEmailStillExists() {
+        when(userRepository.findByEmail("viejo@example.com"))
+                .thenReturn(Optional.of(activeUser("viejo@example.com")));
+
+        assertThatThrownBy(() -> service.reactivateAfterEmailChange(
+                new com.co.eurekatic.ssoadmin.dto.EmailChangeReactivationRequest(
+                        "viejo@example.com", "nuevo@example.com"), null))
+                .isInstanceOf(IllegalArgumentException.class);
+        verify(userRepository, never()).save(any());
+    }
+
+    @Test
+    void reactivateAfterEmailChangeRejectsInactiveAccount() {
+        User u = activeUser("nuevo@example.com");
+        u.setActive(false);
+        when(userRepository.findByEmail("viejo@example.com")).thenReturn(Optional.empty());
+        when(userRepository.findByEmail("nuevo@example.com")).thenReturn(Optional.of(u));
+
+        assertThatThrownBy(() -> service.reactivateAfterEmailChange(
+                new com.co.eurekatic.ssoadmin.dto.EmailChangeReactivationRequest(
+                        "viejo@example.com", "nuevo@example.com"), null))
+                .isInstanceOf(com.co.eurekatic.ssoadmin.exception.InvalidUserStateException.class);
+        verify(userRepository, never()).save(any());
+    }
+
+    /* ============ estado de cuenta / reenvio por correo ============ */
+
+    @Test
+    void accountStatusByEmailsDerivesStatusAndNormalizes() {
+        User activo = activeUser("a@example.com");
+        User pendiente = activeUser("p@example.com");
+        pendiente.setEnabled(false);
+        User inactivo = activeUser("i@example.com");
+        inactivo.setActive(false);
+        when(userRepository.findByEmail("a@example.com")).thenReturn(Optional.of(activo));
+        when(userRepository.findByEmail("P@Example.com")).thenReturn(Optional.empty());
+        when(userRepository.findByEmail("p@example.com")).thenReturn(Optional.of(pendiente));
+        when(userRepository.findByEmail("i@example.com")).thenReturn(Optional.of(inactivo));
+        when(userRepository.findByEmail("x@example.com")).thenReturn(Optional.empty());
+
+        var out = service.accountStatusByEmails(List.of(
+                "​a@example.com ", " P@Example.com ", "i@example.com", "x@example.com"));
+
+        assertThat(out).extracting(com.co.eurekatic.ssoadmin.dto.AccountStatusResponse::estado)
+                .containsExactly("ACTIVE", "PENDING_ACTIVATION", "INACTIVE", "NOT_FOUND");
+        assertThat(out.get(0).correo()).isEqualTo("​a@example.com ");
+    }
+
+    @Test
+    void accountStatusByEmailsRejectsTooMany() {
+        List<String> muchos = java.util.Collections.nCopies(201, "a@example.com");
+        assertThatThrownBy(() -> service.accountStatusByEmails(muchos))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void resendActivationByEmailSendsWhenPending() {
+        User u = activeUser("p@example.com");
+        u.setEnabled(false);
+        when(userRepository.findByEmail("p@example.com")).thenReturn(Optional.of(u));
+        when(userRepository.save(any(User.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        service.resendActivationByEmail(" p@example.com﻿", "COLOMBIA-EVALUADORA");
+
+        verify(tokenService).issueActivationToken(u);
+        verify(events).publish(eq("email"), eq("9"), eq("p@example.com"),
+                eq("account-activation"), any(), any(), eq("COLOMBIA-EVALUADORA"));
+    }
+
+    @Test
+    void resendActivationByEmailRejectsActive() {
+        when(userRepository.findByEmail("a@example.com")).thenReturn(Optional.of(activeUser("a@example.com")));
+
+        assertThatThrownBy(() -> service.resendActivationByEmail("a@example.com", "PIGSE"))
+                .isInstanceOf(com.co.eurekatic.ssoadmin.exception.InvalidUserStateException.class)
+                .hasMessage("La cuenta ya está activa; usa restablecer contraseña.");
+        verify(userRepository, never()).save(any());
+    }
+
+    @Test
+    void resendActivationByEmailRejectsInactive() {
+        User u = activeUser("i@example.com");
+        u.setActive(false);
+        when(userRepository.findByEmail("i@example.com")).thenReturn(Optional.of(u));
+
+        assertThatThrownBy(() -> service.resendActivationByEmail("i@example.com", "PIGSE"))
+                .isInstanceOf(com.co.eurekatic.ssoadmin.exception.InvalidUserStateException.class);
+        verify(userRepository, never()).save(any());
+    }
+
+    @Test
+    void resendActivationByEmailNotFound() {
+        when(userRepository.findByEmail("x@example.com")).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> service.resendActivationByEmail("x@example.com", "PIGSE"))
+                .isInstanceOf(com.co.eurekatic.ssoadmin.exception.NotFoundException.class);
+    }
+
+    @Test
+    void reactivateAfterEmailChangeStripsInvisibleCharacters() {
+        User u = activeUser("nuevo@example.com");
+        when(userRepository.findByEmail("viejo@example.com")).thenReturn(Optional.empty());
+        when(userRepository.findByEmail("nuevo@example.com")).thenReturn(Optional.of(u));
+        when(userRepository.save(any(User.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        service.reactivateAfterEmailChange(new com.co.eurekatic.ssoadmin.dto.EmailChangeReactivationRequest(
+                "⁠viejo@example.com", "​nuevo@example.com "), "PIGSE");
+
+        assertThat(u.getStatus()).isEqualTo(User.UserStatus.PENDING_ACTIVATION);
+        verify(sessionInvalidationClient).invalidate("viejo@example.com");
+    }
+
+    @Test
+    void reactivateAfterEmailChangeRejectsUnknownNewEmail() {
+        when(userRepository.findByEmail(any())).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> service.reactivateAfterEmailChange(
+                new com.co.eurekatic.ssoadmin.dto.EmailChangeReactivationRequest(
+                        "viejo@example.com", "nuevo@example.com"), null))
+                .isInstanceOf(com.co.eurekatic.ssoadmin.exception.NotFoundException.class);
+        verify(userRepository, never()).save(any());
+    }
+
+    /* ============ funcionario sin cuenta SSO: se crea e invita ============ */
+
+    private void stubSaveAndFlushWithId() {
+        when(userRepository.saveAndFlush(any(User.class))).thenAnswer(inv -> {
+            User u = inv.getArgument(0);
+            u.setId(77L);
+            return u;
+        });
+    }
+
+    @Test
+    void resendActivationByEmailCreatesAndInvitesFuncionarioWithoutAccount() {
+        var f = new FuncionarioAccountProvisioner.Funcionario(5L, "sin@example.com", "Ana Perez");
+        when(userRepository.findByEmail("sin@example.com")).thenReturn(Optional.empty());
+        when(funcionarioProvisioner.findActiveFuncionario("sin@example.com", "COLOMBIA-EVALUADORA"))
+                .thenReturn(Optional.of(f));
+        stubSaveAndFlushWithId();
+
+        service.resendActivationByEmail("sin@example.com", "COLOMBIA-EVALUADORA");
+
+        ArgumentCaptor<User> captor = ArgumentCaptor.forClass(User.class);
+        verify(userRepository).saveAndFlush(captor.capture());
+        User creado = captor.getValue();
+        assertThat(creado.getEmail()).isEqualTo("sin@example.com");
+        assertThat(creado.getFullName()).isEqualTo("Ana Perez");
+        assertThat(creado.getPassword()).isNull();
+        assertThat(creado.getStatus()).isEqualTo(User.UserStatus.PENDING_ACTIVATION);
+        verify(tokenService).issueActivationToken(creado);
+        verify(funcionarioProvisioner).linkAndSyncRoles(f, 77L, "COLOMBIA-EVALUADORA");
+        verify(events).publish(eq("email"), eq("77"), eq("sin@example.com"),
+                eq("account-activation"), any(), any(), eq("COLOMBIA-EVALUADORA"));
+    }
+
+    @Test
+    void resendActivationByEmailNotFuncionarioKeeps404() {
+        when(userRepository.findByEmail("x@example.com")).thenReturn(Optional.empty());
+        when(funcionarioProvisioner.findActiveFuncionario("x@example.com", "PIGSE")).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> service.resendActivationByEmail("x@example.com", "PIGSE"))
+                .isInstanceOf(NotFoundException.class);
+        verify(userRepository, never()).saveAndFlush(any());
+        verify(funcionarioProvisioner, never()).linkAndSyncRoles(any(), org.mockito.ArgumentMatchers.anyLong(), any());
+        verify(events, never()).publish(any(), any(), any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void resendActivationByEmailExistingAccountDoesNotProvision() {
+        User u = activeUser("p@example.com");
+        u.setEnabled(false);
+        when(userRepository.findByEmail("p@example.com")).thenReturn(Optional.of(u));
+        when(userRepository.save(any(User.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        service.resendActivationByEmail("p@example.com", "PIGSE");
+
+        verify(funcionarioProvisioner, never()).findActiveFuncionario(any(), any());
+        verify(userRepository, never()).saveAndFlush(any());
+    }
+
+    @Test
+    void reactivateAfterEmailChangeCreatesWithNewEmailWhenNeitherHasAccount() {
+        var f = new FuncionarioAccountProvisioner.Funcionario(8L, "nuevo@example.com", null);
+        when(userRepository.findByEmail(any())).thenReturn(Optional.empty());
+        when(funcionarioProvisioner.findActiveFuncionario("nuevo@example.com", "PIGSE"))
+                .thenReturn(Optional.of(f));
+        stubSaveAndFlushWithId();
+
+        service.reactivateAfterEmailChange(new com.co.eurekatic.ssoadmin.dto.EmailChangeReactivationRequest(
+                "viejo@example.com", "nuevo@example.com"), "PIGSE");
+
+        ArgumentCaptor<User> captor = ArgumentCaptor.forClass(User.class);
+        verify(userRepository).saveAndFlush(captor.capture());
+        assertThat(captor.getValue().getEmail()).isEqualTo("nuevo@example.com");
+        assertThat(captor.getValue().getStatus()).isEqualTo(User.UserStatus.PENDING_ACTIVATION);
+        verify(funcionarioProvisioner).linkAndSyncRoles(f, 77L, "PIGSE");
+        verify(events).publish(eq("email"), eq("77"), eq("nuevo@example.com"),
+                eq("account-activation"), any(), any(), eq("PIGSE"));
+    }
+
+    @Test
+    void reactivateAfterEmailChangeNotFuncionarioKeeps404() {
+        when(userRepository.findByEmail(any())).thenReturn(Optional.empty());
+        when(funcionarioProvisioner.findActiveFuncionario("nuevo@example.com", "PIGSE"))
+                .thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> service.reactivateAfterEmailChange(
+                new com.co.eurekatic.ssoadmin.dto.EmailChangeReactivationRequest(
+                        "viejo@example.com", "nuevo@example.com"), "PIGSE"))
+                .isInstanceOf(NotFoundException.class);
+        verify(userRepository, never()).saveAndFlush(any());
+    }
 
     private static <T> T eq(T value) {
         return org.mockito.ArgumentMatchers.eq(value);

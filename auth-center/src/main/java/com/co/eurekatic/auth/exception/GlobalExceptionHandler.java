@@ -1,5 +1,6 @@
 package com.co.eurekatic.auth.exception;
 
+import com.co.eurekatic.auth.client.SsoAdminStatusException;
 import com.co.eurekatic.common.error.SqlErrorKind;
 import com.co.eurekatic.common.error.SqlErrorSanitizer;
 import org.slf4j.Logger;
@@ -64,6 +65,14 @@ public class GlobalExceptionHandler {
         Map<String, Object> extras = new LinkedHashMap<>();
         extras.put("fieldErrors", fieldErrors);
         return error(HttpStatus.BAD_REQUEST, "VALIDATION", "Bean Validation falló", extras);
+    }
+
+    @ExceptionHandler(SsoAdminStatusException.class)
+    public ResponseEntity<Map<String, Object>> handleSsoAdminStatus(SsoAdminStatusException ex) {
+        HttpStatus status = HttpStatus.valueOf(ex.status());
+        String code = status == HttpStatus.NOT_FOUND ? "NOT_FOUND"
+                : status == HttpStatus.CONFLICT ? "CONFLICT" : "VALIDATION";
+        return error(status, code, ex.getMessage(), null);
     }
 
     @ExceptionHandler(IllegalArgumentException.class)

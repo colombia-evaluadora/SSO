@@ -1,5 +1,7 @@
 package com.co.eurekatic.auth.web.dto;
 
+import com.co.eurekatic.common.util.EmailNormalizer;
+
 import com.co.eurekatic.common.security.PasswordPolicy;
 import jakarta.validation.constraints.*;
 
@@ -32,4 +34,9 @@ public record RegisterUsuarioRequest(
     @Email @Size(max = 120) String correoElectronico,
     @Positive Long fkTarchivoFoto,
     @Size(max = 2) String visado
-) {}
+) {
+    public RegisterUsuarioRequest {
+        email = EmailNormalizer.normalize(email);
+        correoElectronico = EmailNormalizer.normalize(correoElectronico);
+    }
+}

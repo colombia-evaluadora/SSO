@@ -96,7 +96,19 @@ BEGIN
                    'tipoAsistencia', p_marcar_todos_valor)), '[]'::jsonb)
           INTO v_entrada
           FROM academico_test.TMATRICULA m
-         WHERE m.FK_TGRUPO = p_fk_tgrupo AND m.ACTIVE = TRUE;
+         WHERE m.FK_TGRUPO = p_fk_tgrupo AND m.ACTIVE = TRUE
+           -- Marcar todos solo completa lo que la Vista no tomó; la del Planeador no cuenta.
+           AND NOT EXISTS (
+               SELECT 1 FROM academico_test.TASISTENCIA a
+                WHERE a.FK_TMATRICULA = m.PK_TMATRICULA AND a.ACTIVE = TRUE AND a.ORIGEN = 'ASISTENCIA'
+                  AND a.FECHA = p_fecha
+                  AND COALESCE(a.FK_TASIGNATURA, 0) = COALESCE(p_fk_tasignatura, 0)
+                  AND COALESCE(a.FK_TACTIVIDAD, 0) = COALESCE(p_fk_tactividad, 0)
+                  AND COALESCE(a.BLOQUE, 0) = COALESCE(p_bloque, 0));
+
+        IF jsonb_array_length(v_entrada) = 0 THEN
+            RETURN 0;
+        END IF;
     END IF;
 
     SELECT motivo INTO v_invalido
@@ -203,7 +215,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_asistencia_registrar_bulk_interno(BIGINT, BIGINT, DATE, NUMERIC, JSONB, NUMERIC, BIGINT, BIGINT)
-    IS 'INTERNO: nucleo de fn_asistencia_registrar_bulk, sin gate ni reglas de negocio. Resuelve periodo de evaluacion y sede del grupo, normaliza p_registros (o "Marcar todo"), valida la forma de cada fila; si el periodo de evaluacion no es calificable no escribe y delega en fn_asistencia_registrar_solicitar_interno (Regla 75: devuelve 0, las solicitudes salen por fn_solicitud_aprobacion_creadas); si no, hace el upsert por UQ_TASISTENCIA_SESION con ORIGEN ASISTENCIA, retira la fila del Planeador de ese dia (la Vista predomina) y sincroniza el estado de resultado de las actividades del dia (fn_actividad_resultado_desde_asistencia_interno, Regla 73). p_pk_usuario_solicitante solo para CREATED_BY/MODIFIED_BY.';
+    IS 'INTERNO: nucleo de fn_asistencia_registrar_bulk, sin gate ni reglas de negocio. Resuelve periodo de evaluacion y sede del grupo, normaliza p_registros (o "Marcar todo", solo sobre las matriculas sin asistencia de la Vista en esa sesion), valida la forma de cada fila; si el periodo de evaluacion no es calificable no escribe y delega en fn_asistencia_registrar_solicitar_interno (Regla 75: devuelve 0, las solicitudes salen por fn_solicitud_aprobacion_creadas); si no, hace el upsert por UQ_TASISTENCIA_SESION con ORIGEN ASISTENCIA, retira la fila del Planeador de ese dia (la Vista predomina) y sincroniza el estado de resultado de las actividades del dia (fn_actividad_resultado_desde_asistencia_interno, Regla 73). p_pk_usuario_solicitante solo para CREATED_BY/MODIFIED_BY.';
 
 CREATE OR REPLACE FUNCTION academico_test.fn_asistencia_editar_interno(
     p_pk_tasistencia         BIGINT,
