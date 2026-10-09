@@ -21,10 +21,11 @@ import java.util.Map;
  * el mismo secreto que ya usan api-gateway y query-service). Es el sentido
  * inverso de {@code SessionInvalidationClient} (sso-admin -> auth-center).
  *
- * <p>Hoy solo lo usa el cambio de correo de un funcionario: la emision del
- * token de activacion y el correo {@code account-activation} viven en
- * sso-admin ({@code UserAdminService#reactivateAfterEmailChange}) y no se
- * duplican aca.
+ * <p>Lo usan el cambio de correo de un funcionario, la tabla de funcionarios
+ * (estado de cuenta / reenvio) y el alta por invitacion
+ * ({@code FuncionarioRegistrationService}, via {@link #resendActivation}): la
+ * emision del token de activacion y el correo {@code account-activation}
+ * viven en sso-admin ({@code UserAdminService}) y no se duplican aca.
  */
 @Component
 public class SsoAdminInternalClient {

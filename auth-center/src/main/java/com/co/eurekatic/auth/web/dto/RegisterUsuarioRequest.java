@@ -10,7 +10,11 @@ import java.time.LocalDate;
 public record RegisterUsuarioRequest(
     @NotBlank @Email @Size(max = 200) String email,
     @NotBlank @Size(max = 200) String fullName,
-    @NotBlank @Size(min = PasswordPolicy.MIN_LENGTH, max = PasswordPolicy.MAX_LENGTH) String password,
+    // password: opcional. Vacia o ausente en /register/{cval,pigse}/funcionario
+    // = alta por invitacion (cuenta PENDING_ACTIVATION + correo de activacion).
+    // Si viene, el servicio la valida con PasswordPolicy (contrato anterior,
+    // fronts viejos); /register/usuario la sigue exigiendo ahi mismo.
+    @Size(max = PasswordPolicy.MAX_LENGTH) String password,
     @NotBlank @Size(max = 30) String identificacion,
     @NotBlank @Size(max = 40) String primerNombre,
     @NotBlank @Size(max = 40) String primerApellido,
