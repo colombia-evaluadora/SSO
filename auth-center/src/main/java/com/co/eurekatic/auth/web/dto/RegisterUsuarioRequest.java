@@ -37,10 +37,32 @@ public record RegisterUsuarioRequest(
     @Size(max = 30) String telefono,
     @Email @Size(max = 120) String correoElectronico,
     @Positive Long fkTarchivoFoto,
-    @Size(max = 2) String visado
+    @Size(max = 2) String visado,
+    // enviarInvitacion: solo aplica al alta por invitacion de
+    // /register/{cval,pigse}/funcionario. Ausente = true. Con false la cuenta
+    // queda igual de PENDING_ACTIVATION pero no sale el correo: el front lo
+    // manda despues por /register/{app}/funcionario/reenviar-activacion (p. ej.
+    // rector/secretaria, solo si el establecimiento llego a crearse).
+    Boolean enviarInvitacion
 ) {
     public RegisterUsuarioRequest {
         email = EmailNormalizer.normalize(email);
         correoElectronico = EmailNormalizer.normalize(correoElectronico);
+    }
+
+    /** Contrato anterior (sin {@code enviarInvitacion}): invita por defecto. */
+    public RegisterUsuarioRequest(String email, String fullName, String password, String identificacion,
+                                  String primerNombre, String primerApellido, LocalDate fechaNacimiento,
+                                  Long fkTlvTipoDocumento, Long fkTlvGenero, String segundoNombre,
+                                  String segundoApellido, String telefono, String correoElectronico,
+                                  Long fkTarchivoFoto, String visado) {
+        this(email, fullName, password, identificacion, primerNombre, primerApellido, fechaNacimiento,
+                fkTlvTipoDocumento, fkTlvGenero, segundoNombre, segundoApellido, telefono,
+                correoElectronico, fkTarchivoFoto, visado, null);
+    }
+
+    /** {@code enviarInvitacion} ausente equivale a {@code true}. */
+    public boolean debeEnviarInvitacion() {
+        return !Boolean.FALSE.equals(enviarInvitacion);
     }
 }

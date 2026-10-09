@@ -134,7 +134,7 @@ public class FuncionarioRegistrationService {
      */
     public RegisterResponse registerFuncionario(RegisterUsuarioRequest req, Authentication auth) {
         Alta alta = tx.execute(status -> altaFuncionarioCval(req, auth));
-        return conInvitacion(alta, APP_CVAL);
+        return conInvitacion(alta, APP_CVAL, req.debeEnviarInvitacion());
     }
 
     private Alta altaFuncionarioCval(RegisterUsuarioRequest req, Authentication auth) {
@@ -179,7 +179,7 @@ public class FuncionarioRegistrationService {
      */
     public RegisterResponse registerFuncionarioPigse(RegisterUsuarioRequest req, Authentication auth) {
         Alta alta = tx.execute(status -> altaFuncionarioPigse(req, auth));
-        return conInvitacion(alta, APP_PIGSE);
+        return conInvitacion(alta, APP_PIGSE, req.debeEnviarInvitacion());
     }
 
     private Alta altaFuncionarioPigse(RegisterUsuarioRequest req, Authentication auth) {
@@ -285,10 +285,16 @@ public class FuncionarioRegistrationService {
      * propia conexión, y antes del commit no la vería (404) o la vería con el
      * estado anterior. Si el envío falla el alta NO se revierte: la cuenta
      * queda pendiente y el front ofrece "Reenviar activación".
+     *
+     * <p>Con {@code enviar=false} ({@code enviarInvitacion: false} en el
+     * request) la cuenta queda igual de pendiente pero no sale el correo: lo
+     * pide el front después por {@code reenviar-activacion}. El aviso de
+     * cuenta inactiva ({@link #CUENTA_INACTIVA}) se mantiene: ese reenvío
+     * tampoco podría invitarla.
      */
-    private RegisterResponse conInvitacion(Alta alta, String app) {
+    private RegisterResponse conInvitacion(Alta alta, String app, boolean enviar) {
         RegisterResponse r = alta.response();
-        if (alta.invitarA() == null) {
+        if (alta.invitarA() == null || !enviar) {
             return r;
         }
         boolean enviada = enviarInvitacion(alta.invitarA(), app);

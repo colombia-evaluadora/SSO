@@ -341,7 +341,89 @@ class FuncionarioRegistrationServiceTest {
         assertThat(r.mensajeInvitacion()).isEqualTo(FuncionarioRegistrationService.INVITACION_FALLIDA);
     }
 
+    // --------------------------------------------------- enviarInvitacion
+
+    @Test
+    void sinInvitacion_creaPendientePeroNoManda() {
+        RegisterResponse r = service.registerFuncionario(reqSinInvitacion(), auth);
+
+        assertThat(guardado().getStatus()).isEqualTo(User.UserStatus.PENDING_ACTIVATION);
+        verify(academico).callFunCrear(anyLong(), any(), anyString());
+        verifyNoInteractions(ssoAdmin);
+        assertThat(r.invitacionEnviada()).isFalse();
+        assertThat(r.mensajeInvitacion()).isNull();
+        assertThat(r.pkFuncionario()).isEqualTo(700L);
+    }
+
+    @Test
+    void sinInvitacion_cuentaPendienteExistente_noReemite() {
+        User pendiente = user(21L, "pend@colegio.edu.co", null, true, false);
+        when(academico.findExistingAccountEmail(any())).thenReturn(pendiente.getEmail());
+        when(users.findByEmail(pendiente.getEmail())).thenReturn(Optional.of(pendiente));
+
+        RegisterResponse r = service.registerFuncionario(reqSinInvitacion(), auth);
+
+        verifyNoInteractions(ssoAdmin);
+        assertThat(r.invitacionEnviada()).isFalse();
+        assertThat(r.mensajeInvitacion()).isNull();
+    }
+
+    @Test
+    void sinInvitacion_cuentaInactiva_mantieneElAviso() {
+        User inactiva = user(22L, "baja@colegio.edu.co", "{bcrypt}vieja", false, true);
+        when(academico.findExistingAccountEmail(any())).thenReturn(inactiva.getEmail());
+        when(users.findByEmail(inactiva.getEmail())).thenReturn(Optional.of(inactiva));
+
+        RegisterResponse r = service.registerFuncionario(reqSinInvitacion(), auth);
+
+        verifyNoInteractions(ssoAdmin);
+        assertThat(r.mensajeInvitacion()).isEqualTo(FuncionarioRegistrationService.CUENTA_INACTIVA);
+    }
+
+    @Test
+    void pigse_sinInvitacion_creaPendientePeroNoManda() {
+        RegisterResponse r = service.registerFuncionarioPigse(reqSinInvitacion(), auth);
+
+        assertThat(guardado().getStatus()).isEqualTo(User.UserStatus.PENDING_ACTIVATION);
+        verifyNoInteractions(ssoAdmin);
+        assertThat(r.invitacionEnviada()).isFalse();
+        assertThat(r.mensajeInvitacion()).isNull();
+        assertThat(r.pkFuncionario()).isEqualTo(800L);
+    }
+
+    @Test
+    void enviarInvitacionTrueExplicito_invitaComoSiFaltara() {
+        RegisterResponse r = service.registerFuncionario(reqConInvitacion(Boolean.TRUE), auth);
+
+        verify(ssoAdmin).resendActivation(CORREO, "COLOMBIA-EVALUADORA");
+        assertThat(r.invitacionEnviada()).isTrue();
+    }
+
+    @Test
+    void enviarInvitacion_seDeserializaYFaltanteEsTrue() throws Exception {
+        ObjectMapper om = new ObjectMapper().findAndRegisterModules();
+        String base = "{\"email\":\"a@b.co\",\"fullName\":\"A B\",\"identificacion\":\"1\","
+                + "\"primerNombre\":\"A\",\"primerApellido\":\"B\",\"fkTlvTipoDocumento\":1,\"fkTlvGenero\":2";
+        RegisterUsuarioRequest sinCampo = om.readValue(base + "}", RegisterUsuarioRequest.class);
+        RegisterUsuarioRequest falso = om.readValue(base + ",\"enviarInvitacion\":false}",
+                RegisterUsuarioRequest.class);
+
+        assertThat(sinCampo.enviarInvitacion()).isNull();
+        assertThat(sinCampo.debeEnviarInvitacion()).isTrue();
+        assertThat(falso.debeEnviarInvitacion()).isFalse();
+    }
+
     // ------------------------------------------------------------ helpers
+
+    private static RegisterUsuarioRequest reqSinInvitacion() {
+        return reqConInvitacion(Boolean.FALSE);
+    }
+
+    private static RegisterUsuarioRequest reqConInvitacion(Boolean enviar) {
+        return new RegisterUsuarioRequest(CORREO, "Nuevo Funcionario", null, "123456",
+                "Nuevo", "Funcionario", LocalDate.of(1990, 1, 1), 1L, 2L,
+                null, null, null, null, null, null, enviar);
+    }
 
     private User guardado() {
         ArgumentCaptor<User> captor = ArgumentCaptor.forClass(User.class);
