@@ -183,7 +183,7 @@ public class UserAdminService {
 
         User user = new User();
         user.setEmail(req.email());
-        user.setFullName(req.fullName());
+        user.setFullName(normalizeFullName(req.fullName()));
         // No passwordEncoder here — the password column is left
         // null until /activateAccount BCrypts and stamps it.
         user.setActive(true);
@@ -395,7 +395,7 @@ public class UserAdminService {
 
         User user = new User();
         user.setEmail(loginEmail);
-        user.setFullName(f.fullName());
+        user.setFullName(normalizeFullName(f.fullName()));
         user.setActive(true);
         user.setEnabled(false);
         user.setLdap(false);
@@ -423,7 +423,7 @@ public class UserAdminService {
     private void publishActivationEmail(User user, String appName) {
         String token = user.getTokenActivation();
         Map<String, Object> payload = new LinkedHashMap<>();
-        payload.put("displayName", user.getFullName() == null ? user.getEmail() : user.getFullName());
+        payload.put("displayName", displayNameOf(user));
         payload.put("email", user.getEmail());
         payload.put("activationLink", resolveActivationUrl(token, appName));
         payload.put("ttlMinutes", TokenService.ACTIVATION_TTL_MINUTES);
@@ -528,7 +528,7 @@ public class UserAdminService {
                 .orElseThrow(() -> new NotFoundException("User", req.id()));
         String previousEmail = user.getEmail();
 
-        if (req.fullName() != null) user.setFullName(req.fullName());
+        if (req.fullName() != null) user.setFullName(normalizeFullName(req.fullName()));
         if (req.email() != null) {
             if (!EMAIL_REGEX.matcher(req.email()).matches()) {
                 throw new EmailInvalidException(req.email());
@@ -611,7 +611,7 @@ public class UserAdminService {
         log.info("Activated user '{}'", saved.getEmail());
 
         Map<String, Object> payload = new LinkedHashMap<>();
-        payload.put("displayName", saved.getFullName() == null ? saved.getEmail() : saved.getFullName());
+        payload.put("displayName", displayNameOf(saved));
         payload.put("email", saved.getEmail());
         events.publish("email", String.valueOf(saved.getId()), saved.getEmail(),
                 "account-activated", payload, null, resolveAppName(saved));
@@ -631,7 +631,7 @@ public class UserAdminService {
         log.info("Restored password for user '{}'", saved.getEmail());
 
         Map<String, Object> payload = new LinkedHashMap<>();
-        payload.put("displayName", saved.getFullName() == null ? saved.getEmail() : saved.getFullName());
+        payload.put("displayName", displayNameOf(saved));
         payload.put("email", saved.getEmail());
         events.publish("email", String.valueOf(saved.getId()), saved.getEmail(),
                 "password-changed", payload, null, resolveAppName(saved));
@@ -682,7 +682,7 @@ public class UserAdminService {
         userRepository.save(u);
 
         Map<String, Object> payload = new LinkedHashMap<>();
-        payload.put("displayName", u.getFullName() == null ? u.getEmail() : u.getFullName());
+        payload.put("displayName", displayNameOf(u));
         payload.put("email", u.getEmail());
         payload.put("resetLink", resolveRestoreUrl(token, appName));
         payload.put("ttlMinutes", RESTORE_TTL_SECONDS / 60);
@@ -951,9 +951,29 @@ public class UserAdminService {
 
     // ---- notification helpers -------------------------------------
 
+    /**
+     * Nombre del saludo de los correos ("Hola, <nombre>."). El correo de
+     * respaldo cubre la cuenta sin nombre o con un nombre en blanco.
+     */
+    static String displayNameOf(User user) {
+        String name = normalizeFullName(user.getFullName());
+        return name == null || name.isEmpty() ? user.getEmail() : name;
+    }
+
+    /**
+     * Recorta los extremos y colapsa los espacios internos del nombre. El de
+     * un funcionario llega de {@code concat_ws(' ', ...)} sobre TUSUARIO, y un
+     * apellido guardado como {@code ''} (no NULL) deja un espacio colgando:
+     * el correo salia "Hola, Administrador MALDONADO ." con el punto suelto.
+     * {@code null} sigue siendo {@code null}; un nombre en blanco queda {@code ""}.
+     */
+    static String normalizeFullName(String fullName) {
+        return fullName == null ? null : fullName.strip().replaceAll("\\s+", " ");
+    }
+
     private void publishRoleAssigned(User user, String roleName) {
         Map<String, Object> payload = new LinkedHashMap<>();
-        payload.put("displayName", user.getFullName() == null ? user.getEmail() : user.getFullName());
+        payload.put("displayName", displayNameOf(user));
         payload.put("email", user.getEmail());
         payload.put("roleName", roleName);
         events.publish("email", String.valueOf(user.getId()), user.getEmail(),
@@ -962,7 +982,7 @@ public class UserAdminService {
 
     private void publishRoleRevoked(User user, String roleName) {
         Map<String, Object> payload = new LinkedHashMap<>();
-        payload.put("displayName", user.getFullName() == null ? user.getEmail() : user.getFullName());
+        payload.put("displayName", displayNameOf(user));
         payload.put("email", user.getEmail());
         payload.put("roleName", roleName);
         events.publish("email", String.valueOf(user.getId()), user.getEmail(),
@@ -971,7 +991,7 @@ public class UserAdminService {
 
     private void publishAccountDeactivated(User user, String reason) {
         Map<String, Object> payload = new LinkedHashMap<>();
-        payload.put("displayName", user.getFullName() == null ? user.getEmail() : user.getFullName());
+        payload.put("displayName", displayNameOf(user));
         payload.put("email", user.getEmail());
         payload.put("reason", reason);
         events.publish("email", String.valueOf(user.getId()), user.getEmail(),
@@ -980,7 +1000,7 @@ public class UserAdminService {
 
     private void publishAccountReactivated(User user) {
         Map<String, Object> payload = new LinkedHashMap<>();
-        payload.put("displayName", user.getFullName() == null ? user.getEmail() : user.getFullName());
+        payload.put("displayName", displayNameOf(user));
         payload.put("email", user.getEmail());
         events.publish("email", String.valueOf(user.getId()), user.getEmail(),
                 "account-reactivated", payload, null, resolveAppName(user));
