@@ -1,17 +1,13 @@
 -- ===========================================================================
--- V141 -- Las 3 funciones de lectura de asistencia que vivian solo en V220
--- (eliminada): fn_asistencia_actividades_dia, fn_asistencia_estudiantes_sesion,
--- fn_asistencia_asignaturas_sesion. Cierra la trazabilidad del modulo
--- consolidada en V136-V141.
+-- V141 -- Lectura de "Asistencia manual": fn_asistencia_actividades_dia,
+-- fn_asistencia_estudiantes_sesion y fn_asistencia_asignaturas_sesion.
 -- Depende de: TGRUPO/TGRADO/TPERIODO_ACADEMICO/TMATRICULA/TESTUDIANTE/
 -- TUSUARIO/TASIGNATURA/TACTIVIDAD/THORARIO/TLISTA_VALOR/TDOCENTE_ASIGNATURA
--- (V22), V140 (fn_asistencia_puede_ver, v_asistencia_detalle,
--- fn_asistencia_franja_bloque), V137 (fn_asistencia_periodo_eval), V496.18 (Regla 75).
+-- (V22), V136 (alcance), V140 (fn_asistencia_franja_bloque), V137 (fn_asistencia_periodo_eval), V496.18 (Regla 75).
 -- ===========================================================================
 
 SET search_path TO academico_test, public;
 
--- Definicion sin cambios respecto a la V220 original (eliminada).
 CREATE OR REPLACE FUNCTION academico_test.fn_asistencia_actividades_dia(
     p_pk_usuario      BIGINT,
     p_fk_tgrupo       BIGINT,
@@ -59,7 +55,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_asistencia_actividades_dia(BIGINT, BIGINT, DATE, BIGINT)
-    IS 'Actividades de un grupo VIGENTES en una fecha (equivalente formativo de fn_asistencia_asignaturas_sesion). Vigencia por RANGO [COALESCE(FECHA_INICIO,FECHA_CREACION), COALESCE(FECHA_CIERRE,FECHA_INICIO,FECHA_CREACION)]. p_fk_tfuncionario no NULL acota a TDOCENTE_ASIGNATURA. Gate: fn_asistencia_assert_puede_ver (Regla 74: el docente solo ve las asignaturas que dicta). Copia identica de V220, redefinida aqui (V141) para trazabilidad.';
+    IS 'Actividades de un grupo VIGENTES en una fecha (equivalente formativo de fn_asistencia_asignaturas_sesion). Vigencia por RANGO [COALESCE(FECHA_INICIO,FECHA_CREACION), COALESCE(FECHA_CIERRE,FECHA_INICIO,FECHA_CREACION)]. p_fk_tfuncionario no NULL acota a TDOCENTE_ASIGNATURA. Gate: fn_asistencia_assert_puede_ver (Regla 74: el docente solo ve las asignaturas que dicta).';
 
 -- Cambiar el RETURNS TABLE exige soltarla: CREATE OR REPLACE no lo permite.
 DROP FUNCTION IF EXISTS academico_test.fn_asistencia_estudiantes_sesion(BIGINT, BIGINT, BIGINT, DATE, NUMERIC, BIGINT);
@@ -143,14 +139,26 @@ BEGIN
            AND th.NUMERO_BLOQUE  = p_bloque
          LIMIT 1
     ),
+    -- Directo sobre TASISTENCIA y por matricula del grupo (UQ_TASISTENCIA_SESION):
+    -- por la vista se leia la fecha de toda la institucion con sus LATERAL.
+    -- tipo_valor replica el CASE de v_asistencia_detalle.
     registros AS (
-        SELECT d.fk_tmatricula, d.pk_tasistencia, d.tipo_valor, d.tipo_nombre,
-               d.observacion, d.fk_soporte_archivo, d.soporte_nombre
-          FROM academico_test.v_asistencia_detalle d
-         WHERE d.fecha = p_fecha
-           AND COALESCE(d.fk_tasignatura, 0) = COALESCE(p_fk_tasignatura, 0)
-           AND COALESCE(d.fk_tactividad, 0)  = COALESCE(p_fk_tactividad, 0)
-           AND COALESCE(d.bloque, 0) = COALESCE(p_bloque, 0)
+        SELECT a.FK_TMATRICULA AS fk_tmatricula, a.PK_TASISTENCIA AS pk_tasistencia,
+               CASE lv.VALOR WHEN '1' THEN 1 WHEN '2' THEN 2 WHEN '3' THEN 3
+                             WHEN '5' THEN 5 WHEN '6' THEN 6 END AS tipo_valor,
+               lv.NOMBRE AS tipo_nombre,
+               a.OBSERVACION AS observacion, a.FK_SOPORTE_ARCHIVO AS fk_soporte_archivo,
+               arch.NOMBRE AS soporte_nombre
+          FROM academico_test.TMATRICULA mg
+          JOIN academico_test.TASISTENCIA a ON a.FK_TMATRICULA = mg.PK_TMATRICULA
+          JOIN academico_test.TLISTA_VALOR lv ON lv.PK_LISTA_VALOR = a.FK_TLV_TIPO_ASISTENCIA
+          LEFT JOIN academico_test.TARCHIVO arch ON arch.PK_TARCHIVO = a.FK_SOPORTE_ARCHIVO
+         WHERE mg.FK_TGRUPO = p_fk_tgrupo AND mg.ACTIVE = TRUE
+           AND a.ACTIVE = TRUE
+           AND a.FECHA = p_fecha
+           AND COALESCE(a.FK_TASIGNATURA, 0) = COALESCE(p_fk_tasignatura, 0)
+           AND COALESCE(a.FK_TACTIVIDAD, 0)  = COALESCE(p_fk_tactividad, 0)
+           AND COALESCE(a.BLOQUE, 0) = COALESCE(p_bloque, 0)
     )
     SELECT
         m.PK_TMATRICULA,
@@ -255,4 +263,4 @@ $$;
 
 COMMENT ON FUNCTION academico_test.fn_asistencia_asignaturas_sesion(
     BIGINT, BIGINT, DATE, BIGINT
-) IS 'Pestanas por asignatura de "Asistencia manual": (asignatura, bloque, franja) que THORARIO tiene programadas para el grupo en el DIA DE SEMANA de p_fecha. p_fk_tfuncionario no NULL acota a TDOCENTE_ASIGNATURA. Gate: fn_asistencia_assert_puede_ver (Regla 74: el docente solo ve las asignaturas que dicta). Copia identica de V220, redefinida aqui (V141) para trazabilidad.';
+) IS 'Pestanas por asignatura de "Asistencia manual": (asignatura, bloque, franja) que THORARIO tiene programadas para el grupo en el DIA DE SEMANA de p_fecha. p_fk_tfuncionario no NULL acota a TDOCENTE_ASIGNATURA. Gate: fn_asistencia_assert_puede_ver (Regla 74: el docente solo ve las asignaturas que dicta).';
