@@ -112,6 +112,58 @@ COMMENT ON FUNCTION academico_test.fn_docente_periodo_vigente(BIGINT)
 -- puede cambiarlo: hay que soltarla antes.
 DROP FUNCTION IF EXISTS academico_test.fn_docente_grupos_listar(BIGINT, BIGINT, BIGINT);
 
+-- Núcleo sin gate (planeador de otro docente, V553): docente y periodos ya
+-- resueltos; p_fk_tfuncionario NULL = todos los docentes de esos periodos.
+CREATE OR REPLACE FUNCTION academico_test.fn_docente_grupos_listar_interno(
+    p_fk_tfuncionario BIGINT,
+    p_periodos        BIGINT[],
+    p_grupos          BIGINT[] DEFAULT NULL
+)
+RETURNS TABLE (
+    grupo_id                 BIGINT,
+    grupo_codigo             VARCHAR,
+    grupo_nombre             VARCHAR,
+    grupo_etiqueta           VARCHAR,
+    capacidad                NUMERIC,
+    jornada_id               BIGINT,
+    jornada_valor            VARCHAR,
+    jornada_nombre           VARCHAR,
+    modelo_pedagogico_id     BIGINT,
+    modelo_pedagogico_valor  VARCHAR,
+    modelo_pedagogico_nombre VARCHAR,
+    grado_id                 BIGINT,
+    grado_codigo             VARCHAR,
+    grado_nombre             VARCHAR,
+    nivel_ensenanza_id       BIGINT,
+    nivel_ensenanza_nombre   VARCHAR
+)
+LANGUAGE sql
+STABLE
+AS $$
+    SELECT DISTINCT
+           gr.PK_TGRUPO, gr.CODIGO, gr.NOMBRE,
+           TRIM(CONCAT_WS(' ', g.NOMBRE, gr.NOMBRE))::VARCHAR,
+           gr.CAPACIDAD,
+           jor.PK_LISTA_VALOR, jor.VALOR, jor.NOMBRE,
+           mp.PK_LISTA_VALOR, mp.VALOR, mp.NOMBRE,
+           g.PK_TGRADO, g.CODIGO, g.NOMBRE,
+           ne.PK_NIVEL_ENSENANZA, ne.NOMBRE
+      FROM academico_test.TDOCENTE_ASIGNATURA da
+      JOIN academico_test.TGRUPO gr           ON gr.PK_TGRUPO = da.FK_TGRUPO AND gr.ACTIVE = TRUE
+      JOIN academico_test.TGRADO g            ON g.PK_TGRADO = gr.FK_TGRADO AND g.ACTIVE = TRUE
+      JOIN academico_test.TNIVEL_ENSENANZA ne ON ne.PK_NIVEL_ENSENANZA = g.FK_TNIVEL_ENSENANZA
+      JOIN academico_test.TLISTA_VALOR jor    ON jor.PK_LISTA_VALOR = gr.FK_TLV_JORNADA
+      JOIN academico_test.TLISTA_VALOR mp     ON mp.PK_LISTA_VALOR = gr.FK_TLV_MODELO_PEDAGOGICO
+     WHERE (p_fk_tfuncionario IS NULL OR da.FK_TFUNCIONARIO = p_fk_tfuncionario)
+       AND da.FK_TPERIODO_ACADEMICO = ANY(p_periodos)
+       AND (p_grupos IS NULL OR gr.PK_TGRUPO = ANY(p_grupos))
+       AND da.ACTIVE = TRUE
+     ORDER BY g.NOMBRE, gr.NOMBRE;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_docente_grupos_listar_interno(BIGINT, BIGINT[], BIGINT[])
+    IS 'INTERNO: grupos (con grado, jornada, modelo pedagógico y nivel) donde p_fk_tfuncionario dicta algo (NULL = cualquier docente) en los periodos dados, sin gate. p_grupos (grupos_lectura de fn_planeador_alcance_docente, NULL = sin restricción) acota además por grupo. Lo usa fn_docente_grupos_listar (GET /planeador/docentes/grupos), que resuelve docente y periodos con fn_planeador_alcance_docente / fn_planeador_docente_periodos.';
+
 CREATE OR REPLACE FUNCTION academico_test.fn_docente_grupos_listar(
     p_pk_usuario_solicitante BIGINT,
     p_fk_periodo             BIGINT DEFAULT NULL,
@@ -144,99 +196,38 @@ LANGUAGE plpgsql
 STABLE
 AS $$
 DECLARE
-    v_func    BIGINT;
-    v_periodo BIGINT;
+    v_alc  RECORD;
+    v_func BIGINT;
 BEGIN
     PERFORM academico_test.fn_assert_permiso_seccion(
         p_pk_usuario_solicitante, 'PLANEADOR', 'VER'
     );
 
-    -- Sin funcionario explicito, "yo": el caso normal desde la pantalla del
-    -- docente. Un administrativo que consulte a OTRO docente si lo manda.
-    v_func    := COALESCE(p_fk_tfuncionario,
-                          academico_test.fn_funcionario_actual(p_pk_usuario_solicitante));
-    -- Sin periodo explicito, el que corresponde a las asignaciones de ese
-    -- docente (ver fn_docente_periodo_vigente).
-    v_periodo := COALESCE(p_fk_periodo,
-                          academico_test.fn_docente_periodo_vigente(v_func));
+    SELECT * INTO v_alc
+      FROM academico_test.fn_planeador_alcance_docente(p_pk_usuario_solicitante, p_fk_tfuncionario);
+
+    -- Alcance total sin docente elegido: el propio, como antes; sin
+    -- funcionario, nada (no se listan los grupos de todo el país).
+    v_func := CASE WHEN v_alc.alcance_total AND v_alc.fk_tfuncionario IS NULL
+                   THEN v_alc.fk_tfuncionario_propio
+                   ELSE v_alc.fk_tfuncionario END;
+    IF v_func IS NULL AND (v_alc.solo_propias OR v_alc.alcance_total) THEN
+        RETURN;
+    END IF;
 
     RETURN QUERY
-    SELECT DISTINCT
-           gr.PK_TGRUPO, gr.CODIGO, gr.NOMBRE,
-           TRIM(CONCAT_WS(' ', g.NOMBRE, gr.NOMBRE))::VARCHAR,
-           gr.CAPACIDAD,
-           jor.PK_LISTA_VALOR, jor.VALOR, jor.NOMBRE,
-           mp.PK_LISTA_VALOR, mp.VALOR, mp.NOMBRE,
-           g.PK_TGRADO, g.CODIGO, g.NOMBRE,
-           ne.PK_NIVEL_ENSENANZA, ne.NOMBRE
-      FROM academico_test.TDOCENTE_ASIGNATURA da
-      JOIN academico_test.TGRUPO gr           ON gr.PK_TGRUPO = da.FK_TGRUPO AND gr.ACTIVE = TRUE
-      JOIN academico_test.TGRADO g            ON g.PK_TGRADO = gr.FK_TGRADO AND g.ACTIVE = TRUE
-      JOIN academico_test.TNIVEL_ENSENANZA ne ON ne.PK_NIVEL_ENSENANZA = g.FK_TNIVEL_ENSENANZA
-      JOIN academico_test.TLISTA_VALOR jor    ON jor.PK_LISTA_VALOR = gr.FK_TLV_JORNADA
-      JOIN academico_test.TLISTA_VALOR mp     ON mp.PK_LISTA_VALOR = gr.FK_TLV_MODELO_PEDAGOGICO
-     WHERE da.FK_TFUNCIONARIO = v_func
-       AND da.FK_TPERIODO_ACADEMICO = v_periodo
-       AND da.ACTIVE = TRUE
-       -- V250: el alcance territorial (admin/coordinador) O la auto-consulta
-       -- del propio docente sobre sus asignaciones -- ver cabecera.
-       AND ( academico_test.fn_periodo_usuario_puede_ver(p_pk_usuario_solicitante, v_periodo)
-             OR v_func = academico_test.fn_funcionario_actual(p_pk_usuario_solicitante) )
-     ORDER BY g.NOMBRE, gr.NOMBRE;
+    SELECT * FROM academico_test.fn_docente_grupos_listar_interno(
+        v_func,
+        academico_test.fn_planeador_docente_periodos(v_func, v_alc.periodos_lectura, p_fk_periodo),
+        v_alc.grupos_lectura);
 END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_docente_grupos_listar(BIGINT, BIGINT, BIGINT) IS
-'Grupos (con grado y nivel de ensenanza) donde un docente dicta al menos una asignatura en el periodo dado. Filtro de la pantalla Planilla de calificacion (V239) para el rol docente. p_fk_tfuncionario debe venir ya resuelto por el llamador. V250: el gate de alcance acepta fn_periodo_usuario_puede_ver (admin/coordinador) O que el funcionario consultado sea el propio usuario autenticado (fn_funcionario_actual) -- sin esa alternativa NINGUN docente veia sus grupos, porque fn_periodo_usuario_sedes solo reconoce FK_TROL=11 (COORDINADOR) y el global FK_TROL IN (1,2,3). Consultar a OTRO docente sigue exigiendo el alcance territorial. V242/V250.';
+'GET /planeador/docentes/grupos: grupos (con grado y nivel de ensenanza) donde un docente dicta al menos una asignatura en el periodo (por defecto el vigente, fn_planeador_docente_periodos). Gate VER sobre PLANEADOR; docente y alcance con fn_planeador_alcance_docente. Docente puro: el suyo (ignora p_fk_tfuncionario). Otros con p_fk_tfuncionario (?funcionario=): ese docente, 42501 si no dicta nada en su alcance. Otros sin él: los grupos de todos los docentes de su alcance (nivel 3: pares sede+jornada), en el periodo vigente de cada sede+jornada. Alcance total sin docente: el propio funcionario o nada. Lógica en fn_docente_grupos_listar_interno. V242/V250.';
 
-CREATE OR REPLACE FUNCTION academico_test.fn_docente_grado_asignatura_listar(
-    p_pk_usuario_solicitante BIGINT,
-    p_fk_periodo             BIGINT DEFAULT NULL,
-    p_fk_tfuncionario        BIGINT DEFAULT NULL
-)
-RETURNS TABLE (
-    grado_id       BIGINT,
-    grado_codigo    VARCHAR,
-    grado_nombre    VARCHAR,
-    asignatura_id   BIGINT,
-    asignatura_codigo VARCHAR,
-    asignatura_nombre VARCHAR
-)
-LANGUAGE plpgsql
-STABLE
-AS $$
-DECLARE
-    v_func    BIGINT;
-    v_periodo BIGINT;
-BEGIN
-    PERFORM academico_test.fn_assert_permiso_seccion(
-        p_pk_usuario_solicitante, 'PLANEADOR', 'VER'
-    );
-
-    v_func    := COALESCE(p_fk_tfuncionario,
-                          academico_test.fn_funcionario_actual(p_pk_usuario_solicitante));
-    v_periodo := COALESCE(p_fk_periodo,
-                          academico_test.fn_docente_periodo_vigente(v_func));
-
-    RETURN QUERY
-    SELECT DISTINCT
-           g.PK_TGRADO, g.CODIGO, g.NOMBRE,
-           s.PK_TASIGNATURA, s.CODIGO, s.NOMBRE
-      FROM academico_test.TDOCENTE_ASIGNATURA da
-      JOIN academico_test.TGRUPO gr       ON gr.PK_TGRUPO = da.FK_TGRUPO AND gr.ACTIVE = TRUE
-      JOIN academico_test.TGRADO g        ON g.PK_TGRADO = gr.FK_TGRADO AND g.ACTIVE = TRUE
-      JOIN academico_test.TASIGNATURA s   ON s.PK_TASIGNATURA = da.FK_TASIGNATURA AND s.ACTIVE = TRUE
-     WHERE da.FK_TFUNCIONARIO = v_func
-       AND da.FK_TPERIODO_ACADEMICO = v_periodo
-       AND da.ACTIVE = TRUE
-       AND ( academico_test.fn_periodo_usuario_puede_ver(p_pk_usuario_solicitante, v_periodo)
-             OR v_func = academico_test.fn_funcionario_actual(p_pk_usuario_solicitante) )
-     ORDER BY g.NOMBRE, s.NOMBRE;
-END;
-$$;
-
-COMMENT ON FUNCTION academico_test.fn_docente_grado_asignatura_listar(BIGINT, BIGINT, BIGINT) IS
-'Pares (grado, asignatura) distintos que un docente dicta en el periodo dado, sin repetir por tener la misma asignatura en varios grupos del mismo grado. Filtro de la pantalla Planilla de calificacion (V239) para el rol docente. p_fk_tfuncionario debe venir ya resuelto por el llamador. V250: mismo gate de auto-consulta que fn_docente_grupos_listar (ver su COMMENT). V242/V250.';
+-- fn_docente_grado_asignatura_listar vive en V497 (wrapper + _interno, mismo
+-- alcance que fn_docente_grupos_listar).
 
 -- ===========================================================================
 -- (2) ENDPOINTS
