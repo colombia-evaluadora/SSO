@@ -334,7 +334,11 @@ jobs:
         # by an older runner config; bump explicitly to 15
         # min so the deploy can wait the full cold-start
         # window without bailing.
-        timeout-minutes: 15
+        # 60 min: re-aplicar migraciones editadas con backfills grandes
+        # (tunidad_nota, V488/V492.3) pasa de 15 min; al cortarse el paso el
+        # script sigue en el servidor y GitHub marca el release como fallido
+        # (v1.1.69, 2026-10-09).
+        timeout-minutes: 60
         env:
           DEST: ${{ secrets.SSH_TARGET }}
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
