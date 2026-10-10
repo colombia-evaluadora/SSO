@@ -306,7 +306,9 @@ CREATE OR REPLACE FUNCTION academico_test.fn_unidad_listar(
     p_limite                      INT       DEFAULT 20,
     p_offset                      INT       DEFAULT 0,
     p_dia                         DATE      DEFAULT NULL,
-    p_dias_gracia                 INT       DEFAULT 2
+    p_dias_gracia                 INT       DEFAULT 2,
+    p_fk_sede                     BIGINT DEFAULT NULL,
+    p_fk_periodo                  BIGINT DEFAULT NULL
 )
 RETURNS SETOF academico_test.t_unidad_listado_fila
 LANGUAGE plpgsql
@@ -322,7 +324,7 @@ BEGIN
     -- p_fk_tfuncionario (?funcionario=) se valida contra el alcance (42501 si
     -- ese docente no dicta nada en él); un docente puro queda en el suyo.
     SELECT * INTO v_alc
-      FROM academico_test.fn_planeador_alcance_docente(p_pk_usuario_solicitante, p_fk_tfuncionario);
+      FROM academico_test.fn_planeador_alcance_docente(p_pk_usuario_solicitante, p_fk_tfuncionario, p_fk_sede, p_fk_periodo);
 
     RETURN QUERY
     SELECT * FROM academico_test.fn_unidad_listar_interno(
@@ -334,7 +336,7 @@ BEGIN
 END;
 $$;
 
-COMMENT ON FUNCTION academico_test.fn_unidad_listar(BIGINT, VARCHAR, BIGINT, BIGINT, BIGINT, BOOLEAN, VARCHAR, BOOLEAN, INT, INT, DATE, INT)
+COMMENT ON FUNCTION academico_test.fn_unidad_listar(BIGINT, VARCHAR, BIGINT, BIGINT, BIGINT, BOOLEAN, VARCHAR, BOOLEAN, INT, INT, DATE, INT, BIGINT, BIGINT)
     IS 'GET /planeador/unidades y su export: gate VER sobre PLANEADOR, alcance del usuario (fn_planeador_alcance_docente: sedes y, en nivel 3, pares sede+jornada; ?funcionario= validado contra ese alcance, 42501 si no) y delega en fn_unidad_listar_interno, que documenta filtros, orden y paginado por día. Devuelve t_unidad_listado_fila.';
 
 -- ---------------------------------------------------------------------------
