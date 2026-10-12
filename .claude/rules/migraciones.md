@@ -69,7 +69,7 @@ decimales de todas las ramas y PRs). Re-escanear antes de fusionar.
 | SQL portado desde Oracle | skill `reviewing-oracle-to-postgres-migration` |
 | Endpoint de `query-service` | `/new-query-endpoint` + agente `query-service-endpoint-builder` |
 | Qué quedó obsoleto, firmas y llamadores | skill `analizando-migraciones` |
-| Regenerar el informe HTML y resumirlo | agente `migration-analysis-reporter` |
+| Regenerar el informe HTML y resumirlo | `/migration-analysis` (corre en un subagente) |
 | El servidor no se comporta como el repo | agente `server-drift-detector` |
 
 ### Lo que aquí es distinto a la guía genérica de Flyway/Postgres
