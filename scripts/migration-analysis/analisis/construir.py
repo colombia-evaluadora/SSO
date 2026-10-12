@@ -11,7 +11,7 @@ from dataclasses import asdict
 
 from base.nucleo import FILE_RE, MIGRATIONS, REPO, vnum
 from lectura.extraccion import Registro, analyze_file
-from analisis import calidad, categories
+from analisis import calidad, categories, relaciones
 from analisis.grafo import build_graph, line_budget, object_state, verdict_for
 from analisis.usos import (broken_calls, collect_java_callsites, collect_sql_callsites,
                            collect_table_refs, element_uses, orphan_functions,
@@ -116,4 +116,5 @@ def construir(use_git: bool = False, highlight: tuple = (None, None),
     model["categories"] = categories.categorize(model)
     # Sobre el modelo ya resuelto: solo lee que vive y quien llama a quien.
     model["calidad"] = calidad.analizar(model)
+    model["relaciones"] = relaciones.relaciones(model)
     return model
