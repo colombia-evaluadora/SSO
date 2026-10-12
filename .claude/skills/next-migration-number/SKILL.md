@@ -21,10 +21,17 @@ se pide número.
 ## Paso 1 — ¿quién define esto hoy?
 
 ```bash
-python .claude/skills/next-migration-number/deps.py fn_actividad_listar
-python .claude/skills/next-migration-number/deps.py /planeador/actividades
-python .claude/skills/next-migration-number/deps.py --version 224
+python .claude/skills/next-migration-number/deps.py fn_actividad_listar      # funcion
+python .claude/skills/next-migration-number/deps.py /planeador/actividades   # endpoint(s) de esa ruta
+python .claude/skills/next-migration-number/deps.py tactividad               # tabla
+python .claude/skills/next-migration-number/deps.py --version 224            # una migracion
 ```
+
+El nombre se resuelve **exacto** primero (corto o con esquema, o la ruta), así
+que basta con el nombre tal cual. Si no hay exacto busca como subcadena y, con
+muchas coincidencias, las resume por tipo con lo más llamado primero
+(`--todo` da la ficha de todas; `--historial`, historial completo y cadena
+profunda).
 
 Y antes de escribir cualquier función, el inventario de lo reutilizable del
 dominio (validaciones, gates, núcleos `_interno`, wrappers, con dueña y
@@ -34,33 +41,43 @@ parámetros):
 python .claude/skills/next-migration-number/deps.py --reutilizable planeador
 ```
 
-Lee el modelo de `scripts/migration-analysis/analisis/construir.py` vía
-`modelo.cargar()`: se cachea con la huella de las migraciones y se recalcula
-solo cuando cambia un `.sql`. Por cada objeto imprime su categoría funcional y:
+Lee el modelo cacheado (`modelo.cargar()`, se recalcula solo cuando cambia un
+`.sql`) y el grafo de llamadas **vivo** de `analisis/calidad.py`: solo cuentan
+las llamadas que hace la definición vigente de cada objeto. Cada ficha empieza
+por lo que decide el siguiente paso:
 
-- **DEFINIDO HOY POR V\<n\>** — la última escritura viva. Ese es el archivo a
-  editar si el cambio pertenece a ese objeto.
-- **historial** — quién lo creó, quién lo reescribió y qué quedó muerto. Si ves
-  varias versiones "muerta por", ese texto ya no describe el estado real: no te
-  guíes por la migración más antigua aunque sea la que "suena" al tema.
-- **FIRMA CAMBIÓ** — la función cambió de aridad. Editar in-place obliga a
-  `DROP FUNCTION IF EXISTS` con la firma vieja antes del `CREATE`; sin eso
-  PostgreSQL deja las dos sobrecargas vivas y las llamadas sin tipos explícitos
-  se vuelven ambiguas.
-- **MIGRACIONES QUE LO USAN** — los llamadores. Cambiar contrato sin revisarlos
-  es la causa habitual de que un endpoint responda 500 tras el deploy.
-- Con `--version`, además **DEPENDE DE**: las migraciones que tienen que haberse
-  aplicado antes. Es lo que decide si puedes numerar out-of-order o no.
+- **EDITAR V\<n\> \<fichero\>** — la dueña de hoy. Si el historial tiene varias
+  "muerta por", ese texto ya no describe el estado real: no te guíes por la
+  migración más antigua aunque sea la que "suena" al tema.
+- **contrato** — el `COMMENT ON FUNCTION` vigente (ruta, gate, qué devuelve).
+- **lo llaman** — por nombre: endpoints (`METHOD /ruta`), funciones con su
+  dueña, triggers, Java. **IMPACTO**: los endpoints que la ejecutan aunque sea
+  indirectamente; es lo que hay que volver a probar.
+- **llama a** (con su capa: gate, interno, validación…) y **tablas** que toca.
+- En un endpoint, la **cadena** wrapper → núcleo → validaciones y si pasa por un
+  **gate** (`! SIN GATE` si no). Una fila que una migración clona como hermana
+  (`INSERT … SELECT`) se avisa: el analizador no distingue la copiada de la
+  creada.
+- En una tabla, columnas añadidas después, índices, triggers, quién la lee o
+  escribe por capa y cuántos endpoints llegan a ella.
+- **FIRMA CAMBIO** — cambió de aridad: editar in-place obliga a
+  `DROP FUNCTION IF EXISTS` de la firma vieja, o quedan dos sobrecargas.
+- **ORDEN** — migraciones que la ejecutan o validan al migrar: una que la
+  redefina no puede ir antes que esas.
+- Con `--version`: qué escribe (vivo / ya reescrito) resumido por tipo,
+  **DEPENDE DE** / **LA USAN**, marcadas **FUERA DE ORDEN** cuando solo
+  funcionan por enlace tardío de PL/pgSQL, y el comando del set de re-aplicación.
 
 El modelo agrupa funciones por nombre y número de parámetros, y no distingue
 cómo se usan. `precision.py` relee los `.sql` y corrige eso:
 
-- **POR FIRMA EXACTA** / **VIVA POR FIRMA** — una posterior con otros tipos o
+- **firmas exactas** / **VIVA POR FIRMA** — una posterior con otros tipos o
   más parámetros crea otra sobrecarga y la vieja sigue viva, aunque el
   historial diga "muerta" (V116→V130, V257→V360). No se puede quitar.
-- **USOS POR CONTEXTO** — `migracion` (DO, backfill, SQL suelto, trigger) y
-  `sql-body` (LANGUAGE sql, se valida al crearse) atan el orden; `plpgsql` y
-  `texto` (filas de public.query, comentarios fuera) no.
+  `! N SOBRECARGAS VIVAS` = una llamada que encaje en varias da 42725.
+- Contexto de uso: `migracion` (DO, backfill, SQL suelto, trigger) y
+  `sql-body` (LANGUAGE sql, se valida al crearse) atan el orden (línea
+  **ORDEN**); `plpgsql` y `texto` (filas de public.query) no.
 - **MUERTA PERO NECESARIA** — reescrita después, pero algo la ejecuta antes en
   una base limpia (también en el propio fichero). Se conserva con un CREATE
   condicionado a `to_regprocedure(...) IS NULL`.
