@@ -31,7 +31,9 @@ pena reescribir de golpe, así que está congelada en
 `scripts/migration-analysis/comandos/lint-baseline.json` y por defecto **solo se reporta lo
 nuevo**. Con `--no-baseline` sale todo, útil para auditar. Una regla que nace o
 cambia congela solo su deuda, en el mismo PR:
-`lint --all --baseline-regla <CODIGO>`.
+`lint --all --baseline-regla <CODIGO>`. La deuda que se corrige sale sola:
+`lint --all --baseline-podar` (lo corre el informe de fondo tras cada edición de
+una migración); nada nuevo entra en la baseline sin pedirlo.
 
 Al terminar:
 

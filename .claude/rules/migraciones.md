@@ -312,6 +312,10 @@ python scripts/migration-analysis mapa                # si cambiaron funciones o
 python scripts/migration-analysis mapa --check        # lo comprueba sin reescribir (lo corre el hook Stop)
 ```
 
-El lint corre además como hook al editar cualquier `.sql` de este directorio.
+El lint corre además como hook al editar cualquier `.sql` de este directorio, y
+esa misma edición regenera en segundo plano el informe HTML (pestaña
+**Calidad**: radio de impacto, endpoints sin gate, violaciones de capa,
+dependencias dinámicas y el lint) y poda la baseline de lo ya corregido. Antes
+de tocar una función con mucho radio de impacto, mírala ahí.
 Sus reglas no se silencian: si una no aplica en un caso concreto, se dice por
 qué en la respuesta.
