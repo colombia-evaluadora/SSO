@@ -14,14 +14,9 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/post-edit.sh\"",
-            "timeout": 120
-          },
-          {
-            "type": "command",
-            "command": "python \"$CLAUDE_PROJECT_DIR/.claude/hooks/migration_lint.py\"",
+            "command": "python \"$CLAUDE_PROJECT_DIR/.claude/hooks/post_edit.py\"",
             "timeout": 180,
-            "statusMessage": "Invariantes de la migracion..."
+            "statusMessage": "Revisando el fichero editado..."
           }
         ]
       }
@@ -43,18 +38,9 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python \"$CLAUDE_PROJECT_DIR/.claude/hooks/no_coautoria.py\"",
-            "timeout": 15
-          },
-          {
-            "type": "command",
-            "command": "python \"$CLAUDE_PROJECT_DIR/.claude/hooks/no_prod.py\"",
-            "timeout": 15
-          },
-          {
-            "type": "command",
-            "command": "python \"$CLAUDE_PROJECT_DIR/.claude/hooks/no_fugas.py\"",
-            "timeout": 15
+            "command": "python \"$CLAUDE_PROJECT_DIR/.claude/hooks/pre_shell.py\"",
+            "timeout": 15,
+            "onFailure": "block"
           }
         ]
       }

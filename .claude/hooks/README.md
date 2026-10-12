@@ -12,11 +12,11 @@ Un fichero por hook en la raíz, y lo que no es un hook en `comun/`:
 ```
 README.md          esta guía
 comun/             módulos compartidos, no se registran en ningún evento
-no_coautoria.py    PreToolUse   Bash|PowerShell
-no_prod.py         PreToolUse   Bash|PowerShell
-no_fugas.py        PreToolUse   Bash|PowerShell
-post-edit.sh       PostToolUse  Write|Edit
-migration_lint.py  PostToolUse  Write|Edit
+pre_shell.py       PreToolUse   Bash|PowerShell  (corre las tres guardias)
+  no_coautoria.py    guardia: atribución en commit/PR
+  no_prod.py         guardia: escribir en una base que no es la local
+  no_fugas.py        guardia: direcciones de servidor en commit/PR
+post_edit.py       PostToolUse  Write|Edit       (codificación, YAML, linter)
 cierre_limpio.py   Stop
 fallo_conocido.py  PostToolUseFailure  Bash|PowerShell
 session-start.sh   SessionStart
@@ -25,6 +25,22 @@ session-start.sh   SessionStart
 `settings.json` invoca cada `.py` directamente con `python`; no hay envoltorios
 `.sh` que solo hagan `exec`.
 
+**Un proceso por evento.** En Windows arrancar Python cuesta ~200 ms y el
+harness lanza el hook sobre *cada* llamada a la herramienta: con tres
+`PreToolUse` separados, todo comando de shell pagaba ~1,1 s, y toda edición
+~1,4 s con `post-edit.sh` + `migration_lint.py`. Por eso cada evento tiene un
+solo despachador (`pre_shell.py`, `post_edit.py`) que corre todas sus
+comprobaciones en el mismo proceso: ~0,36 s. Una comprobación nueva se añade
+como función o módulo que el despachador llama, no como otra entrada en
+`settings.json`.
+
+**Fallar cerrado donde hay política.** `pre_shell.py` lleva
+`"onFailure": "block"` (Claude Code ≥ 2.1.295): si el hook no puede ni arrancar
+(Python ausente, error de sintaxis) el comando se bloquea, en vez de pasar con
+exit 1 sin que nadie se entere. Dentro, si una sola guardia revienta por un bug
+suyo se avisa y se siguen las otras, para que un fallo interno no tumbe todos
+los comandos de la sesión.
+
 ## Núcleo compartido (`comun/`)
 
 `shell_scan.py` trocea un comando (segmentos de nivel superior respetando
@@ -32,11 +48,12 @@ comillas, cuerpos de heredoc y here-strings de PowerShell) y `git_text.py`
 saca de ahi el texto que un comando va a publicar: mensaje de commit o cuerpo
 de PR, venga por `-m`, heredoc, here-string o `--body-file`. Los hooks son
 envoltorios finos sobre eso; ninguno vuelve a resolver como se parte un
-comando. `yaml_estricto.py` es la herramienta que usa `post-edit.sh`. Es la
+comando. `comando.py` lee el JSON del harness una vez. `yaml_estricto.py` es la
+herramienta que usa `post_edit.py`. Es la
 misma forma que la convención de funciones del repo: la lógica en un núcleo
 reutilizable, y encima lo que decide.
 
-## `no_coautoria.py`
+## `no_coautoria.py` (guardia de `pre_shell.py`)
 
 Bloquea (`PreToolUse`, exit 2) la atribución a Claude en dos sitios: el mensaje
 de un `git commit` (trailer `Co-Authored-By`, venga en `-m`, en un heredoc o en
@@ -56,7 +73,7 @@ los cuerpos de heredoc, los here-strings `@'...'@` de PowerShell y los ficheros
 de `--body-file` / `-F`. El matcher cubre `Bash|PowerShell`: un commit desde la
 herramienta PowerShell no pasaba por el hook.
 
-## `no_prod.py`
+## `no_prod.py` (guardia de `pre_shell.py`)
 
 Bloquea (`PreToolUse`, exit 2) los comandos que **escriben** en la base de un
 servidor real: `flyway migrate/repair/clean/undo/baseline`, `psql` con DDL/DML
@@ -79,7 +96,7 @@ que un `-h` suelto en el texto de un comando no se confunda con un destino.
 Limitacion conocida: un tunel SSH (`psql -h localhost -p 5435` contra una base
 remota) se ve local y pasa. No hay forma de distinguirlo desde el comando.
 
-## `no_fugas.py`
+## `no_fugas.py` (guardia de `pre_shell.py`)
 
 Bloquea (`PreToolUse`, exit 2) publicar la direccion de un servidor en un
 mensaje de commit o en la descripcion de un PR. Eso sale del repo y el
@@ -90,34 +107,29 @@ No hay lista que consultar: se reconoce por la forma. Las IP privadas
 (127.x, 10.x, 192.168.x, 172.16-31.x) y las versiones de cuatro numeros de un
 digito (`1.2.3.4`, `Boot 4.1.1.1`) no cuentan.
 
-## `post-edit.sh`
+## `post_edit.py`
 
-Salud del fichero recién escrito, sea el que sea:
+Salud del fichero recién escrito, de lo más barato a lo más caro:
 
-1. **Codificación.** Busca secuencias tipo `Ã©` / `â€“` en `.sql`, `.md`, `.json`,
-   `.java`, `.yml`. El locale de las máquinas de este equipo es cp1252 y un
-   fichero mal guardado llega a producción con el texto roto.
-2. **YAML con claves duplicadas.** Un `.yml`/`.yaml` se carga con un loader
-   estricto (`comun/yaml_estricto.py`). PyYAML se queda con la última definición
-   sin avisar, así que un merge que concatena dos bloques hermanos pasa la
-   revisión y tumba el servicio al arrancar — pasó con el `application.yml` de
+1. **Codificación** (`.sql`, `.md`, `.json`, `.java`, `.yml`). El fichero tiene
+   que ser UTF-8 válido —el locale de este equipo es cp1252 y un fichero
+   guardado con él llega a producción con el texto roto— y sin mojibake tipo
+   `Ã©` / `â€“`. El mojibake solo cuenta si es **nuevo** respecto a `HEAD`: este
+   README y el test de plantillas de correo lo citan a propósito.
+2. **YAML con claves duplicadas.** Se carga con un loader estricto
+   (`comun/yaml_estricto.py`). PyYAML se queda con la última definición sin
+   avisar, así que un merge que concatena dos bloques hermanos pasa la revisión
+   y tumba el servicio al arrancar — pasó con el `application.yml` de
    reporting-service.
+3. **Invariantes de migración** (`postgres/migrations/*.sql`): pasa
+   `scripts/migration-analysis/comandos/lint.py`. Cada regla corresponde a una
+   regresión que ya ocurrió; no valida SQL —para eso está el Postgres local—
+   sino las convenciones que se violan en silencio. Exit 2 con los **errores**;
+   los avisos salen por stdout y no interrumpen, porque el baseline ya hace que
+   solo hablen de lo nuevo. Lo editado desde Bash no dispara `Write|Edit`: de
+   eso se ocupa `cierre_limpio.py` al cerrar el turno.
 
-Sale con código 2 cuando hay un error.
-
-## `migration_lint.py`
-
-`PostToolUse` sobre `Write`/`Edit`: pasa `scripts/migration-analysis/comandos/lint.py` a la
-migración recién editada. Cada una de sus reglas corresponde a una regresión que
-ya ocurrió; no valida SQL —para eso está el Postgres local— sino las
-convenciones que se violan en silencio.
-
-Exit 2 con los **errores**; los avisos salen por stdout y no interrumpen, porque
-el baseline ya se encarga de que solo hablen de lo nuevo.
-
-Era el punto 3 de `post-edit.sh`. Va aparte para que cada hook diga una sola
-cosa, y porque tiene una pareja: lo editado desde Bash no dispara `Write|Edit`,
-y de eso se ocupa `cierre_limpio.py` al cerrar el turno.
+Sale con código 2 en el primer error.
 
 ## `cierre_limpio.py`
 
@@ -125,7 +137,7 @@ y de eso se ocupa `cierre_limpio.py` al cerrar el turno.
 tocadas**, hace dos cosas.
 
 1. **El linter de invariantes**, que **bloquea el cierre (exit 2) si hay
-   errores**. Existe porque `migration_lint.py` solo cubre `Write`/`Edit`: una
+   errores**. Existe porque `post_edit.py` solo cubre `Write`/`Edit`: una
    migración editada desde Bash —un `sed -i`, un heredoc, un script de Python—
    no dispara aquel hook y se iba sin revisar. Los avisos se imprimen pero no
    interrumpen.
@@ -166,7 +178,9 @@ alcance no pasado, falta la fila en `role_query`), `23503` (tiene dependientes �
 409), `23505` (los UNIQUE parciales `WHERE active = true` de V65), `42725` (dos
 sobrecargas vivas), los `UnicodeDecodeError` de cp1252, el `Could not resolve
 dependencies` de Maven multi-módulo, el checksum de Flyway y el 404 de una fila
-nueva de `public.query`.
+nueva de `public.query`. El 404 se casa como número, no como "Not Found": eso
+casaba con cualquier `command not found` y metía la pista de query-service donde
+no venía a cuento.
 
 ## `session-start.sh`
 
@@ -176,7 +190,8 @@ lo da `.claude/skills/next-migration-number/scan.sh`, que tarda bastante más.
 
 ## Probarlos a mano
 
-Los tres `PreToolUse` leen el comando por stdin y salen con 2 cuando bloquean:
+El despachador `pre_shell.py` y cada guardia por separado leen el comando por
+stdin y salen con 2 cuando bloquean:
 
 ```bash
 echo '{"tool_input":{"command":"git commit -m \"x\n\nCo-Authored-By: y\""}}' \
@@ -191,7 +206,7 @@ Y el resto:
 
 ```bash
 echo '{"tool_input":{"file_path":"postgres/migrations/V406__x.sql"}}' \
-  | bash .claude/hooks/post-edit.sh; echo "exit=$?"
+  | python .claude/hooks/post_edit.py; echo "exit=$?"
 echo '{"prompt_id":"prueba"}' | python .claude/hooks/cierre_limpio.py; echo "exit=$?"
 echo '{"error":"SQLSTATE 42501"}' | python .claude/hooks/fallo_conocido.py
 bash .claude/hooks/session-start.sh
