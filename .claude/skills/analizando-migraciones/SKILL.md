@@ -84,6 +84,10 @@ Regla práctica: **`deps.py` para una pregunta, el informe para una revisión.**
    grafo no ve. El HTML se regenera solo tras cada edición de una migración
    (`.claude/hooks/informe_fondo.py`); para leerlo desde un script, el JSON:
    `informe --json` y la clave `calidad`.
+6. **Categoría y relaciones** — la tabla *Calidad por categoría* (pestaña
+   Categorías, `calidad.por_categoria`) dice qué regla incumple el dominio que
+   vas a tocar, con ejemplos; la pestaña Dependencias (`model["relaciones"]`)
+   muestra qué migraciones llaman, redefinen o parchean lo que define la tuya.
 
 ## Dónde vive cada pieza
 
