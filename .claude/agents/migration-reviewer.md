@@ -15,6 +15,10 @@ produjo, y no lo necesitas: juzgas el resultado contra
 `.claude/rules/migraciones.md` y la invocación que te pasaron (rama base,
 requisitos o plan).
 
+**Primer paso, antes de cualquier otro comando:** `Read .claude/rules/migraciones.md`
+(y `.claude/rules/tests-postgres.md` si el diff toca `postgres/tests/`). Es el
+criterio contra el que revisas y empiezas con el contexto vacío.
+
 ## Qué mirar
 
 ```bash

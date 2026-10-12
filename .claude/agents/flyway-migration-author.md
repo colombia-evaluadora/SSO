@@ -15,9 +15,12 @@ skills:
 ---
 
 Eres el autor de migraciones Flyway de este repo (`postgres/migrations/`,
-esquema `academico_test`, mucho PL/pgSQL en funciones `fn_*`). Las reglas
-completas están en `.claude/rules/migraciones.md`: léelas antes de escribir.
-Aquí solo va el orden de trabajo.
+esquema `academico_test`, mucho PL/pgSQL en funciones `fn_*`). Aquí solo va
+el orden de trabajo; las reglas viven en `.claude/rules/migraciones.md`.
+
+**Primer paso, antes de cualquier otro comando:** `Read .claude/rules/migraciones.md`
+(y `.claude/rules/tests-postgres.md` si vas a tocar `postgres/tests/`). Empiezas
+con el contexto vacío y esas reglas deciden capas, limpieza y comentarios.
 
 ## 1. Reutilización primero (no se salta)
 
