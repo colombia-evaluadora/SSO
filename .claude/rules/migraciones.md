@@ -6,316 +6,140 @@ paths:
 
 # Reglas — Postgres y migraciones (`postgres/`)
 
-Aplican a todo `postgres/migrations/`. Complementan el `CLAUDE.md` raíz.
+Complementan los invariantes de `CLAUDE.md`, que no se repiten aquí. El linter
+(`migration-analysis lint`) corre en cada edición de un `.sql`: sus reglas no se
+silencian; si una no aplica, se dice por qué en la respuesta.
 
-## Orden de trabajo
+## Qué archivo tocar
 
-No se empieza escribiendo SQL. Se empieza averiguando **qué archivo tocar**:
+Primero la dueña, después el número (skill `next-migration-number`):
+`deps.py <fn|ruta|tabla>` dice quién lo define hoy; si tiene dueña, **se edita**.
+Un `V<n>` nuevo solo si el objeto no existe o convive con el viejo, numerado con
+`migration-analysis hueco --categoria <id>` en un decimal junto al bloque del
+dominio (`V496.1`), no en el techo global.
 
-```bash
-python .claude/skills/next-migration-number/deps.py <fn|ruta>   # quién lo define hoy
-python .claude/skills/next-migration-number/deps.py --version N # de qué depende
-python scripts/migration-analysis hueco --categoria <id>          # número libre real, junto a su bloque
-```
-
-Si el objeto ya tiene dueña, **se edita esa migración**; solo se crea un `V<n>`
-nuevo cuando el objeto no existe o la funcionalidad convive con la vieja.
-`docs/MAPA.md` da el índice dominio → función → migración.
-
-### Escaneo de reutilización (obligatorio antes de escribir funciones)
-
-```bash
-python .claude/skills/next-migration-number/deps.py --reutilizable <dominio>
-```
-
-Lista por capa lo vivo del dominio (validaciones, gates/alcance, núcleos
-`_interno`, wrappers) con su migración dueña y sus parámetros. Repetirlo con
-cada término cercano (tabla, menú, dominio vecino). En el plan, **cada función
-nueva justifica por qué ninguna de la lista sirve**; si una sirve a medias, se
-extiende su dueña in-place en lugar de escribir otra.
+**Reutilizar antes de escribir:** `deps.py --reutilizable <dominio>`, repetido con
+cada término cercano. En el plan, cada función nueva dice qué existente descartó
+y por qué; si una sirve a medias, se extiende su dueña.
 
 ### Funcionalidad nueva: migraciones por capas
 
-Cuando no hay dueña, la funcionalidad se reparte en migraciones consecutivas,
-una por capa, cada una llamando solo a las de número menor (así una base limpia
-aplica). Una capa vacía no se crea; dos capas no se mezclan en un fichero.
+Una migración por capa, cada una llamando solo a números menores (así una base
+limpia aplica). Capa vacía no se crea; dos capas no se mezclan en un fichero.
 
 | # | Capa | Qué lleva | Qué no lleva |
 |---|---|---|---|
-| 0 | **DDL** | tablas, columnas, constraints, índices (`optimizando-consultas`), `fn_audit_declarar` de cada tabla nueva (V26/V276) | funciones de negocio |
-| 1 | **Utilidades** | helpers puros reutilizables: resolver un catálogo por texto, normalizar, calcular. `IMMUTABLE` si no lee tablas, `STABLE` si lee | gate, escrituras, `RAISE` de negocio |
-| 2 | **Validaciones** | una `fn_<dominio>_validar_<regla>` por regla (`RETURNS VOID`, lanza o nada) y una que las compone por caso | usuario solicitante, escrituras |
-| 3 | **Núcleos `_interno`** | crear/actualizar/eliminar que llaman a las validaciones y escriben; los `_listar_interno` con la plantilla de listado (abajo) | gate, permisos |
-| 4 | **Wrappers CRUD** | existencia (P0002) → gate con la **acción exacta** (VER/CREAR/EDITAR/ELIMINAR) + alcance → `fn_audit_declarar` si escribe → delegar | lógica, SQL de negocio |
-| 5 | **Endpoints** | filas de `public.query` con `param_types` completo y en mayúsculas, `query_param_constraint` por campo, `role_query` con roles derivados de los menús reales | SQL que no sea llamar al wrapper |
-
-Numeración: si el dominio ya tiene un bloque, usar **huecos decimales junto a
-él** (`V496.1`–`V496.6`) en vez del techo global: reduce colisiones entre PRs
-(V523) y deja las capas contiguas. `python scripts/migration-analysis hueco
---categoria <id> [--objeto fn_x ...]` lo calcula (piso por dependencias,
-decimales de todas las ramas y PRs). Re-escanear antes de fusionar.
+| 0 | **DDL** | tablas, constraints, índices, `fn_audit_declarar` de cada tabla nueva | funciones de negocio |
+| 1 | **Utilidades** | helpers puros: catálogo por texto, normalizar, calcular (`IMMUTABLE`/`STABLE`) | gate, escrituras, `RAISE` de negocio |
+| 2 | **Validaciones** | una `fn_<dominio>_validar_<regla>` por regla y una que las compone por caso | usuario solicitante, escrituras |
+| 3 | **Núcleos `_interno`** | crear/actualizar/eliminar que validan y escriben; `_listar_interno` según `optimizando-consultas` § 3 | gate, permisos |
+| 4 | **Wrappers CRUD** | existencia (P0002) → gate con la **acción exacta** + alcance → `fn_audit_declarar` si escribe → delegar | lógica, SQL de negocio |
+| 5 | **Endpoints** | `public.query` con `param_types` completo, `query_param_constraint`, `role_query` con roles de los menús reales (`new-query-endpoint`) | SQL que no sea llamar al wrapper |
 
 ### Al editar una migración, deja limpio lo que tocas
 
-Editar la dueña in-place significa que el deploy re-aplica **el fichero
-entero**: lo muerto que lleve se vuelve a ejecutar y revierte a quien lo había
-reescrito después (V29 en #311 deshizo V294/V295/V298/V302). Por eso cada migración que
-se edita sale más limpia de lo que entró, en el mismo commit:
+El deploy re-aplica **el fichero entero**: lo muerto que lleve revierte a quien
+lo reescribió después (V29 en #311 deshizo V294/V295/V298/V302). En el mismo
+commit, según la sección PRECISION de `deps.py --version <n>`:
 
-```bash
-python .claude/skills/next-migration-number/deps.py --version <n>   # sección PRECISION
-```
-
-- Lo marcado **`MUERTA`** dentro del fichero (un `CREATE` que una posterior
-  reescribe entera, comentarios que describen esa versión) **se quita**.
+- lo **`MUERTA`** (un `CREATE` que una posterior reescribe entero, sus
+  comentarios) se quita;
 - `VIVA POR FIRMA`, `MUERTA PERO NECESARIA`, `DROP PELIGROSO`, backfills y
-  semillas **no se tocan aquí**: van por `limpiando-migraciones`, que tiene banco
-  y gates. Ante la duda, no se quita.
-- La cabecera se recorta al presupuesto (≤ 12 líneas) y los `COMMENT ON` al
-  contrato, aunque el linter solo lo exija como aviso en ficheros ya en `dev`.
-- Lo quitado se nombra en el commit y en el set de re-aplicación
-  (`reaplicando-migraciones`).
+  semillas no: van por `limpiando-migraciones`. Ante la duda, no se quita;
+- cabecera y `COMMENT ON` se recortan a su presupuesto;
+- lo quitado se nombra en el commit y en el set de `reaplicando-migraciones`.
 
-## Skills y agentes
+## Wrapper y núcleo
 
-| Trabajo | Usar |
-|---|---|
-| Funcionalidad nueva de punta a punta | `/nueva-funcionalidad` |
-| Crear/editar una migración | agente `flyway-migration-author` |
-| Revisar migraciones escritas (contexto limpio) | agente `migration-reviewer` |
-| Qué archivo tocar, dependencias, número | skill `next-migration-number` (`deps.py`, `hueco`) |
-| Gate, alcance, roles de `role_query` | skill `definiendo-permisos` |
-| Índices, listados, consultas lentas | skill `optimizando-consultas` (`migration-analysis tabla`) |
-| Funciones, triggers, PL/pgSQL | skill `plpgsql` |
-| Versionado y patrones Flyway | las reglas de abajo; no las de una guía genérica |
-| SQL portado desde Oracle | skill `reviewing-oracle-to-postgres-migration` |
-| Endpoint de `query-service` | `/new-query-endpoint` + agente `query-service-endpoint-builder` |
-| Qué quedó obsoleto, firmas y llamadores | skill `analizando-migraciones` |
-| Regenerar el informe HTML y resumirlo | `/migration-analysis` (corre en un subagente) |
-| El servidor no se comporta como el repo | agente `server-drift-detector` |
-
-### Lo que aquí es distinto a la guía genérica de Flyway/Postgres
-
-`plpgsql` viene de fuera (`skills-lock.json`) y no conoce este repo, igual que
-cualquier guía genérica de Flyway. Donde chocan, manda esta regla:
-
-- **"Never modify applied migrations"**: aquí la regla es la contraria, se
-  edita la dueña in-place y el deploy re-aplica (`reaplicando-migraciones`).
-- **`CREATE INDEX CONCURRENTLY`**: falla dentro de la transacción de Flyway.
-  `CREATE INDEX IF NOT EXISTS`, parcial `WHERE active = true` si aplica.
-- **Undo (`U<n>__`)**: es de Flyway Teams; aquí no existe.
-- **`SERIAL` / `ON CONFLICT (cols)` de los ejemplos**: los UNIQUE de este
-  esquema son índices parciales; el `ON CONFLICT` repite su `WHERE`.
-
-## Anatomía de una función de endpoint
-
-Una función de endpoint es un **wrapper delgado**: valida permisos y delega. La
-lógica vive en un **núcleo sin gate**, que otro endpoint, un trigger, un reporte
-o una exportación pueden reutilizar sin volver a pedir permisos.
-
-```sql
--- wrapper: el único que sabe de permisos
-CREATE OR REPLACE FUNCTION fn_matricula_config_crear(p_pk_usuario BIGINT, ...)
-...
-  PERFORM academico_test.fn_assert_permiso_seccion(p_pk_usuario, 'MATRICULA', 'CREAR', ...);
-  RETURN academico_test.fn_matricula_config_crear_interno(...);
-```
-
-- **El gate va solo en el wrapper**: una llamada a `fn_assert_permiso_seccion` /
-  `fn_*_gate_escritura` / `fn_planeador_assert_alcance` al principio, y delegar.
-- **El núcleo no recibe `p_pk_usuario_solicitante`** salvo para auditoría. Si lo
-  necesita para decidir *qué* devuelve, eso es scope: se resuelve en el wrapper
-  y se le pasa ya resuelto como filtro.
-- **Nombre del núcleo: sufijo `_interno`** (precedente vivo:
-  `fn_matricula_config_crear_interno`, V159). No `_core` ni `_impl`.
-- **`COMMENT ON FUNCTION` es contrato, ≤ 600 caracteres** (`COMMENT-LARGO`): el
-  wrapper empieza por la ruta HTTP, el núcleo por `INTERNO:`; después qué
-  devuelve, el gate, los errores y quién lo reutiliza. El razonamiento de por
-  qué es así va al commit, igual que con los comentarios `--`.
-- **Antes de escribir un núcleo, busca uno que sirva** con `deps.py`. Reutilizar
-  es el objetivo, no un efecto secundario.
-- **Reportes y exportaciones no crean función propia:** llaman al mismo núcleo
-  que la pantalla. Una `fn_*_reporte_listar` aparte diverge de su `fn_*_listar`
-  en cuanto una de las dos se toca (pasó con V186-V190).
-- **Refactor incremental:** si ya vas a editar una función que lleva el gate en
-  línea, pártela en wrapper + núcleo **en esa misma migración**. No hay refactor
-  masivo de las funciones existentes.
-
-Por qué: cuando el gate va dentro de la lógica, la lógica no se puede reutilizar.
-V130 (ya borrada, ver V130.1) lo decía: se descartó crear funciones de reporte
-porque "duplicaría el WHERE y el gate de autorización de cada listado", y hubo
-que meter `p_page_size NULL` a la función existente.
+- **El gate solo en el wrapper** (`fn_assert_permiso_seccion`,
+  `fn_*_gate_escritura`, `fn_planeador_assert_alcance`), y delegar. El núcleo
+  `_interno` (no `_core` ni `_impl`; precedente V159) no recibe el usuario salvo
+  para auditoría: si lo necesita para decidir qué devuelve, es alcance y se le
+  pasa ya resuelto.
+- **Permisos y alcance son dos cosas.** Omitir establecimiento/sede/jornada en
+  el gate no es "sin restricción", es no comprobarla. En un listado el alcance
+  se filtra con la booleana (`fn_*_puede_ver`, `fn_planeador_alcanza`), nunca
+  reimplementándolo en el `WHERE`. Niveles, gates existentes y roles:
+  `definiendo-permisos`.
+- **Reportes y exportaciones llaman al núcleo de la pantalla**, sin función
+  propia: una `fn_*_reporte_listar` aparte diverge en cuanto se toca la otra
+  (V186-V190).
+- **Refactor incremental:** si editas una función con el gate en línea, pártela
+  en wrapper + núcleo en esa misma migración. Sin refactor masivo.
+- **`COMMENT ON FUNCTION` es contrato, ≤ 600 caracteres:** el wrapper empieza por
+  la ruta HTTP, el núcleo por `INTERNO:`; después qué devuelve, gate, errores y
+  quién lo reutiliza.
 
 ### Las validaciones también se componen
 
-El CRUD de un dominio repite las mismas comprobaciones en `_crear`, `_actualizar`
-y `_eliminar`. Escritas en línea, corregir una regla es encontrar sus N copias y
-acertar con todas.
+Una regla por función, `fn_<dominio>_validar_<regla>(...) RETURNS VOID` que lanza
+o no hace nada, invocada con `PERFORM` desde todo el CRUD (precedente V162:
+`fn_matricula_validar_cupo` y hermanas; V205 cambió el cupo editando una sola
+función). Si al nombrarla sale una "y", son dos. Toma los ids que necesita, no
+el usuario solicitante.
 
-Cada regla de negocio va en su propio `fn_<dominio>_validar_<regla>(...)` que
-**lanza o no hace nada** (`RETURNS VOID`), y el CRUD la invoca con `PERFORM`.
-Precedente vivo: `fn_matricula_validar_cupo`, `_validar_estudiante_disponible`,
-`_validar_periodo_vigente`, `_validar_plazo_matricula` (V162). Que funciona se
-demostró en V205: cambiar el cupo para que contara por estado fue **editar una
-función**, no perseguir llamadores.
+### Listados
 
-- Una regla por función, con nombre que diga la regla. Si al nombrarla te sale
-  una "y", son dos.
-- Toman los ids que necesitan, no el usuario solicitante: eso es el gate.
-- El orden de las comprobaciones es contrato, no gusto — ver más abajo.
-- Antes de escribir una, `deps.py` dice si ya existe.
-
-### Permisos y alcance son dos cosas
-
-El gate responde *¿puede hacer esto?*; el alcance, *¿sobre qué filas?*. Pasar
-solo el primero deja a un rector escribiendo en otro establecimiento.
-
-- `fn_assert_permiso_seccion(usuario, menu, accion, establecimiento, sede,
-  jornada)` — los tres últimos son el alcance. **Omitirlos no es "sin
-  restricción": es no comprobarla.** Si la fila cuelga de una sede, se pasa la
-  sede.
-- El nivel sale de `CATEGORIA_ROL` (V29/V120): `0` super admin (bypass),
-  `1` territorial, `2` establecimiento, `3` sede+jornada, `4` estudiantes y
-  familia. Se resuelve por el **texto** de `TLISTA_VALOR.VALOR`, y un rol sin
-  categoría o con un valor desconocido cae a `4` — fail-closed.
-- Un usuario multi-rol vale por su nivel **más alto**
-  (`fn_usuario_categoria_rol_nivel` = `MIN`).
-- En un listado el alcance no se pregunta, se **filtra**: la variante booleana
-  (`fn_*_puede_ver`, `fn_planeador_alcanza`) va en el `WHERE`. Nunca se
-  reimplementa el modelo de permisos en el `WHERE`: la booleana envuelve al
-  assert y captura el 42501, para que las dos formas no puedan divergir (V277).
-- Escribir permisos en el JWT no es escribirlos en la base. Son dos fuentes
-  distintas y al desincronizarse la UI muestra el botón y la base responde
-  42501.
-
-### Filtrar antes de agregar
-
-Un agregado que no depende de la página se calcula entero aunque salgan diez
-filas. `fn_usu_empleados_listar` agregaba sedes y estados sobre los **126 704**
-usuarios de `TSEDE_USUARIO` y después unía por `LEFT JOIN` con los ≤1 599 que
-podían aparecer: un `LEFT JOIN` contra un subquery con `GROUP BY` no deja al
-planner empujar el filtro hacia dentro. **11,5 s para 100 filas**, y el tiempo
-era el mismo con o sin filtros. V112 lo dejó en 83 ms.
-
-- El agregado por fila va como **subconsulta correlacionada en el `SELECT`** o
-  `LEFT JOIN LATERAL ... LIMIT 1`: Postgres solo lo evalúa para las filas que
-  sobreviven al `ORDER BY`/`LIMIT`.
-- Un CTE con `GROUP BY` que no menciona ningún parámetro de filtro es la señal:
-  se va a materializar entero.
-- `ILIKE '%x%'` sobre varias columnas no usa índice. Se unifica en **una**
-  expresión y se indexa **esa misma** expresión con GIN trigram — el planner
-  solo usa un índice de expresión si la consulta repite la expresión exacta.
-- Un listado PL/pgSQL con filtros opcionales `(p_x IS NULL OR col = p_x)` lleva
-  `SET plan_cache_mode = force_custom_plan` (`LISTADO-PLAN-GENERICO`): con el
-  plan genérico que PL/pgSQL acaba cacheando, ningún filtro usa su índice.
-- Paginación, total, "último por grupo" y agregados condicionales: plantilla de
-  listado en la skill `optimizando-consultas`.
-- Si el usuario pide probarlo, `EXPLAIN ANALYZE` contra el Postgres local con
-  datos, no a ojo.
+La forma de un listado (filtrar antes de agregar, agregados por fila con
+`LATERAL`, paginación y total, trigram, `plan_cache_mode` con filtros opcionales)
+está en `optimizando-consultas`; antes de indexar, `migration-analysis tabla <t>`.
 
 ### Antes de borrar, mira qué cuelga
 
-Un borrado lógico no rompe nada: deja la información viva y **inalcanzable**.
-Dar de baja una sede no miraba nada de lo que colgaba de ella; en el servidor de
-test 168 sedes arrastraron 256 periodos académicos, 1 170 grados, 3 632 grupos y
-**58 945 matrículas activas** colgando de sedes que ya no existían (V354). No es
-que el borrado las rompiera: es que nadie preguntó.
+Un borrado lógico no rompe nada: deja lo que cuelga vivo e inalcanzable (V354:
+168 sedes dadas de baja con 58 945 matrículas activas colgando).
 
-- Antes de escribir un `_eliminar` / `_soft_delete`, recorre la cadena de
-  relaciones hacia abajo (`deps.py`, `docs/MAPA.md`, las FK de la tabla) y
-  decide **explícitamente** qué bloquea y qué se arrastra.
-- Lo que bloquea se rechaza con **23503**, que es el código que el esquema ya usa
-  para "tiene dependientes" (`fn_matricula_eliminar` V163/V166, referente
-  curricular V213, actividad con notas V224, `fn_periodo_soft_delete` V37). El
-  gateway lo traduce a 409.
-- Distingue *terminado* de *dado de baja*: un periodo cerrado sigue siendo
-  historial y bloquea; uno que alguien ya retiró, no.
-- **El orden de los errores es contrato:** existencia (P0002) → estado (22023) →
-  gate (42501) → dependencias (23503). El guard de dependencias va **después**
-  del gate: a quien no tiene permiso sobre la sede no se le cuenta cuánto
-  historial tiene.
+- Antes de un `_eliminar`, recorre las relaciones hacia abajo (`deps.py`, FK de
+  la tabla) y decide **explícitamente** qué bloquea y qué se arrastra.
+- Lo que bloquea se rechaza con **23503** (el gateway da 409). *Terminado* bloquea
+  (es historial); *dado de baja*, no.
+- **El orden de errores es contrato:** existencia (P0002) → estado (22023) →
+  gate (42501) → dependencias (23503). A quien no tiene permiso no se le cuenta
+  qué cuelga.
 
 ### Comentarios: los justos, y solo de negocio
 
-Presupuesto: cabecera ≤ 12 líneas y ≤ 20% de líneas de comentario. Pero el
-límite no es el criterio; el criterio es **qué no se deduce leyendo el SQL**.
+Cabecera ≤ 12 líneas y ≤ 20% de comentario (error en una migración nueva). El
+criterio es **qué no se deduce del SQL**: una regla de negocio, una trampa de
+PostgreSQL que parece un error (`GREATEST(NULL,1)` vale 1), una guarda cuya
+ausencia no se notaría o por qué importa un orden. Repetir la línea siguiente,
+narrar la investigación o contar qué pasó en el servidor va al commit o al PR:
+en el `.sql` miente en cuanto alguien lo edita.
 
-Un comentario se gana su sitio cuando explica:
+## Restricciones propias
 
-- una **regla de negocio** que el código no puede decir por qué es así ("un
-  periodo TERMINADO sigue siendo historial y bloquea; uno dado de baja no");
-- una **trampa de PostgreSQL** que parece un error de tipeo (`GREATEST(NULL,1)`
-  vale 1, `count(DISTINCT) OVER` no existe, `ON CONFLICT DO NOTHING` no
-  actualiza);
-- una **guarda cuya ausencia no se notaría**, o por qué el orden de dos
-  comprobaciones importa.
-
-No lo vale: repetir en prosa la línea siguiente, narrar la investigación, listar
-las alternativas descartadas, ni contar qué pasó en el servidor. Eso va al
-mensaje de commit o a la descripción del PR, que es donde se busca la historia;
-dentro del `.sql` queda mintiendo en cuanto alguien edite la función.
-
-## Restricciones
-
-- **Numeración contra TODAS las ramas de `origin`.** Dos ramas que numeran a la
-  vez no chocan hasta que se mergea la segunda, y ahí Flyway rechaza el
-  despliegue entero (V53, V59, V66, V123, V136-V145).
-- **Un número anterior al que define el objeto hoy no vale.** Si `fn_x` la
-  define V500, una migración nueva V301 que la reescriba se pierde en una base
-  limpia y revierte V500 en un servidor que ya pasó de ahí — los dos entornos
-  quedan distintos. `deploy-test.yml` lo bloquea
-  (`python scripts/migration-analysis orden --base <ref>`).
-- **Los huecos no son números libres.** Casi siempre son una rama borrada o una
-  migración ya aplicada en un servidor. Reutilizar uno es una decisión explícita
-  de orden (out-of-order), confirmada antes con `/server-status`.
-- **Idempotencia obligatoria:** `IF NOT EXISTS`, `DROP ... IF EXISTS`, `DELETE`
-  por `uuid` antes del `INSERT`. Toda migración debe poder reaplicarse.
-- **Cambiar la aridad de una función exige `DROP FUNCTION IF EXISTS`** de la
-  firma vieja, o quedan dos sobrecargas vivas.
-- **Gate de permisos explícito** en todo endpoint, con su menú, su capability y
-  su alcance (ver arriba). Los CODIGO de menú van **sin tildes** y se comparan
-  exactos.
-- **Catálogos por texto, nunca por pk.** Los `pk_tlista_valor` difieren entre el
-  servidor de test y un Postgres limpio, y el catálogo de `TROL` no está en las
-  migraciones: llega por el dump base.
-- **Tabla nueva ⇒ declarar auditoría** (V26/V276).
+- **Un número anterior al de la dueña de hoy no vale:** se pierde en una base
+  limpia y revierte a la posterior en un servidor (`orden` lo bloquea en CI).
+- **Los huecos enteros no son libres** (rama borrada o ya aplicado en un
+  servidor). Usarlo es out-of-order, confirmado antes con `/server-status`.
+- **Idempotencia:** `IF NOT EXISTS`, `DROP ... IF EXISTS`, `DELETE` por `uuid`
+  antes del `INSERT`; todo fichero debe poder re-aplicarse.
 - **Mensajes de error con nombre legible**, no solo el PK.
-- **Sin auto-referencias** al propio `V<n>` dentro del cuerpo de una función: la
-  función sobrevive a su migración.
-- **Comentarios:** cabecera ≤ 12 líneas y ≤ 20% del archivo, y solo de lo que no
-  se deduce del SQL (ver arriba). En una migración nueva el linter lo trata
-  como **error**.
+- **Sin auto-referencias** al propio `V<n>` en el cuerpo: la función sobrevive a
+  su migración.
 - **Una regla del linter que nace o cambia congela su deuda en el mismo PR**
-  (`lint --all --baseline-regla <CODIGO>`), sin tocar las demás. Endurecer una
-  regla sin eso dejó 38 errores viejos mezclados con lo nuevo (#562, #590).
+  (`lint --all --baseline-regla <CODIGO>`); si no, los errores viejos se mezclan
+  con los nuevos (#562, #590).
 
-## Validación
+### Donde chocan las guías genéricas (`plpgsql`, Flyway)
 
-- **Probar el SQL es a petición.** No se levanta una base ni se aplica nada
-  para comprobar una migración salvo que el usuario lo pida; escribirla bien y
-  pasar el linter es el trabajo por defecto.
-- **Si se prueba, contra el Postgres local** (contenedor `sso-postgres`), nunca
-  contra un servidor: lo que se aplica ahí no tiene deshacer. El hook
-  `no_prod.py` bloquea todo comando que escriba en una base que no sea la local
-  —lo decide por lista blanca, así que el repo no guarda la dirección de ningún
-  servidor—. Leer para diagnosticar (`SELECT`, meta-comandos, `flyway info`,
-  `pg_dump`) sigue permitido.
-- `.github/scripts/check-flyway-migrations.sh` corre el historial completo sobre
-  un Postgres limpio y luego reaplica lo nuevo, que es la prueba de idempotencia.
+- *"Never modify applied migrations"*: aquí se edita la dueña y el deploy
+  re-aplica.
+- `CREATE INDEX CONCURRENTLY` falla dentro de la transacción de Flyway: `CREATE
+  INDEX IF NOT EXISTS`.
+- No hay migraciones undo (`U<n>__`, Flyway Teams).
+- Los UNIQUE son índices parciales `WHERE active = true`: el `ON CONFLICT` repite
+  su `WHERE`.
 
 ## Al cerrar
 
 ```bash
-python scripts/migration-analysis lint --all        # sin errores nuevos
-python scripts/migration-analysis informe
-python scripts/migration-analysis mapa                # si cambiaron funciones o endpoints
-python scripts/migration-analysis mapa --check        # lo comprueba sin reescribir (lo corre el hook Stop)
+python scripts/migration-analysis lint --all       # sin errores nuevos
+python scripts/migration-analysis orden <fichero>  # nada posterior pisa lo escrito
+python scripts/migration-analysis mapa             # si cambiaron funciones o endpoints
 ```
 
-El lint corre además como hook al editar cualquier `.sql` de este directorio, y
-esa misma edición regenera en segundo plano el informe HTML (pestaña
-**Calidad**: radio de impacto, endpoints sin gate, violaciones de capa,
-dependencias dinámicas y el lint) y poda la baseline de lo ya corregido. Antes
-de tocar una función con mucho radio de impacto, mírala ahí.
-Sus reglas no se silencian: si una no aplica en un caso concreto, se dice por
-qué en la respuesta.
+El informe HTML (pestaña **Calidad**: impacto, endpoints sin gate, capas) y la
+poda del baseline se regeneran solos tras cada edición; `mapa --check` lo
+comprueba el hook Stop. El CI (`check-flyway-migrations.sh`) aplica el
+historial sobre una base limpia y re-aplica lo nuevo.
