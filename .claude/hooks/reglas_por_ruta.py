@@ -34,6 +34,9 @@ _EQUIVALENTES = re.compile(
     r"deps\.py|migration-analysis|migration-reapply-set|reaplicar-migraciones|\bflyway\b"
 )
 _RUTA_VIRTUAL = "postgres/migrations/"
+# Por encima de ~10 KB el harness guarda la salida del hook en un fichero y solo
+# muestra un avance de 2 KB: la regla llegaria cortada.
+_MAX_INLINE = 8000
 
 
 def _glob_a_regex(glob: str) -> re.Pattern:
@@ -124,24 +127,37 @@ def main() -> int:
         cargadas = set()
 
     es_read = data.get("tool_name") == "Read"
-    nuevas, cuerpos = [], []
+    nuevas, cuerpos, a_leer, usado = [], [], [], 0
     for nombre, patrones, cuerpo in _reglas():
         if nombre in cargadas:
             continue
         leyo_la_regla = es_read and textos[0].endswith(f".claude/rules/{nombre}")
-        if leyo_la_regla or any(p.search(t) for p in patrones for t in textos):
+        if not (leyo_la_regla or any(p.search(t) for p in patrones for t in textos)):
+            continue
+        if es_read:
             nuevas.append(nombre)
-            if not es_read:
-                cuerpos.append(f"## .claude/rules/{nombre}\n\n{cuerpo}")
-    if not nuevas:
+        elif usado + len(cuerpo) <= _MAX_INLINE:
+            nuevas.append(nombre)
+            cuerpos.append(f"## .claude/rules/{nombre}\n\n{cuerpo}")
+            usado += len(cuerpo)
+        else:
+            # No se marca: se repite hasta que el Read de la regla la marque.
+            a_leer.append(f".claude/rules/{nombre}")
+    if a_leer:
+        cuerpos.append(
+            "Demasiado larga para ir aquí: haz `Read` ahora de " + ", ".join(a_leer)
+            + " antes de seguir con esta zona."
+        )
+    if not cuerpos and not nuevas:
         return 0
 
-    try:
-        MARCAS.mkdir(parents=True, exist_ok=True)
-        with marca.open("a", encoding="utf-8") as fh:
-            fh.write("\n".join(nuevas) + "\n")
-    except OSError:
-        pass
+    if nuevas:
+        try:
+            MARCAS.mkdir(parents=True, exist_ok=True)
+            with marca.open("a", encoding="utf-8") as fh:
+                fh.write("\n".join(nuevas) + "\n")
+        except OSError:
+            pass
     if cuerpos:
         print(json.dumps({"hookSpecificOutput": {
             "hookEventName": "PostToolUse",

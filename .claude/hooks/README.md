@@ -219,6 +219,10 @@ devuelve la regla en `additionalContext` la primera vez. `deps.py`,
   `session_id` y `agent_id`, porque un subagente empieza con el contexto vacío.
 - Un `Read` no inyecta: solo marca la regla como cargada (la cargó el harness, o
   se leyó la regla misma).
+- **Límite de tamaño:** pasado ~10 KB el harness guarda la salida en un fichero
+  y solo muestra 2 KB, así que una regla de más de 8000 caracteres
+  (`migraciones.md`) no va entera: va la orden de hacerle `Read`, que se repite
+  en cada llamada de su zona hasta que ese `Read` la marca.
 - `session-start.sh` borra las marcas de la sesión tras `/compact` o `/clear`.
 - Va aparte de `post_edit.py` porque su matcher es otro; sin `Edit` (exige un
   `Read` antes), para no sumar un proceso a cada edición. ~90 ms por llamada.
