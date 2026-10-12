@@ -154,6 +154,12 @@ def main() -> int:
     if not rutas:
         return 0
 
+    # Lo editado desde Bash no pasa por post_edit.py: aqui se pide tambien el
+    # informe de fondo (no hace nada si ya esta al dia).
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import informe_fondo
+    informe_fondo.lanzar()
+
     cli = REPO / "scripts" / "migration-analysis"
     if not (cli / "__main__.py").exists():
         return 0

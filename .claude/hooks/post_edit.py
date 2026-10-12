@@ -27,6 +27,7 @@ from pathlib import Path
 HOOKS = Path(__file__).resolve().parent
 REPO = HOOKS.parents[1]
 sys.path.insert(0, str(HOOKS / "comun"))
+sys.path.insert(0, str(HOOKS))
 from comando import payload, ruta_editada  # noqa: E402
 
 CON_TEXTO = {".sql", ".md", ".json", ".java", ".yml", ".yaml"}
@@ -111,6 +112,8 @@ def main() -> int:
             return 2
 
     if ext == ".sql" and "postgres/migrations" in p.as_posix():
+        import informe_fondo
+        informe_fondo.lanzar()  # HTML y baseline al dia, sin hacer esperar la edicion
         rc, salida = lint_migracion(p)
         if rc == 0:
             if salida:

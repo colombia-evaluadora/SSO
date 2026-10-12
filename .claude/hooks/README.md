@@ -17,6 +17,7 @@ pre_shell.py       PreToolUse   Bash|PowerShell  (corre las tres guardias)
   no_prod.py         guardia: escribir en una base que no es la local
   no_fugas.py        guardia: direcciones de servidor en commit/PR
 post_edit.py       PostToolUse  Write|Edit       (codificación, YAML, linter)
+  informe_fondo.py   no registrado: informe HTML + poda de baseline en segundo plano
 cierre_limpio.py   Stop
 fallo_conocido.py  PostToolUseFailure  Bash|PowerShell
 session-start.sh   SessionStart
@@ -130,6 +131,26 @@ Salud del fichero recién escrito, de lo más barato a lo más caro:
    eso se ocupa `cierre_limpio.py` al cerrar el turno.
 
 Sale con código 2 en el primer error.
+
+## `informe_fondo.py` (lo lanzan `post_edit.py` y `cierre_limpio.py`)
+
+No es un hook registrado. Mantiene al día `docs/auditoria/migraciones-analisis.html`
+y la baseline del lint sin hacer esperar a nadie: generar el informe cuesta
+~15 s, así que `post_edit.py` (al editar una migración) y `cierre_limpio.py` (al
+cerrar un turno con migraciones tocadas, que cubre lo editado desde Bash) solo
+llaman a `lanzar()`, que marca *pendiente* y arranca un proceso desacoplado.
+
+- **Un solo generador a la vez** (`%TEMP%/sso-informe.lock`, caduca a los 10
+  min). Las ediciones que llegan mientras genera dejan *pendiente* y se atienden
+  con **una** vuelta más al terminar, no una por edición.
+- **No regenera si nada cambió**: compara la huella del modelo más `vista/`,
+  `lint.py` y la baseline con la de la última generación buena (0,45 s).
+- Después del HTML corre `lint --all --baseline-podar`, que **solo quita** de la
+  baseline la deuda que ya no aparece. Nunca congela nada nuevo: hacerlo en
+  segundo plano sería silenciar el lint justo donde tiene que hablar. Por eso
+  `lint-baseline.json` puede aparecer modificado en `git status`: es deuda
+  corregida, y va en el commit.
+- Salida en `%TEMP%/sso-informe.log`.
 
 ## `cierre_limpio.py`
 
