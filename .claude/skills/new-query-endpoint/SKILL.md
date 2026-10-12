@@ -93,7 +93,7 @@ mano o las pruebas pegan contra la imagen vieja.
 
 ## 5. Postman (obligatorio al cerrar)
 
-Con la skill `postman-collection-generator`, genera
+Con la skill `documentando-con-postman`, genera
 `docs/<dominio>/<nombre>.postman_collection.json`
 (el dominio del endpoint: `docs/planeador/`, `docs/auditoria/`, ...):
 

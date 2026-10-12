@@ -3,13 +3,6 @@
     "PYTHONUTF8": "1",
     "PYTHONIOENCODING": "utf-8"
   },
-  "skillOverrides": {
-    "rabbitmq-development": "off",
-    "github-actions-templates": "off",
-    "github-actions-efficiency": "name-only",
-    "java-springboot": "off",
-    "github-actions": "off"
-  },
   "attribution": {
     "commit": "",
     "pr": ""

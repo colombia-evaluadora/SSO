@@ -89,7 +89,7 @@ Antes de buscar con grep:
   (no solo la rama actual) para determinar el siguiente `V<n>` realmente libre.
 - **Reutilización primero:** priorizar reutilizar código de migraciones ya definidas.
 - **Editar, no duplicar:** si el cambio solicitado corresponde a una migración existente concreta,
-  **editar esa migración** en lugar de crear una nueva. Ver la skill `flyway-migrations`.
+  **editar esa migración** en lugar de crear una nueva. Ver la skill `next-migration-number`.
 - **Presupuesto de comentarios:** cabecera de ≤ 12 líneas (qué hace / por qué aquí /
   depende de) y ≤ 20% de líneas de comentario. La narración de la investigación
   (alternativas descartadas, qué pasó en el servidor) va al mensaje de commit o a la
@@ -102,7 +102,7 @@ Antes de buscar con grep:
 ## Servicios Java
 
 - Al tocar cualquier servicio Java, apoyarse en la **documentación más actualizada**
-  (skills `java-spring-boot` / `java-springboot` / `spring-cloud-basics`, y búsqueda web si hace falta).
+  (skills `java-spring-boot` / `spring-cloud-basics`, y búsqueda web si hace falta).
 
 ## Variables de entorno y docker-compose
 
@@ -117,8 +117,7 @@ Antes de buscar con grep:
   campo, y cualquier otro apartado que ayude a clarificar los requisitos.
 - Al finalizar, dejar una **colección Postman** que documente el uso del endpoint:
   skill `documentando-con-postman` para la convención de este repo (login que
-  encadena el token, corrida que queda en cero), `postman-collection-generator`
-  para generarla desde rutas.
+  encadena el token, corrida que queda en cero).
 
 ## Cambios o análisis del servidor
 

@@ -57,7 +57,7 @@ anadidas despues sin indice que las encabece. Lo que hay que saber del esquema:
 - **Orden de columnas**: primero igualdad, luego rango u `ORDER BY`.
 - **Nunca `CONCURRENTLY` en una migracion**: Flyway corre cada migracion en una
   transaccion y `CREATE INDEX CONCURRENTLY` falla ahi ("cannot run inside a
-  transaction block"). La skill generica `flyway-migrations` lo sugiere; aqui
+  transaction block"). Las guias genericas de Flyway lo sugieren; aqui
   no aplica.
 - **Idempotente**: `CREATE INDEX IF NOT EXISTS`, nombre `idx_<tabla>_<que>`.
 - **Va en la migracion de la funcionalidad** que lo necesita (capa de

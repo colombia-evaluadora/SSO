@@ -36,7 +36,7 @@ No asumas. Pregunta al usuario:
 
 - Conoce `common`: `ParamBinder`, `SqlRewriter`, `ParamConstraintValidator`,
   `PlaceholderScanner`, entidades `Query` / `QueryParamConstraint`.
-- Consulta las skills `postgresql` y `plpgsql` para el SQL; `java-spring-boot`
+- Consulta las skills `optimizando-consultas` y `plpgsql` para el SQL; `java-spring-boot`
   / `spring-cloud-basics` si tocas código del servicio o el routing.
 - Registra la fila en `public.query` (y `query_param_constraint` si aplica)
   vía migración Flyway — coordínalo con el criterio del agente
@@ -47,7 +47,7 @@ No asumas. Pregunta al usuario:
 
 ## Paso 3 — documentar con Postman
 
-Al terminar, usa la skill `postman-collection-generator` para dejar una
+Al terminar, usa la skill `documentando-con-postman` para dejar una
 colección que documente el endpoint: request de ejemplo, todos los
 parámetros con su restricción, respuestas 200 / 4xx (incluido el 404 previo
 al restart), y la variable de entorno del base URL del gateway. Guárdala en

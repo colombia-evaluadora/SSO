@@ -66,7 +66,7 @@ agente `sso-admin-common-reviewer`.
 ## 5. Postman
 
 Si añadiste o cambiaste un endpoint, la colección en `docs/<dominio>/` es
-obligatoria (skill `postman-collection-generator`). Un endpoint sin colección
+obligatoria (skill `documentando-con-postman`). Un endpoint sin colección
 no está terminado.
 
 ## 6. Plan de commits

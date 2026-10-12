@@ -22,7 +22,7 @@ siempre implica el otro.
    Flyway que cree/altere la tabla en `academico_test`. Marca si falta alguna.
 2. **Drift JPA vs DDL**: nombres de tabla/columna, nullability, tipos,
    `@Column(length=...)` vs el `VARCHAR(n)` real, enums (`ExecutionMode`,
-   `WriteType`) vs `CHECK` / catálogo. Consulta las skills `postgresql` y
+   `WriteType`) vs `CHECK` / catálogo. Consulta la skill
    `plpgsql`; para conversiones sospechosas usa
    `reviewing-oracle-to-postgres-migration` (cadena vacía vs `NULL`, etc.).
 3. **Scope de build**: los cambios se validan con
@@ -38,8 +38,7 @@ siempre implica el otro.
 
 ## Manejo de gh / CI
 
-Cuando necesites mirar CI o PRs usa la skill `github-actions` (patrones de
-`gh` CLI y GitHub API). Recuerda que el workflow de `dev` tiene grupo de
+Para mirar CI o PRs usa `gh` (`gh pr checks`, `gh run view --log-failed`). Recuerda que el workflow de `dev` tiene grupo de
 concurrencia: un push nuevo **cancela** el run anterior — un job en
 `cancelled` no es un fallo de código, es que llegó otro push encima.
 

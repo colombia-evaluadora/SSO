@@ -14,9 +14,7 @@ raíz; en caso de conflicto, manda lo que diga este.
 
 | Trabajo | Usar |
 |---|---|
-| Escribir o modificar un workflow | skill `github-actions-templates` |
-| Revisar seguridad de un workflow | skill `github-actions-hardening` |
-| Coste / minutos de CI | skill `github-actions-efficiency` |
+| Revisar seguridad de un workflow (también al escribir uno) | skill `github-actions-hardening` |
 | El workflow toca `docker-compose` o variables | agente `docker-compose-steward` |
 | El workflow toca migraciones | agente `flyway-migration-author` antes de tocar el paso |
 

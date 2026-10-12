@@ -65,18 +65,17 @@ decimales de todas las ramas y PRs). Re-escanear antes de fusionar.
 | Gate, alcance, roles de `role_query` | skill `definiendo-permisos` |
 | Índices, listados, consultas lentas | skill `optimizando-consultas` (`migration-analysis tabla`) |
 | Funciones, triggers, PL/pgSQL | skill `plpgsql` |
-| SQL genérico de Postgres | skill `postgresql` |
-| Versionado y patrones Flyway | skill `flyway-migrations` (ver precedencia abajo) |
+| Versionado y patrones Flyway | las reglas de abajo; no las de una guía genérica |
 | SQL portado desde Oracle | skill `reviewing-oracle-to-postgres-migration` |
 | Endpoint de `query-service` | `/new-query-endpoint` + agente `query-service-endpoint-builder` |
 | Qué quedó obsoleto, firmas y llamadores | skill `analizando-migraciones` |
 | Regenerar el informe HTML y resumirlo | agente `migration-analysis-reporter` |
 | El servidor no se comporta como el repo | agente `server-drift-detector` |
 
-### Precedencia sobre las skills genéricas
+### Lo que aquí es distinto a la guía genérica de Flyway/Postgres
 
-`flyway-migrations`, `postgresql` y `plpgsql` vienen de fuera (`skills-lock.json`)
-y no conocen este repo. Donde chocan, manda esta regla:
+`plpgsql` viene de fuera (`skills-lock.json`) y no conoce este repo, igual que
+cualquier guía genérica de Flyway. Donde chocan, manda esta regla:
 
 - **"Never modify applied migrations"**: aquí la regla es la contraria, se
   edita la dueña in-place y el deploy re-aplica (`reaplicando-migraciones`).
