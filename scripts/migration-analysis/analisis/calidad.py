@@ -294,6 +294,10 @@ def analizar(model: dict) -> dict:
             "profundidad": prof_comp[comp_de[f]],
         })
 
+    por_cat = _por_categoria(model, nodos, endpoints, sucesores, llamadores, alcanzan,
+                             sin_gate, violaciones, en_linea, cuerpos, sccs, prof_comp, comp_de,
+                             g.java)
+
     impacto = sorted((r for r in filas if r["endpoints"]),
                      key=lambda r: (-r["endpoints"], -r["fan_in"], r["fn"]))
     profundas = sorted(filas, key=lambda r: (-r["profundidad"], -r["endpoints"], r["fn"]))
@@ -307,5 +311,128 @@ def analizar(model: dict) -> dict:
         "ciclos": ciclos,
         "violaciones_capa": violaciones,
         "endpoints_sin_gate": sorted(sin_gate, key=lambda r: (r["control"] != "ninguno", r["ruta"])),
-        "dinamicas": _dinamicas(chains, cuerpos),
+        "dinamicas": (dinamicas := _dinamicas(chains, cuerpos)),
+        "por_categoria": _sumar_dinamicas(por_cat, dinamicas, model),
     }
+
+
+RE_FILTRO_OPCIONAL = re.compile(r"\(\s*p_\w+\s+IS\s+NULL\s+OR\b", re.I)
+RE_ESCRIBE = re.compile(r"\b(?:INSERT\s+INTO|UPDATE\s+[\w.]+\s+SET|DELETE\s+FROM)\b", re.I)
+RE_OFFSET = re.compile(r"\bOFFSET\b", re.I)
+
+
+def _por_categoria(model, nodos, endpoints, sucesores, llamadores, alcanzan, sin_gate,
+                   violaciones, en_linea, cuerpos, sccs, prof_comp, comp_de, java) -> dict:
+    """Las reglas del repo medidas por categoria funcional: cada eje cuenta lo que
+    la regla pide y lo que la incumple, para que el informe diga donde mirar.
+
+    * seguridad: endpoints sin gate en su cadena (ninguno / escrito en linea);
+    * componentizacion: escrituras que delegan en un `_interno`, nucleos o
+      validaciones que llaman a un gate, gates escritos a mano;
+    * reutilizacion: helpers y validaciones llamados desde mas de un sitio,
+      funciones que nadie llama, reportes con funcion propia;
+    * extensibilidad: ciclos, profundidad, firmas cambiadas y llamadas
+      desalineadas, uso desde otras categorias;
+    * optimizacion: listados con filtros opcionales sin `plan_cache_mode`,
+      paginacion por OFFSET.
+    """
+    cat_de = (model.get("categories") or {}).get("object", {})
+    sin_gate_de = {r["q"]: r["control"] for r in sin_gate}
+    viol = {"function:" + r["fn"] for r in violaciones}
+    out: dict[str, dict] = {}
+
+    def C(c: str) -> dict:
+        return out.setdefault(c, {
+            "funciones": 0, "capas": defaultdict(int), "endpoints": 0,
+            "sin_gate": 0, "gate_en_linea_ep": 0, "escrituras": 0, "delegan": 0,
+            "violaciones": 0, "gate_a_mano": 0, "helpers": 0, "helpers_reusados": 0,
+            "validaciones": 0, "validaciones_reusadas": 0, "sin_uso": 0, "reportes": 0,
+            "desde_fuera": 0, "hacia_fuera": 0, "ciclos": 0, "prof_max": 0,
+            "listados": 0, "plan_generico": 0, "offset": 0, "dinamicas": 0,
+            "ejemplos": defaultdict(list),
+        })
+
+    def ejemplo(s: dict, clave: str, f: str) -> None:
+        if len(s["ejemplos"][clave]) < 6:
+            s["ejemplos"][clave].append(_corto(f))
+
+    for q in endpoints:
+        c = cat_de.get(q)
+        if not c:
+            continue
+        s = C(c)
+        s["endpoints"] += 1
+        control = sin_gate_de.get(q)
+        if control == "ninguno":
+            s["sin_gate"] += 1
+            ejemplo(s, "sin_gate", q)
+        elif control == "en-linea":
+            s["gate_en_linea_ep"] += 1
+
+    for f in nodos:
+        c = cat_de.get(f)
+        if not c:
+            continue
+        s = C(c)
+        nombre = _corto(f)
+        capa = capa_de(nombre)
+        s["funciones"] += 1
+        s["capas"][capa] += 1
+        llaman = llamadores.get(f, set())
+        hijos = sucesores.get(f, set())
+        s["prof_max"] = max(s["prof_max"], prof_comp[comp_de[f]])
+        s["desde_fuera"] += sum(1 for x in llaman if cat_de.get(x) not in (None, c))
+        s["hacia_fuera"] += sum(1 for x in hijos if cat_de.get(x) not in (None, c))
+        if capa == "escritura":
+            s["escrituras"] += 1
+            if any(capa_de(_corto(h)) == "interno" for h in hijos):
+                s["delegan"] += 1
+            else:
+                ejemplo(s, "sin_nucleo", f)
+        if f in viol:
+            s["violaciones"] += 1
+            ejemplo(s, "violaciones", f)
+        if f in en_linea and capa not in ("gate", "alcance"):
+            s["gate_a_mano"] += 1
+            ejemplo(s, "gate_a_mano", f)
+        if capa in ("interno", "otra", "alcance"):
+            s["helpers"] += 1
+            s["helpers_reusados"] += len(llaman) >= 2
+        if capa == "validacion":
+            s["validaciones"] += 1
+            s["validaciones_reusadas"] += len(llaman) >= 2
+        if not llaman and not alcanzan.get(f) and f not in java and capa not in (
+                "trigger", "auditoria"):
+            s["sin_uso"] += 1
+            ejemplo(s, "sin_uso", f)
+        if "_reporte" in nombre:
+            s["reportes"] += 1
+            ejemplo(s, "reportes", f)
+        cuerpo = cuerpos.get(f, "")
+        if capa == "lectura" and cuerpo:
+            s["listados"] += 1
+            if (len(RE_FILTRO_OPCIONAL.findall(cuerpo)) >= 3 and not RE_ESCRIBE.search(cuerpo)
+                    and "plan_cache_mode" not in cuerpo.lower()):
+                s["plan_generico"] += 1
+                ejemplo(s, "plan_generico", f)
+            if RE_OFFSET.search(cuerpo):
+                s["offset"] += 1
+
+    for comp in sccs:
+        if len(comp) > 1:
+            for c in {cat_de.get(n) for n in comp} - {None}:
+                C(c)["ciclos"] += 1
+
+    for s in out.values():
+        s["capas"] = dict(s["capas"])
+        s["ejemplos"] = dict(s["ejemplos"])
+    return out
+
+
+def _sumar_dinamicas(por_cat: dict, dinamicas: list[dict], model: dict) -> dict:
+    cat_de = (model.get("categories") or {}).get("object", {})
+    for d in dinamicas:
+        c = cat_de.get("function:" + d["fn"])
+        if c in por_cat:
+            por_cat[c]["dinamicas"] += 1
+    return por_cat
