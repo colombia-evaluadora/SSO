@@ -19,6 +19,16 @@
             "statusMessage": "Revisando el fichero editado..."
           }
         ]
+      },
+      {
+        "matcher": "Bash|PowerShell|Grep|Glob|Read|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \"$CLAUDE_PROJECT_DIR/.claude/hooks/reglas_por_ruta.py\"",
+            "timeout": 10
+          }
+        ]
       }
     ],
     "SessionStart": [

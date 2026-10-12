@@ -18,6 +18,7 @@ pre_shell.py       PreToolUse   Bash|PowerShell  (corre las tres guardias)
   no_fugas.py        guardia: direcciones de servidor en commit/PR
 post_edit.py       PostToolUse  Write|Edit       (codificación, YAML, linter)
   informe_fondo.py   no registrado: informe HTML + poda de baseline en segundo plano
+reglas_por_ruta.py PostToolUse  Bash|PowerShell|Grep|Glob|Read|Write  (reglas sin Read)
 cierre_limpio.py   Stop
 fallo_conocido.py  PostToolUseFailure  Bash|PowerShell
 session-start.sh   SessionStart
@@ -203,11 +204,32 @@ nueva de `public.query`. El 404 se casa como número, no como "Not Found": eso
 casaba con cualquier `command not found` y metía la pista de query-service donde
 no venía a cuento.
 
+## `reglas_por_ruta.py`
+
+`PostToolUse` sobre `Bash|PowerShell|Grep|Glob|Read|Write`. El harness solo carga
+una regla de `.claude/rules/` con `paths:` cuando el agente hace `Read` de un
+fichero de su zona: un `Grep` sobre `postgres/`, un `cat` por shell o trabajar
+solo con `deps.py` / `hueco` no la cargaban nunca. El hook cruza las rutas de la
+llamada con el `paths:` de cada regla (leído del frontmatter, sin duplicarlo) y
+devuelve la regla en `additionalContext` la primera vez. `deps.py`,
+`migration-analysis`, `migration-reapply-set` y `flyway` cuentan como
+`postgres/`.
+
+- **Una vez por sesión y por agente:** la marca en `%TEMP%/sso-reglas/` lleva
+  `session_id` y `agent_id`, porque un subagente empieza con el contexto vacío.
+- Un `Read` no inyecta: solo marca la regla como cargada (la cargó el harness, o
+  se leyó la regla misma).
+- `session-start.sh` borra las marcas de la sesión tras `/compact` o `/clear`.
+- Va aparte de `post_edit.py` porque su matcher es otro; sin `Edit` (exige un
+  `Read` antes), para no sumar un proceso a cada edición. ~90 ms por llamada.
+
 ## `session-start.sh`
 
 Imprime rama, techo local de migraciones y si hay migraciones sin commitear.
 A propósito **no** hace `git fetch`: el número libre real contra todas las ramas
 lo da `python scripts/migration-analysis hueco`, que consulta todas las ramas y PRs (~4 s).
+También reinicia las marcas de `reglas_por_ruta.py` cuando arranca tras `/compact`
+o `/clear`.
 
 ## Probarlos a mano
 

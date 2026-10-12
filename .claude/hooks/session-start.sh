@@ -9,6 +9,10 @@ set -uo pipefail
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$REPO" || exit 0
 
+# Tras /compact o /clear las reglas de .claude/rules/ se pierden con la historia:
+# reglas_por_ruta.py debe volver a inyectarlas.
+python .claude/hooks/reglas_por_ruta.py --reiniciar 2>/dev/null || true
+
 branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo '?')
 top=$(ls postgres/migrations 2>/dev/null | grep -oE '^V[0-9]+' | grep -oE '[0-9]+' \
       | sort -n | tail -1)
