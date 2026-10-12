@@ -71,6 +71,12 @@ def compact(model: dict) -> dict:
         "meta": model["meta"],
         "coverage": model.get("coverage", {}),
         "cat": compact_categories(model.get("categories"), chains),
+        "rel": [[e["from"], e["to"], e["k"], e["n"], e["objs"], 1 if e["fo"] else 0]
+                for e in (model.get("relaciones") or {}).get("aristas", [])],
+        "qc": (model.get("calidad") or {}).get("por_categoria", {}),
+        "lintv": (model.get("lint") or {}).get("por_version", {}),
+        "lintsev": {r: d["severidad"] for r, d in
+                    ((model.get("lint") or {}).get("reglas") or {}).items()},
     }
 
 
@@ -144,6 +150,12 @@ def chain_label(key: str, ws: list[dict]) -> tuple[str, str]:
                "constraint", "schema", "sequence", "extension", "publication"):
         schema = rest.split(".")[0] if "." in rest else "public"
         return f"DDL {schema}", rest
+
+    if typ == "comment":
+        target, _, arity = rest.rpartition("/")
+        ttyp, _, tname = (target or rest).partition(":")
+        short = (tname or ttyp).rsplit(".", 1)[-1]
+        return "Comentarios (COMMENT ON)", f"{short}({arity})" if arity.isdigit() else short
 
     if typ in ("role", "route", "endpoint"):
         nombre = {"role": "roles", "route": "rutas del menú",
@@ -398,9 +410,17 @@ tr.person{cursor:pointer}
 .stat .k{font-size:10.5px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted)}
 .stat .n{font-family:var(--mono);font-size:19px;font-weight:600;font-variant-numeric:tabular-nums}
 .stat .s{font-size:11px;color:var(--muted)}
-#depgraph{height:640px;background:var(--panel);border:1px solid var(--rule);border-radius:6px;
+#depgraph{height:760px;background:var(--panel);border:1px solid var(--rule);border-radius:6px;
  box-shadow:var(--shadow);min-width:0}
-.graphsplit{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:12px;margin-bottom:18px}
+.graphsplit{display:grid;grid-template-columns:minmax(0,1fr) 360px;gap:12px;margin-bottom:18px}
+#gdetail{max-height:720px;overflow:auto}
+.relkinds{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin:4px 0 6px}
+.relsw{display:inline-block;width:18px;height:0;border-top:2px var(--st,solid) var(--c);
+ vertical-align:middle;margin-right:6px}
+.relchip[aria-pressed="false"]{opacity:.5}
+.tag-fo{font-size:10px;font-family:var(--mono);padding:0 5px;border-radius:8px;
+ border:1px solid var(--resid);color:var(--resid);white-space:nowrap}
+.relbox .sect{margin-top:10px}
 @media (max-width:900px){.graphsplit{grid-template-columns:1fr} #depgraph{height:480px}}
 #gdetail{max-height:640px;overflow:auto}
 #gdetail .gobj{font-family:var(--mono);font-size:11.5px;color:var(--muted);word-break:break-all}
@@ -514,7 +534,8 @@ const TYPE_ES = {function:'función', query_row:'fila query', table:'tabla',
   domain:'dominio', role:'rol', route:'ruta', endpoint:'endpoint',
   bind:'bind', data:'datos', dynamic:'DDL dinámico', schema:'esquema',
   constraint:'constraint', sequence:'secuencia', extension:'extensión',
-  publication:'publicación', scratch:'temporal', query_bulk:'query masivo'};
+  publication:'publicación', scratch:'temporal', query_bulk:'query masivo',
+  comment:'comentario'};
 const KIND_ES = {create:'crea', replace:'redefine', 'create-table':'crea tabla',
   'alter-table':'altera', 'add-column':'añade columna', 'drop-column':'quita columna',
   'add-constraint':'añade constraint', 'drop-constraint':'quita constraint',
@@ -663,8 +684,6 @@ function selectMig(v) {
   const m = byV(v);
   const refs = m.cr.filter(byV);
   const usedBy = D.migs.filter(x => x.cr.includes(v)).map(x => x.v);
-  const eOut = D.edges.filter(e => e.from === v);
-  const eIn  = D.edges.filter(e => e.to === v);
   const order = {live:0, 'patch-live':1, dead:2, 'patch-dead':3};
   const ws = [...m.w].sort((a,b) => (order[a[3]]??9)-(order[b[3]]??9));
 
@@ -726,14 +745,8 @@ function selectMig(v) {
         <span class="st-dead">${m.dw} muertas</span></dd>
       <dt>sentencias</dt><dd>${m.st2}</dd>
     </dl>
-    ${dep('Usa objetos creados en', eOut.map(e =>
-      `<button class="node n-live" data-goto="${e.to}" title="${esc(e.objs.join(', '))}"
-       >V${e.to} <span class="dim">${e.objs.length}</span></button>`),
-      'si esa migración cambia una firma, esta es la que hay que revisar')}
-    ${dep('Sus objetos los usa', eIn.map(e =>
-      `<button class="node n-live" data-goto="${e.from}" title="${esc(e.objs.join(', '))}"
-       >V${e.from} <span class="dim">${e.objs.length}</span></button>`),
-      'migraciones que romperían si esta cambia una firma')}
+    <h3 class="sect">Relaciones con otras migraciones</h3>
+    <div class="relbox">${relSections(v)}</div>
     ${dep('Menciona en comentarios', refs.map(r =>
       `<button class="node n-${byV(r).vd==='obsoleta'?'dead':'live'}"
         data-goto="${r}">V${r}</button>`), 'referencias documentadas, no verificadas')}
@@ -744,6 +757,7 @@ function selectMig(v) {
     <h3 class="sect">Objetos escritos <span class="n">${ws.length}</span></h3>
     ${grpHtml || '<div class="empty">sin objetos rastreables</div>'}`;
   wireGoto($('#migdetail'));
+  wireRel($('#migdetail'));
 }
 
 /* Lo que dice precision.py de recortar o re-aplicar esta migración. */
@@ -836,9 +850,9 @@ function renderObjs() {
     <tr class="clickable ${selObj===o.key?'sel':''}" data-key="${esc(o.key)}">
       <td class="dim">${TYPE_ES[o.type]||o.type}</td>
       <td class="m" title="${esc(o.key)}">${hl(o.label, objQ)}</td>
-      <td><div class="chain">${o.ext ? '<span class="dim">ninguna migración lo define</span>' : ''}${o.steps.map((s,i) => `${i?'<span class="arrow">→</span>':''}
-        <button class="node n-${s[2]}" data-goto="${s[0]}"
-         title="${esc(kindEs(s[3]))} · ${esc(s[2])} · L${s[4]}">V${s[0]}</button>`).join('')}</div></td>
+      <td><div class="chain">${o.ext ? '<span class="dim">ninguna migración lo define</span>' : ''}${stepRuns(o.steps).map((r,i) => `${i?'<span class="arrow">→</span>':''}
+        <button class="node n-${r.st}" data-goto="${r.v}"
+         title="${esc(r.title)}">V${r.v}${r.n > 1 ? `<span class="dim"> ×${r.n}</span>` : ''}</button>`).join('')}</div></td>
       <td class="num dim">${(usedBy.get(o.key)||[]).length||''}</td>
     </tr>`).join('') || '<tr><td colspan="4" class="empty">Sin resultados</td></tr>';
   if (rows.length > 800)
@@ -847,6 +861,19 @@ function renderObjs() {
   $$('#objbody tr[data-key]').forEach(tr =>
     tr.addEventListener('click', () => selectObj(tr.dataset.key)));
   wireGoto($('#objbody'));
+}
+
+/* Las escrituras seguidas de una misma migración son un solo paso del flujo:
+   el estado que queda es el de la última. */
+function stepRuns(steps) {
+  const runs = [];
+  steps.forEach(s => {
+    const last = runs[runs.length - 1];
+    const t = `${kindEs(s[3])} · ${STATUS_ES[s[2]] || s[2]} · L${s[4]}${s[5] ? ' → V' + s[5] : ''}`;
+    if (last && last.v === s[0]) { last.n++; last.st = s[2]; last.title += '\n' + t; }
+    else runs.push({v: s[0], st: s[2], n: 1, title: t});
+  });
+  return runs;
 }
 
 const STATUS_ES = {live:'vive', dead:'reescrita', 'patch-live':'parche vigente',
@@ -1361,135 +1388,369 @@ let cy = null, gFocus = null;
 const cssVar = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
 const VD_VAR = {obsoleta:'--dead', residual:'--resid', parcial:'--muted', viva:'--live',
   'solo-binds':'--accent', 'sin-cambios':'--faint'};
-const objsShort = objs => objs.length > 3
-  ? objs.slice(0, 3).map(o => o.split('.').pop()).join(', ') + ` +${objs.length - 3}`
-  : objs.map(o => o.split('.').pop()).join(', ');
+// [from, to, tipo, usos, objetos, fuera de orden]: `from` actúa sobre lo que definía `to`
+const REL = D.rel || [];
+const REL_K = {
+  usa:      {es:'llama', out:'Llama a funciones de', in:'Sus funciones las llaman', v:'--accent', st:'solid'},
+  redefine: {es:'redefine', out:'Redefine objetos de', in:'La redefinen', v:'--dead', st:'solid'},
+  parchea:  {es:'parchea', out:'Parchea objetos de', in:'La parchean', v:'--patch', st:'dashed'},
+  borra:    {es:'borra', out:'Borra objetos de', in:'Le borran objetos', v:'--dead', st:'dotted'},
+  lee:      {es:'lee', out:'Lee tablas de', in:'Sus tablas las leen', v:'--faint', st:'solid'},
+};
+const REL_ORDER = ['usa', 'redefine', 'parchea', 'borra', 'lee'];
+// `lee` apagado por defecto: casi todo lee las tablas de V22 y tapa el resto
+const gKinds = new Set(['usa', 'redefine', 'parchea', 'borra']);
+const relCount = {};
+REL.forEach(e => { relCount[e[2]] = (relCount[e[2]] || 0) + 1; });
+const relOut = new Map(), relIn = new Map();
+REL.forEach(e => {
+  if (!relOut.has(e[0])) relOut.set(e[0], []); relOut.get(e[0]).push(e);
+  if (!relIn.has(e[1])) relIn.set(e[1], []); relIn.get(e[1]).push(e);
+});
+const pressed = s => $(s).getAttribute('aria-pressed') === 'true';
+const togglePress = el => el.setAttribute('aria-pressed', String(el.getAttribute('aria-pressed') !== 'true'));
+const catColor = i => C.defs[i]?.color || '#9E9E9E';
+
+function relObjs(objs, max) {
+  const list = objs.slice(0, max).map(k => `<button class="objlink" data-relobj="${esc(k)}"
+    title="${esc(k)}">${esc(objLabel(k))}</button>`).join(', ');
+  return list + (objs.length > max ? ` <span class="dim">+${objs.length - max}</span>` : '');
+}
+
+/* Secciones por tipo de relación de una migración: lo usa el detalle del grafo
+   y el de la pestaña Migraciones, para que digan lo mismo. */
+function relSections(v, kinds) {
+  const sec = (es, end, label) => {
+    const rows = es.filter(e => !kinds || kinds.has(e[2]));
+    if (!rows.length) return '';
+    return REL_ORDER.map(k => {
+      const rs = rows.filter(e => e[2] === k).sort((a, b) => b[3] - a[3] || +a[end] - +b[end]);
+      if (!rs.length) return '';
+      return `<h3 class="sect"><span class="relsw" style="--c:var(${REL_K[k].v});--st:${REL_K[k].st}"></span>
+        ${REL_K[k][label]} <span class="n">${rs.length}</span></h3>
+        <div class="uselist">${rs.map(e => `<div class="use"><span class="who">
+          <button class="node n-${byV(e[end])?.vd === 'obsoleta' ? 'dead' : 'live'}" data-goto="${e[end]}"
+            data-gfocus="${e[end]}">V${e[end]}</button>${catDot(catOfMig(e[end]))}
+          <span class="gobj">${relObjs(e[4], 4)}</span></span>
+          <span class="at">${e[5] ? '<span class="tag-fo" title="usa algo que solo define una versión posterior">fuera de orden</span> ' : ''}${e[3]}×</span></div>`).join('')}</div>`;
+    }).join('');
+  };
+  const out = sec(relOut.get(v) || [], 1, 'out'), inn = sec(relIn.get(v) || [], 0, 'in');
+  return (out || inn) ? out + inn
+    : '<div class="empty" style="padding:8px">No usa, redefine ni parchea nada de otra migración, y nadie usa lo suyo.</div>';
+}
+
+function wireRel(root) {
+  $$('[data-relobj]', root).forEach(b => b.addEventListener('click', e => {
+    e.stopPropagation();
+    const k = b.dataset.relobj;
+    $('.tab[data-tab="objetos"]').click();
+    if (D.chains[k] || usedBy.has(k)) selectObj(k);
+    else { $('#objsearch').value = objLabel(k); objQ = objLabel(k); renderObjs(); }
+  }));
+}
+
+function gRange() {
+  const lo = +$('#gfrom').value || -Infinity, hi = +$('#gto').value || Infinity;
+  return v => +v >= lo && +v <= hi;
+}
+
+function graphEdges() {
+  const inR = gRange(), cat = $('#gcat').value;
+  return REL.filter(e => gKinds.has(e[2]) && inR(e[0]) && inR(e[1]) &&
+    (cat === '' || catOfMig(e[0]) === +cat || catOfMig(e[1]) === +cat));
+}
 
 function graphElements() {
-  const lo = +$('#gfrom').value || -Infinity, hi = +$('#gto').value || Infinity;
-  const inR = v => +v >= lo && +v <= hi;
-  const edges = D.edges.filter(e => e.from !== e.to && inR(e.from) && inR(e.to));
-  const vs = new Set(edges.flatMap(e => [e.from, e.to]));
+  const inR = gRange(), cat = $('#gcat').value;
+  const edges = graphEdges();
   const deg = new Map();
-  edges.forEach(e => [e.from, e.to].forEach(v => deg.set(v, (deg.get(v) || 0) + 1)));
+  edges.forEach(e => [e[0], e[1]].forEach(v => deg.set(v, (deg.get(v) || 0) + 1)));
+  const vs = new Set(deg.keys());
+  if (pressed('#giso'))
+    D.migs.forEach(m => { if (inR(m.v) && (cat === '' || catOfMig(m.v) === +cat)) vs.add(m.v); });
+  const group = pressed('#ggroup');
+  const cats = new Set([...vs].map(v => catOfMig(v)).filter(i => i != null));
+  const parents = group ? [...cats].map(i => ({data: {id: 'cat' + i, label: C.defs[i].label,
+    color: catColor(i), isCat: 1}})) : [];
+  // varias relaciones entre el mismo par se dibujan como una arista por tipo
   return [
-    ...[...vs].map(v => { const m = byV(v);
-      return {data: {id: v, label: 'V' + v, name: m ? m.n : '', vd: m ? m.vd : 'viva',
-                     deg: deg.get(v)}}; }),
-    ...edges.map(e => ({data: {id: e.to + '>' + e.from, source: e.to, target: e.from,
-      objs: e.objs, label: objsShort(e.objs)}})),
+    ...parents,
+    ...[...vs].map(v => { const m = byV(v), c = catOfMig(v);
+      return {data: {id: v, label: 'V' + v, vd: m ? m.vd : 'viva', cat: c,
+        parent: group && c != null ? 'cat' + c : undefined, deg: deg.get(v) || 0,
+        color: catColor(c)}}; }),
+    ...edges.map(e => ({data: {id: `${e[1]}>${e[0]}:${e[2]}`, source: e[1], target: e[0],
+      k: e[2], n: e[3], fo: e[5], objs: e[4], inter: catOfMig(e[0]) !== catOfMig(e[1]) ? 1 : 0,
+      label: `${REL_K[e[2]].es}: ${e[4].slice(0, 2).map(objLabel).join(', ')}${e[4].length > 2 ? ` +${e[4].length - 2}` : ''}`}})),
   ];
 }
 
 function graphStyle() {
   const ink = cssVar('--ink'), muted = cssVar('--muted'), rule = cssVar('--rule'),
         panel = cssVar('--panel'), acc = cssVar('--accent');
+  const byColor = $('#gcolor').value;
   return [
     {selector: 'node', style: {
-      'background-color': n => cssVar(VD_VAR[n.data('vd')] || '--muted'),
-      width: n => 10 + 3 * Math.sqrt(n.data('deg')), height: n => 10 + 3 * Math.sqrt(n.data('deg')),
-      label: 'data(label)', 'font-size': 9, color: ink, 'font-family': 'monospace',
-      'text-valign': 'top', 'text-margin-y': -2, 'min-zoomed-font-size': 7}},
+      'background-color': n => byColor === 'vd' ? cssVar(VD_VAR[n.data('vd')] || '--muted') : n.data('color'),
+      width: n => 9 + 3 * Math.sqrt(n.data('deg') || 0), height: n => 9 + 3 * Math.sqrt(n.data('deg') || 0),
+      label: 'data(label)', 'font-size': 8, color: ink, 'font-family': 'monospace',
+      'text-valign': 'top', 'text-margin-y': -2, 'min-zoomed-font-size': 6,
+      'border-width': n => n.data('vd') === 'obsoleta' ? 2 : 0, 'border-color': cssVar('--dead'),
+      'border-style': 'dashed'}},
+    {selector: 'node[?isCat]', style: {
+      'background-color': n => n.data('color'), 'background-opacity': .07,
+      'border-width': 1, 'border-color': n => n.data('color'), 'border-style': 'solid',
+      'border-opacity': .6, shape: 'round-rectangle', label: 'data(label)',
+      'font-family': 'sans-serif', 'font-weight': 600, color: n => n.data('color'),
+      'text-valign': 'top', 'text-halign': 'center', 'text-margin-y': -4, padding: 10,
+      'font-size': 16,
+      'min-zoomed-font-size': 4}},
     {selector: 'edge', style: {
-      width: 1, 'line-color': rule, 'target-arrow-color': rule, 'target-arrow-shape': 'triangle',
-      'arrow-scale': .7, 'curve-style': 'bezier', opacity: .7}},
+      width: e => Math.min(4, .7 + Math.log2(1 + e.data('n')) / 2),
+      'line-color': e => cssVar(REL_K[e.data('k')].v),
+      'target-arrow-color': e => cssVar(REL_K[e.data('k')].v),
+      'line-style': e => REL_K[e.data('k')].st,
+      'target-arrow-shape': 'triangle', 'arrow-scale': .6, 'curve-style': 'bezier', opacity: .45}},
+    {selector: 'edge[?fo]', style: {'line-style': 'dashed', 'line-dash-pattern': [2, 3]}},
+    // agrupado, las aristas entre categorías tapan los racimos: tenues hasta elegir un nodo
+    {selector: 'edge.dim', style: {opacity: .1}},
     {selector: '.lbl', style: {
-      label: 'data(label)', 'font-size': 8, color: muted, 'text-rotation': 'autorotate',
+      label: 'data(label)', 'font-size': 7.5, color: muted, 'text-rotation': 'autorotate',
       'text-background-color': panel, 'text-background-opacity': 1, 'text-background-padding': 1,
       'font-family': 'monospace'}},
-    {selector: '.faded', style: {opacity: .08}},
-    {selector: 'edge.in', style: {'line-color': cssVar('--live'), 'target-arrow-color': cssVar('--live'), width: 1.6, opacity: 1}},
-    {selector: 'edge.out', style: {'line-color': cssVar('--resid'), 'target-arrow-color': cssVar('--resid'), width: 1.6, opacity: 1}},
-    {selector: 'node.focus', style: {'border-width': 3, 'border-color': acc}},
+    {selector: '.faded', style: {opacity: .07}},
+    {selector: 'node[?isCat].faded', style: {opacity: .25}},
+    {selector: 'edge.hot', style: {opacity: 1, width: e => Math.min(5, 1.4 + Math.log2(1 + e.data('n')) / 2)}},
+    {selector: 'node.focus', style: {'border-width': 3, 'border-color': acc, 'border-style': 'solid'}},
   ];
+}
+
+/* Distribución dentro de un racimo: fuerzas propias en vez de cose, que separa
+   cada componente desconectado y manda las migraciones sueltas al otro extremo
+   del grupo. Aquí las aristas internas atraen, la repulsión es solo de corto
+   alcance (lo justo para no pisarse) y una gravedad lineal hacia el centro deja
+   las sueltas pegadas al borde. Parte de una espiral por versión, así que el
+   resultado es el mismo en cada carga. */
+const D0 = 30;
+function forceCluster(ids, links) {
+  const n = ids.length, at = new Map(ids.map((v, i) => [v, i]));
+  const P = ids.map((_, k) => { const r = D0 * .9 * Math.sqrt(k + .5), a = k * 2.39996;
+    return [r * Math.cos(a), r * Math.sin(a)]; });
+  const E = links.map(([a, b, w]) => [at.get(a), at.get(b), w]);
+  const IT = n > 1 ? 220 : 0, CUT2 = (2.5 * D0) ** 2;
+  for (let it = 0; it < IT; it++) {
+    const F = P.map(() => [0, 0]), step = 1 + 12 * (1 - it / IT);
+    for (let i = 0; i < n; i++) for (let j = i + 1; j < n; j++) {
+      const dx = P[i][0] - P[j][0], dy = P[i][1] - P[j][1], d2 = Math.max(dx * dx + dy * dy, 1);
+      if (d2 > CUT2) continue;
+      const f = D0 * D0 / d2;
+      F[i][0] += dx * f; F[i][1] += dy * f; F[j][0] -= dx * f; F[j][1] -= dy * f;
+    }
+    E.forEach(([a, b, w]) => {
+      const dx = P[b][0] - P[a][0], dy = P[b][1] - P[a][1], d = Math.hypot(dx, dy) || 1;
+      const f = .08 * Math.min(3, w) * (d - D0) / d;
+      F[a][0] += dx * f; F[a][1] += dy * f; F[b][0] -= dx * f; F[b][1] -= dy * f;
+    });
+    for (let i = 0; i < n; i++) {
+      F[i][0] -= .03 * P[i][0]; F[i][1] -= .03 * P[i][1];
+      const m = Math.hypot(F[i][0], F[i][1]) || 1, s = Math.min(step, m) / m;
+      P[i][0] += F[i][0] * s; P[i][1] += F[i][1] * s;
+    }
+  }
+  const cx = P.reduce((a, p) => a + p[0], 0) / (n || 1), cyy = P.reduce((a, p) => a + p[1], 0) / (n || 1);
+  P.forEach(p => { p[0] -= cx; p[1] -= cyy; });
+  const R = Math.max(D0, ...P.map(p => Math.hypot(p[0], p[1]))) + 18;
+  return {P, R};
+}
+
+/* Agrupado: cose con nodos compuestos y cientos de aristas entre grupos estira
+   cada grupo a decenas de miles de px. Cada categoría se distribuye sola
+   (forceCluster) y los racimos se empaquetan por filas, del más grande al más
+   chico, con la proporción del panel. */
+function clusterPositions() {
+  const GAP = 60;
+  const groups = new Map();
+  cy.nodes('[!isCat]').forEach(n => {
+    const c = n.data('cat') ?? -1;
+    if (!groups.has(c)) groups.set(c, []);
+    groups.get(c).push(n.id());
+  });
+  const intra = new Map();
+  cy.edges().forEach(e => {
+    const a = e.source(), b = e.target(), c = a.data('cat') ?? -1;
+    if (c !== (b.data('cat') ?? -1) || a.id() === b.id()) return;
+    if (!intra.has(c)) intra.set(c, []);
+    intra.get(c).push([a.id(), b.id(), e.data('n')]);
+  });
+  const laid = [...groups.entries()].map(([c, ids]) => {
+    ids.sort((a, b) => +a - +b);
+    return {ids, ...forceCluster(ids, intra.get(c) || [])};
+  }).sort((a, b) => b.R - a.R);
+  const area = laid.reduce((a, g) => a + (2 * g.R + GAP) ** 2, 0);
+  const ROW_W = Math.sqrt(area * cy.width() / Math.max(1, cy.height()));
+  const pos = {};
+  let x = 0, y = 0, rowH = 0;
+  laid.forEach(g => {
+    if (x > 0 && x + 2 * g.R > ROW_W) { x = 0; y += rowH + GAP; rowH = 0; }
+    g.ids.forEach((v, i) => { pos[v] = {x: x + g.R + g.P[i][0], y: y + g.R + g.P[i][1]}; });
+    x += 2 * g.R + GAP;
+    rowH = Math.max(rowH, 2 * g.R);
+  });
+  return pos;
 }
 
 function graphLayout() {
   if (!cy) return;
-  cy.layout({name: 'cose', animate: false, nodeRepulsion: () => 9000, idealEdgeLength: () => 70,
-             gravity: .25, numIter: 1500, randomize: true, fit: true, padding: 20}).run();
+  if (pressed('#ggroup')) {
+    const pos = clusterPositions();
+    cy.layout({name: 'preset', positions: n => pos[n.id()], fit: true, padding: 20}).run();
+    return;
+  }
+  // sin agrupar: más gravedad y poco espacio entre componentes, para que lo
+  // desconectado no quede en los bordes del lienzo
+  cy.layout({name: 'cose', animate: false, nodeRepulsion: () => 6000, idealEdgeLength: () => 60,
+             gravity: 1, componentSpacing: 20, numIter: 1500, randomize: true, fit: true,
+             padding: 20}).run();
+}
+
+function renderKindChips() {
+  $('#gkinds').innerHTML = REL_ORDER.map(k => `<button class="chipbtn relchip" data-gk="${k}"
+    aria-pressed="${gKinds.has(k)}" title="${esc(REL_K[k].out)} otra migración">
+    <span class="relsw" style="--c:var(${REL_K[k].v});--st:${REL_K[k].st}"></span>${REL_K[k].es}
+    <span class="dim">${fmt(relCount[k] || 0)}</span></button>`).join('') +
+    `<span class="dim" style="font-size:12px">· punteada fina = fuera de orden · borde rojo
+     discontinuo = migración obsoleta</span>`;
+  $$('#gkinds [data-gk]').forEach(b => b.addEventListener('click', () => {
+    const k = b.dataset.gk;
+    gKinds.has(k) ? gKinds.delete(k) : gKinds.add(k);
+    initGraph();
+  }));
+  $('#gcatlegend').innerHTML = C.defs.map((d, i) => `<button class="catchip" style="--c:${d.color}"
+    data-gcat="${i}">${esc(d.label)} <span class="dim">${d.migs.length}</span></button>`).join('');
+  $$('#gcatlegend [data-gcat]').forEach(b => b.addEventListener('click', () => {
+    $('#gcat').value = $('#gcat').value === b.dataset.gcat ? '' : b.dataset.gcat;
+    initGraph();
+  }));
+}
+
+function renderGraphTable() {
+  const es = (gFocus ? graphEdges().filter(e => e[0] === gFocus || e[1] === gFocus) : graphEdges())
+    .sort((a, b) => b[3] - a[3]);
+  $('#gtablecount').textContent = `${es.length}${gFocus ? ' de V' + gFocus : ''}`;
+  $('#gtable').innerHTML = es.slice(0, 300).map(e => `<tr>
+    <td style="white-space:nowrap"><span class="relsw" style="--c:var(${REL_K[e[2]].v});--st:${REL_K[e[2]].st}"></span>
+      ${REL_K[e[2]].es}${e[5] ? ' <span class="tag-fo">fuera de orden</span>' : ''}</td>
+    <td class="m">${catDot(catOfMig(e[0]))}<button class="node n-live" data-goto="${e[0]}">V${e[0]}</button></td>
+    <td class="m">${catDot(catOfMig(e[1]))}<button class="node n-live" data-goto="${e[1]}">V${e[1]}</button></td>
+    <td class="num">${e[3]}</td>
+    <td class="m dim" style="word-break:break-word">${relObjs(e[4], 6)}</td></tr>`).join('')
+    + (es.length > 300 ? `<tr><td colspan="5" class="empty">… ${es.length - 300} más; acotá con el rango o la categoría</td></tr>` : '')
+    || '<tr><td colspan="5" class="empty">Sin relaciones con estos filtros</td></tr>';
+  wireGoto($('#gtable'));
+  wireRel($('#gtable'));
 }
 
 function initGraph() {
+  renderKindChips();
   if (!window.cytoscape) {
     $('#depgraph').innerHTML = '<div class="empty" style="padding:20px">No se pudo cargar Cytoscape ' +
       'desde el CDN (¿sin conexión?). La tabla de abajo tiene los mismos datos.</div>';
+    renderGraphTable();
     return;
   }
   if (cy) cy.destroy();
   cy = cytoscape({container: $('#depgraph'), elements: graphElements(), style: graphStyle(),
-                  minZoom: .05, maxZoom: 4});
-  cy.on('tap', 'node', e => focusGraph(e.target.id()));
+                  minZoom: .03, maxZoom: 4});
+  cy.on('tap', 'node', e => e.target.data('isCat')
+    ? ($('#gcat').value = String(e.target.id().slice(3)), initGraph()) : focusGraph(e.target.id()));
   cy.on('tap', e => { if (e.target === cy) focusGraph(null); });
-  cy.on('dbltap', 'node', e => { $('.tab[data-tab="migraciones"]').click(); selectMig(e.target.id()); });
+  cy.on('dbltap', 'node', e => { if (!e.target.data('isCat')) {
+    $('.tab[data-tab="migraciones"]').click(); selectMig(e.target.id()); } });
   cy.on('mouseover', 'edge', e => e.target.addClass('lbl'));
-  cy.on('mouseout', 'edge', e => { if (!e.target.hasClass('in') && !e.target.hasClass('out') &&
-    !$('#glabels').matches('[aria-pressed="true"]')) e.target.removeClass('lbl'); });
+  cy.on('mouseout', 'edge', e => { if (!e.target.hasClass('hot') && !pressed('#glabels')) e.target.removeClass('lbl'); });
+  // con una categoría elegida todas sus aristas cruzan grupos: ahí no se atenúan
+  if (pressed('#ggroup') && $('#gcat').value === '') cy.edges('[?inter]').addClass('dim');
   graphLayout();
   applyLabels();
-  $('#gcount').textContent = `${cy.nodes().length} migraciones · ${cy.edges().length} dependencias`;
+  const nm = cy.nodes().filter(n => !n.data('isCat')).length;
+  $('#gcount').textContent = `${nm} migraciones · ${cy.edges().length} relaciones`;
   if (gFocus && cy.getElementById(gFocus).length) focusGraph(gFocus); else focusGraph(null);
 }
 
 function applyLabels() {
   if (!cy) return;
-  const on = $('#glabels').getAttribute('aria-pressed') === 'true';
-  cy.edges().forEach(e => e.toggleClass('lbl', on || e.hasClass('in') || e.hasClass('out')));
+  const on = pressed('#glabels');
+  cy.edges().forEach(e => e.toggleClass('lbl', on || e.hasClass('hot')));
 }
 
 function focusGraph(v) {
   gFocus = v;
+  renderGraphTable();
   if (!cy) return;
-  cy.elements().removeClass('faded in out focus');
+  cy.elements().removeClass('faded hot focus');
   if (!v || !cy.getElementById(v).length) {
     applyLabels();
-    $('#gdetail').innerHTML = `<div class="empty">Tocá una migración para ver qué usa de otras
-      (entrantes, verde) y qué suyo usan otras (salientes, ámbar). Doble clic abre su detalle.</div>`;
+    const cat = $('#gcat').value;
+    $('#gdetail').innerHTML = cat !== '' ? catGraphSummary(+cat) : `<div class="empty">Tocá una
+      migración para ver qué usa, redefine o parchea de otras y quién usa lo suyo; tocá un grupo
+      para quedarte con esa categoría. Doble clic en una migración abre su detalle.</div>`;
+    wireGoto($('#gdetail'));
     return;
   }
   const n = cy.getElementById(v);
-  const ein = n.incomers('edge'), eout = n.outgoers('edge');
-  const hood = n.closedNeighborhood();
+  const es = n.connectedEdges();
+  const hood = n.closedNeighborhood().union(n.closedNeighborhood().parents());
   cy.elements().not(hood).addClass('faded');
-  n.addClass('focus'); ein.addClass('in'); eout.addClass('out');
+  n.addClass('focus'); es.addClass('hot');
   applyLabels();
-  cy.animate({fit: {eles: hood, padding: 40}}, {duration: 250});
+  cy.animate({fit: {eles: n.closedNeighborhood(), padding: 50}}, {duration: 250});
   const m = byV(v);
-  const list = (es, end) => es.length ? es.sort((a, b) => +a.data(end) - +b.data(end)).map(e => `
-    <div class="use"><span class="who"><button class="node n-live" data-gfocus="${e.data(end)}">V${e.data(end)}</button>
-      <span class="gobj">${e.data('objs').map(o => `<button class="objlink" data-gobj="${esc(o)}">${esc(o)}</button>`).join(', ')}</span></span></div>`).join('')
-    : '<div class="empty" style="padding:8px">ninguna</div>';
   $('#gdetail').innerHTML = `
     <h4>V${v} <span class="pill p-${m?.vd}">${m?.vd || ''}</span></h4>
+    <div class="catline">${migShareHtml(v)}</div>
     <div class="sub">${esc(m?.n || '')}</div>
-    <h3 class="sect">Entrantes: usa de otras <span class="n">${ein.length}</span></h3>
-    <div class="uselist">${list(ein.toArray(), 'source')}</div>
-    <h3 class="sect">Salientes: otras usan lo suyo <span class="n">${eout.length}</span></h3>
-    <div class="uselist">${list(eout.toArray(), 'target')}</div>`;
-  $$('#gdetail [data-gfocus]').forEach(b => b.addEventListener('click', () => focusGraph(b.dataset.gfocus)));
-  $$('#gdetail [data-gobj]').forEach(b => b.addEventListener('click', () => {
-    const o = fold(b.dataset.gobj);
-    const hit = chainEntries.find(c => fold(c.id) === o) ||
-                chainEntries.find(c => unschema(fold(c.id)) === unschema(o));
-    $('.tab[data-tab="objetos"]').click();
-    if (hit) selectObj(hit.key); else { $('#objsearch').value = b.dataset.gobj; objQ = b.dataset.gobj; renderObjs(); }
-  }));
+    ${relSections(v, gKinds)}`;
+  $$('#gdetail [data-gfocus]').forEach(b => b.addEventListener('click', e => {
+    e.stopPropagation(); focusGraph(b.dataset.gfocus); }));
+  wireRel($('#gdetail'));
 }
 
+/* Con una categoría elegida: con quién se relaciona y cuánto. */
+function catGraphSummary(i) {
+  const d = C.defs[i];
+  const tally = new Map();
+  graphEdges().forEach(e => {
+    const a = catOfMig(e[0]), b = catOfMig(e[1]);
+    const other = a === i ? b : a;
+    if (other == null || other === i) return;
+    const k = `${other}|${a === i ? 'out' : 'in'}`;
+    tally.set(k, (tally.get(k) || 0) + e[3]);
+  });
+  const side = dir => [...tally.entries()].filter(([k]) => k.endsWith(dir))
+    .sort((a, b) => b[1] - a[1]).map(([k, n]) => `<div class="use"><span class="who">${catChip(+k.split('|')[0])}</span>
+      <span class="dim">${fmt(n)} usos</span></div>`).join('') || '<div class="empty" style="padding:8px">ninguna</div>';
+  return `<h4>${catDot(i)}${esc(d.label)}</h4>
+    <div class="sub">${d.migs.length} migraciones · clic en el fondo para volver a todas</div>
+    <h3 class="sect">Actúa sobre otras categorías</h3><div class="uselist">${side('out')}</div>
+    <h3 class="sect">Otras actúan sobre ella</h3><div class="uselist">${side('in')}</div>`;
+}
+
+$('#gcat').insertAdjacentHTML('beforeend', C.defs.map((d, i) =>
+  `<option value="${i}">${esc(d.label)}</option>`).join(''));
 $('#gfind').addEventListener('keydown', e => {
   if (e.key !== 'Enter') return;
   const v = e.target.value.trim().replace(/^v/i, '');
   if (cy && cy.getElementById(v).length) focusGraph(v);
-  else e.target.setCustomValidity('V' + v + ' no tiene dependencias en el rango'), e.target.reportValidity();
+  else e.target.setCustomValidity('V' + v + ' no está en el grafo con estos filtros'), e.target.reportValidity();
 });
 $('#gfind').addEventListener('input', e => e.target.setCustomValidity(''));
-['#gfrom', '#gto'].forEach(s => $(s).addEventListener('change', initGraph));
+['#gfrom', '#gto', '#gcat'].forEach(s => $(s).addEventListener('change', initGraph));
+$('#gcolor').addEventListener('change', () => cy && cy.style(graphStyle()));
+['#ggroup', '#giso'].forEach(s => $(s).addEventListener('click', e => { togglePress(e.currentTarget); initGraph(); }));
 $('#glayout').addEventListener('click', graphLayout);
 $('#gfit').addEventListener('click', () => { focusGraph(null); cy && cy.fit(undefined, 20); });
-$('#glabels').addEventListener('click', e => {
-  e.target.setAttribute('aria-pressed', e.target.getAttribute('aria-pressed') !== 'true');
-  applyLabels();
-});
+$('#glabels').addEventListener('click', e => { togglePress(e.currentTarget); applyLabels(); });
 matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => cy && cy.style(graphStyle()));
 
 /* ---------- init ---------- */
@@ -1622,14 +1883,6 @@ def build(model: dict) -> str:
         '<tr><td colspan="3" class="empty">Sin funciones huérfanas</td></tr>'
 
     calidad_panel = render_calidad.panel(model)
-
-    edge_rows = "".join(
-        f'<tr><td class="m"><button class="node n-live" data-goto="{e["from"]}">V{e["from"]}</button></td>'
-        f'<td class="m"><button class="node n-live" data-goto="{e["to"]}">V{e["to"]}</button></td>'
-        f'<td class="m dim" style="word-break:break-word">{", ".join(e["objs"][:6])}'
-        f'{" …" if len(e["objs"])>6 else ""}</td></tr>'
-        for e in reversed(data["edges"][-250:])) or \
-        '<tr><td colspan="3" class="empty">Sin aristas de uso</td></tr>'
 
     obsolete_rows = "".join(
         f'<tr class="clickable"><td class="m"><button class="node n-dead" data-goto="{m["v"]}"'
@@ -1835,6 +2088,13 @@ no mata lo anterior, lo modifica. Regenerá esta página con
   Al elegirlo: qué migraciones lo reescribieron, línea por línea, y qué otros elementos lo usan —
   separando los de sus propias migraciones de los de otras. <b>ref</b> = referencia a tabla/vista;
   sin marca = llamada a función.</p>
+  <div class="legend" style="margin-top:0">
+    <span><span class="node n-live">V1</span> la definición que vive</span>
+    <span><span class="node n-dead">V1</span> reescrita después</span>
+    <span><span class="node n-patch-live">V1</span> parche vigente</span>
+    <span><span class="node n-patch-dead">V1</span> parche reescrito</span>
+    <span><b>×3</b> = varias escrituras seguidas en la misma migración (el cursor las detalla)</span>
+  </div>
   <div class="split">
     <div class="tablewrap"><table><thead><tr>
       <th>Tipo</th><th>Objeto</th><th>Cadena de escrituras</th><th style="text-align:right">Usos</th>
@@ -2096,33 +2356,38 @@ no mata lo anterior, lo modifica. Regenerá esta página con
 </section>
 
 <section class="panel" id="p-dependencias" role="tabpanel" hidden>
-  <h2>Dependencias de uso</h2>
-  <p class="note">«V<i>x</i> llama a una función creada en V<i>y</i>»: si V<i>y</i> cambia la firma,
-  V<i>x</i> es lo que hay que revisar. Se deriva de las llamadas reales en el SQL, no de comentarios.</p>
+  <h2>Relaciones entre migraciones</h2>
+  <p class="note">Una flecha <i>Vy → Vx</i> dice que V<i>x</i> actúa sobre algo que
+  <b>definía</b> V<i>y</i> en ese momento (la última definición anterior, no la que lo creó):
+  lo llama, lo lee, lo redefine, lo parchea o lo borra. Si V<i>y</i> cambia, V<i>x</i> es lo que
+  hay que revisar. Se deriva del SQL, no de los comentarios. Todas las migraciones están en el
+  grafo, agrupadas por categoría; las que no se relacionan con ninguna quedan sueltas en su grupo.</p>
   <div class="controls">
     <input type="search" id="gfind" placeholder="ir a V… (Enter)" aria-label="Ir a migración"
-      style="flex:0 1 160px">
-    <input type="number" id="gfrom" placeholder="desde V" aria-label="Desde versión" style="width:90px">
-    <input type="number" id="gto" placeholder="hasta V" aria-label="Hasta versión" style="width:90px">
-    <button class="chipbtn" id="glabels" aria-pressed="false">objetos en todas las aristas</button>
+      style="flex:0 1 150px">
+    <input type="number" id="gfrom" placeholder="desde V" aria-label="Desde versión" style="width:86px">
+    <input type="number" id="gto" placeholder="hasta V" aria-label="Hasta versión" style="width:86px">
+    <select id="gcat" aria-label="Categoría"><option value="">todas las categorías</option></select>
+    <select id="gcolor" aria-label="Color de los nodos">
+      <option value="cat">color: categoría</option><option value="vd">color: veredicto</option></select>
+    <button class="chipbtn" id="ggroup" aria-pressed="true">agrupar por categoría</button>
+    <button class="chipbtn" id="giso" aria-pressed="true">incluir sin relaciones</button>
+    <button class="chipbtn" id="glabels" aria-pressed="false">objetos en las aristas</button>
     <button class="chipbtn" id="glayout">reordenar</button>
     <button class="chipbtn" id="gfit">ver todo</button>
     <span class="count" id="gcount"></span>
   </div>
-  <p class="note">Cada nodo es una migración (color = veredicto, tamaño = cuántas dependencias
-  tiene). La flecha va de la migración que <b>define</b> el objeto a la que lo <b>usa</b>, con el
-  objeto en la arista: las <b>entrantes</b> de un nodo son lo que usa de otras migraciones y las
-  <b>salientes</b>, lo suyo que usan otras. Rueda = zoom, arrastrar = mover.</p>
+  <div class="relkinds" id="gkinds" aria-label="Tipos de relación"></div>
+  <div class="catlegend" id="gcatlegend"></div>
   <div class="graphsplit">
     <div id="depgraph"></div>
     <aside class="detail" id="gdetail"></aside>
   </div>
+  <h3>Relaciones visibles <span class="n" id="gtablecount"></span></h3>
   <div class="tablewrap"><table><thead><tr>
-    <th>Migración</th><th>Depende de</th><th>Objetos usados</th>
-  </tr></thead><tbody>{edge_rows}</tbody></table></div>
-  <p class="note" style="margin-top:14px">Las referencias <i>documentadas</i> (menciones «V123» en
-  los comentarios de cabecera) están en el panel de detalle de cada migración, en la pestaña
-  Migraciones.</p>
+    <th>Relación</th><th>Migración</th><th>Sobre lo definido en</th>
+    <th style="text-align:right">Usos</th><th>Objetos</th>
+  </tr></thead><tbody id="gtable"></tbody></table></div>
 </section>
 {calidad_panel}
 </main>
@@ -2145,6 +2410,7 @@ TYPE_LABEL = {
     "sequence": "secuencias", "bind": "bindings de permisos", "data": "datos / seeds",
     "extension": "extensiones", "publication": "publicaciones CDC",
     "scratch": "objetos temporales", "query_bulk": "UPDATE masivo de public.query",
+    "comment": "comentarios (COMMENT ON)",
 }
 TYPE_DESC.update({
     "extension": "CREATE / DROP EXTENSION",
