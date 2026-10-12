@@ -43,9 +43,9 @@ por qué**. Si una existente sirve a medias, se extiende su dueña in-place.
 - Funcionalidad nueva → una migración por capa (DDL → utilidades →
   validaciones → `_interno` → wrappers CRUD → endpoints; las capas vacías no se
   crean), en huecos decimales junto al bloque del dominio si existe. Número con
-  `bash .claude/skills/next-migration-number/scan.sh` (todas las ramas y PRs
-  abiertas). Un número menor que el de la dueña actual de un objeto no vale
-  (`scripts/migration-analysis/comandos/orden.py`).
+  `python scripts/migration-analysis hueco --categoria <id> [--objeto fn_x ...]`
+  (todas las ramas y PRs abiertas, piso por dependencias y colisiones). Un número
+  menor que el de la dueña actual de un objeto no vale (`orden` lo bloquea).
 
 ## 3. Escribir
 

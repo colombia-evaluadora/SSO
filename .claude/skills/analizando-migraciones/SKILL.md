@@ -47,7 +47,7 @@ python scripts/migration-analysis informe --json modelo.json
 - Solo stdlib, Python 3.10+.
 
 Si el script avisa de que no pudo usar `git`/`origin`, **dilo**: el techo de
-versión no es fiable y hay que resolverlo con `scan.sh`.
+versión no es fiable y hay que resolverlo con `python scripts/migration-analysis hueco`.
 
 ## Para una pregunta concreta, no corras el informe entero
 

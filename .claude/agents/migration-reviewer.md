@@ -21,7 +21,7 @@ requisitos o plan).
 git diff --name-status <base>...HEAD -- postgres/migrations
 python scripts/migration-analysis lint --all
 python scripts/migration-analysis orden --base <base>
-bash .claude/skills/next-migration-number/scan.sh
+python scripts/migration-analysis hueco --panorama          # colisiones de version entre ramas y PRs
 ```
 
 Por cada función creada o redefinida:

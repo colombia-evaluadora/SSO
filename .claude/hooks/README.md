@@ -207,7 +207,7 @@ no venía a cuento.
 
 Imprime rama, techo local de migraciones y si hay migraciones sin commitear.
 A propósito **no** hace `git fetch`: el número libre real contra todas las ramas
-lo da `.claude/skills/next-migration-number/scan.sh`, que tarda bastante más.
+lo da `python scripts/migration-analysis hueco`, que consulta todas las ramas y PRs (~4 s).
 
 ## Probarlos a mano
 

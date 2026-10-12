@@ -15,7 +15,7 @@ No se empieza escribiendo SQL. Se empieza averiguando **qué archivo tocar**:
 ```bash
 python .claude/skills/next-migration-number/deps.py <fn|ruta>   # quién lo define hoy
 python .claude/skills/next-migration-number/deps.py --version N # de qué depende
-bash .claude/skills/next-migration-number/scan.sh               # número libre real
+python scripts/migration-analysis hueco --categoria <id>          # número libre real, junto a su bloque
 ```
 
 Si el objeto ya tiene dueña, **se edita esa migración**; solo se crea un `V<n>`

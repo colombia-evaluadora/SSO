@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # SessionStart: contexto minimo para no arrancar a ciegas.
 #
-# Barato a proposito: NO hace git fetch (eso es scan.sh, que tarda). Solo dice
+# Barato a proposito: NO hace git fetch (eso es `migration-analysis hueco`). Solo dice
 # en que rama estas, cual es el techo LOCAL de migraciones y si hay migraciones
 # sin commitear, que es lo que cambia la primera decision de casi toda sesion.
 set -uo pipefail
@@ -17,6 +17,6 @@ pending=$(git status --porcelain -- postgres/migrations 2>/dev/null | wc -l | tr
 echo "SSO | rama: $branch | techo local de migraciones: V${top:-?}"
 [ "${pending:-0}" -gt 0 ] && \
   echo "  ${pending} migracion(es) sin commitear en el working tree."
-echo "  Numero libre real (todas las ramas): bash .claude/skills/next-migration-number/scan.sh"
+echo "  Numero libre real (todas las ramas): python scripts/migration-analysis hueco --categoria <id>"
 echo "  Quien define un objeto hoy:          python .claude/skills/next-migration-number/deps.py <fn|ruta>"
 exit 0

@@ -36,7 +36,7 @@ tienen alcances distintos. Nada obvio; los puntos difíciles.
 ```bash
 python .claude/skills/next-migration-number/deps.py --reutilizable <dominio>
 python .claude/skills/next-migration-number/deps.py <fn|ruta|tabla>
-bash .claude/skills/next-migration-number/scan.sh
+python scripts/migration-analysis hueco --categoria <id> --objeto <fn_que_redefine>
 ```
 
 Para un dominio grande, delega el escaneo a un subagente `Explore` para no

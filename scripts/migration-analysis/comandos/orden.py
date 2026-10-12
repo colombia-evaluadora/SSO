@@ -163,5 +163,5 @@ def main(argv: list[str] | None = None) -> int:
     print("gana ella y revierte lo posterior. Los dos entornos quedan distintos.")
     print("\nMueve ese contenido a una migracion POSTERIOR a la que define el objeto")
     print("hoy. `python .claude/skills/next-migration-number/deps.py <objeto>` dice")
-    print("cual es, y `scan.sh` da el siguiente numero libre real.")
+    print("cual es, y `migration-analysis hueco --objeto <objeto>` da el numero libre por encima.")
     return 1
