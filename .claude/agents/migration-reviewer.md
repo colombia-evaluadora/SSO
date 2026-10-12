@@ -50,7 +50,19 @@ Por cada función creada o redefinida:
    índice (skill `optimizando-consultas`).
 9. **Roles.** `role_query` con roles que tienen el menú del gate, unidos por
    nombre y atados a la fila por ruta y método (skill `definiendo-permisos`);
-   número junto a la categoría (`migration-analysis hueco`).
+   número junto a la categoría (`migration-analysis hueco`). Cada wrapper pide
+   la **acción que hace** (un `_eliminar` con gate `VER` es un hallazgo).
+10. **Una capa por migración.** Una migración por capa (DDL, utilidades, validaciones,
+    `_interno`, wrappers, endpoints): DDL mezclado con funciones, una utilidad
+    con gate o escrituras, una validación que recibe el usuario.
+11. **Listados.** Cada `_listar_interno` contra la plantilla de
+    `optimizando-consultas` § 3: `STABLE`, `plan_cache_mode` con filtros
+    opcionales, `count(*) OVER ()` solo si la pantalla muestra el total, `ORDER
+    BY` que termina en el pk, `SELECT *` dentro de un `RETURNS TABLE`.
+12. **Lo que se editó, ¿salió limpio?** Por cada migración editada,
+    `deps.py --version <n>`: lo `MUERTA` que sigue en el fichero se re-ejecuta en
+    el deploy y revierte a quien lo reescribió después. Cabecera y `COMMENT ON`
+    dentro del presupuesto. Endpoints con `param_types` para cada bind.
 
 ## Qué reportar
 

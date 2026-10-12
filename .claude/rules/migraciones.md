@@ -34,25 +34,47 @@ cada término cercano (tabla, menú, dominio vecino). En el plan, **cada funció
 nueva justifica por qué ninguna de la lista sirve**; si una sirve a medias, se
 extiende su dueña in-place en lugar de escribir otra.
 
-### Funcionalidad nueva: cuatro migraciones por capas
+### Funcionalidad nueva: migraciones por capas
 
 Cuando no hay dueña, la funcionalidad se reparte en migraciones consecutivas,
-cada capa llamando solo a las de número menor (así una base limpia aplica):
+una por capa, cada una llamando solo a las de número menor (así una base limpia
+aplica). Una capa vacía no se crea; dos capas no se mezclan en un fichero.
 
-1. **Validaciones** — una `fn_<dominio>_validar_<regla>` por regla (`RETURNS
-   VOID`, lanza o nada) y una grande que las compone por caso.
-2. **Núcleos `_interno`** — crear/actualizar/eliminar sin permisos, que validan
-   y filtran antes de escribir.
-3. **Wrappers CRUD** — existencia (P0002) → gate + alcance → `fn_audit_declarar`
-   (si escribe) → delegar en el núcleo. Las lecturas, sin etiqueta.
-4. **Endpoints** — filas de `public.query` + `role_query` con roles derivados de
-   los menús reales.
+| # | Capa | Qué lleva | Qué no lleva |
+|---|---|---|---|
+| 0 | **DDL** | tablas, columnas, constraints, índices (`optimizando-consultas`), `fn_audit_declarar` de cada tabla nueva (V26/V276) | funciones de negocio |
+| 1 | **Utilidades** | helpers puros reutilizables: resolver un catálogo por texto, normalizar, calcular. `IMMUTABLE` si no lee tablas, `STABLE` si lee | gate, escrituras, `RAISE` de negocio |
+| 2 | **Validaciones** | una `fn_<dominio>_validar_<regla>` por regla (`RETURNS VOID`, lanza o nada) y una que las compone por caso | usuario solicitante, escrituras |
+| 3 | **Núcleos `_interno`** | crear/actualizar/eliminar que llaman a las validaciones y escriben; los `_listar_interno` con la plantilla de listado (abajo) | gate, permisos |
+| 4 | **Wrappers CRUD** | existencia (P0002) → gate con la **acción exacta** (VER/CREAR/EDITAR/ELIMINAR) + alcance → `fn_audit_declarar` si escribe → delegar | lógica, SQL de negocio |
+| 5 | **Endpoints** | filas de `public.query` con `param_types` completo y en mayúsculas, `query_param_constraint` por campo, `role_query` con roles derivados de los menús reales | SQL que no sea llamar al wrapper |
 
 Numeración: si el dominio ya tiene un bloque, usar **huecos decimales junto a
-él** (`V496.1`–`V496.4`) en vez del techo global: reduce colisiones entre PRs
+él** (`V496.1`–`V496.6`) en vez del techo global: reduce colisiones entre PRs
 (V523) y deja las capas contiguas. `python scripts/migration-analysis hueco
 --categoria <id> [--objeto fn_x ...]` lo calcula (piso por dependencias,
 decimales de todas las ramas y PRs). Re-escanear antes de fusionar.
+
+### Al editar una migración, deja limpio lo que tocas
+
+Editar la dueña in-place significa que el deploy re-aplica **el fichero
+entero**: lo muerto que lleve se vuelve a ejecutar y revierte a quien lo había
+reescrito después (V29 en #311 deshizo V294/V295/V298/V302). Por eso cada migración que
+se edita sale más limpia de lo que entró, en el mismo commit:
+
+```bash
+python .claude/skills/next-migration-number/deps.py --version <n>   # sección PRECISION
+```
+
+- Lo marcado **`MUERTA`** dentro del fichero (un `CREATE` que una posterior
+  reescribe entera, comentarios que describen esa versión) **se quita**.
+- `VIVA POR FIRMA`, `MUERTA PERO NECESARIA`, `DROP PELIGROSO`, backfills y
+  semillas **no se tocan aquí**: van por `limpiando-migraciones`, que tiene banco
+  y gates. Ante la duda, no se quita.
+- La cabecera se recorta al presupuesto (≤ 12 líneas) y los `COMMENT ON` al
+  contrato, aunque el linter solo lo exija como aviso en ficheros ya en `dev`.
+- Lo quitado se nombra en el commit y en el set de re-aplicación
+  (`reaplicando-migraciones`).
 
 ## Skills y agentes
 
@@ -106,8 +128,10 @@ CREATE OR REPLACE FUNCTION fn_matricula_config_crear(p_pk_usuario BIGINT, ...)
   y se le pasa ya resuelto como filtro.
 - **Nombre del núcleo: sufijo `_interno`** (precedente vivo:
   `fn_matricula_config_crear_interno`, V159). No `_core` ni `_impl`.
-- **`COMMENT ON FUNCTION`:** el wrapper empieza por la ruta HTTP; el núcleo
-  empieza por `INTERNO:` y nombra quién lo reutiliza.
+- **`COMMENT ON FUNCTION` es contrato, ≤ 600 caracteres** (`COMMENT-LARGO`): el
+  wrapper empieza por la ruta HTTP, el núcleo por `INTERNO:`; después qué
+  devuelve, el gate, los errores y quién lo reutiliza. El razonamiento de por
+  qué es así va al commit, igual que con los comentarios `--`.
 - **Antes de escribir un núcleo, busca uno que sirva** con `deps.py`. Reutilizar
   es el objetivo, no un efecto secundario.
 - **Reportes y exportaciones no crean función propia:** llaman al mismo núcleo
@@ -181,8 +205,13 @@ era el mismo con o sin filtros. V112 lo dejó en 83 ms.
 - `ILIKE '%x%'` sobre varias columnas no usa índice. Se unifica en **una**
   expresión y se indexa **esa misma** expresión con GIN trigram — el planner
   solo usa un índice de expresión si la consulta repite la expresión exacta.
-- Antes de dar por buena una consulta de listado, `EXPLAIN ANALYZE` contra el
-  Postgres local con datos, no a ojo.
+- Un listado PL/pgSQL con filtros opcionales `(p_x IS NULL OR col = p_x)` lleva
+  `SET plan_cache_mode = force_custom_plan` (`LISTADO-PLAN-GENERICO`): con el
+  plan genérico que PL/pgSQL acaba cacheando, ningún filtro usa su índice.
+- Paginación, total, "último por grupo" y agregados condicionales: plantilla de
+  listado en la skill `optimizando-consultas`.
+- Si el usuario pide probarlo, `EXPLAIN ANALYZE` contra el Postgres local con
+  datos, no a ojo.
 
 ### Antes de borrar, mira qué cuelga
 
@@ -254,7 +283,11 @@ dentro del `.sql` queda mintiendo en cuanto alguien edite la función.
 - **Sin auto-referencias** al propio `V<n>` dentro del cuerpo de una función: la
   función sobrevive a su migración.
 - **Comentarios:** cabecera ≤ 12 líneas y ≤ 20% del archivo, y solo de lo que no
-  se deduce del SQL (ver arriba).
+  se deduce del SQL (ver arriba). En una migración nueva el linter lo trata
+  como **error**.
+- **Una regla del linter que nace o cambia congela su deuda en el mismo PR**
+  (`lint --all --baseline-regla <CODIGO>`), sin tocar las demás. Endurecer una
+  regla sin eso dejó 38 errores viejos mezclados con lo nuevo (#562, #590).
 
 ## Validación
 

@@ -2,8 +2,9 @@
 name: nueva-funcionalidad
 description: >-
   Flujo completo para una funcionalidad nueva de backend (migraciones +
-  endpoints): entrevista de requisitos, escaneo de reutilización, plan, cuatro
-  migraciones por capas, verificación y revisión adversarial. Invocar con
+  endpoints): entrevista de requisitos, escaneo de reutilización, plan,
+  migraciones por capas (DDL, utilidades, validaciones, núcleos, wrappers CRUD,
+  endpoints), verificación y revisión adversarial. Invocar con
   /nueva-funcionalidad <descripción>.
 disable-model-invocation: true
 argument-hint: '<descripción de la funcionalidad>'
@@ -42,7 +43,7 @@ Para un dominio grande, delega el escaneo a un subagente `Explore` para no
 llenar el contexto. Escribe el plan en el chat:
 
 - tabla **reutilizo / extiendo (dueña V<n>) / creo nueva (por qué ninguna
-  existente sirve)** por cada función;
+  existente sirve)** por cada función, con su capa;
 - migraciones y números (huecos decimales junto al bloque del dominio);
 - endpoints con método, ruta y roles;
 - cómo se verificará.
@@ -51,11 +52,14 @@ Espera la aprobación del usuario antes de seguir.
 
 ## 4. Implementación por capas
 
-Con el agente `flyway-migration-author` o directamente, en este orden:
-validaciones → `_interno` → wrappers CRUD → endpoints
-(`.claude/rules/migraciones.md`). Endpoint de query-service:
-`/new-query-endpoint`. El hook de lint corre en cada edición: corrige sus
-errores, no los silencies.
+Con el agente `flyway-migration-author` (un solo escritor, con los `V<n>` del
+plan) o directamente, una migración por capa y en este orden: DDL → utilidades
+→ validaciones → `_interno` → wrappers CRUD → endpoints; las capas vacías no se
+crean (`.claude/rules/migraciones.md`). Los listados siguen la plantilla de
+`optimizando-consultas` § 3; los endpoints, `/new-query-endpoint`. Si el plan
+edita migraciones existentes, cada una sale limpia de lo `MUERTA`
+(§ deja limpio lo que tocas). El hook de lint corre en cada edición: corrige
+sus errores, no los silencies.
 
 ## 5. Verificación
 

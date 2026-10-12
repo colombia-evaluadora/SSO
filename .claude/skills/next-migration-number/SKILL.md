@@ -151,9 +151,14 @@ hubo que corregir fallaron por uno de estos, no por SQL malo:
   recorrer las relaciones y decidir qué bloquea (23503 → 409) y qué se arrastra.
   Un borrado lógico sin esa pregunta deja la información viva e inalcanzable
   (V354: 58 945 matrículas). Orden: existencia → estado → gate → dependencias.
-- **Forma de la consulta si es un listado** — filtrar antes de agregar; un
-  agregado que no menciona ningún parámetro de filtro se materializa entero
-  (V112: 11,5 s → 83 ms).
+- **En qué capa va** — DDL, utilidades, validaciones, `_interno`, wrapper CRUD o
+  endpoint (`.claude/rules/migraciones.md` § migraciones por capas). Una
+  migración, una capa.
+- **Forma de la consulta si es un listado** — la plantilla de
+  `optimizando-consultas` § 3: `STABLE`, filtrar antes de agregar (V112:
+  11,5 s → 83 ms), `plan_cache_mode` con filtros opcionales, paginación y total.
+- **Qué queda muerto en el fichero que editas** — `deps.py --version <n>`; lo
+  `MUERTA` sale en el mismo commit (§ deja limpio lo que tocas).
 - **Idempotencia** — `IF NOT EXISTS`, `DROP ... IF EXISTS`, borrar por `uuid`
   antes de insertar. `INSERT ... ON CONFLICT DO NOTHING` **no** actualiza una
   fila existente: si editas una migración que sembró datos, hace falta un
@@ -167,19 +172,10 @@ hubo que corregir fallaron por uno de estos, no por SQL malo:
 
 ## Comentarios: presupuesto
 
-El repo llegó a cabeceras de 60 líneas de prosa que narran la investigación
-(por qué se probó otra cosa, qué dijo el usuario, qué pasó en producción). Eso
-envejece mal: cuando la migración se edita, la narración queda mintiendo, y el
-lector siguiente no puede distinguir la parte vigente de la histórica.
-
-Objetivo: **cabecera de ≤ 12 líneas y ≤ 20% de líneas de comentario** en el
-archivo. Para medirlo:
-
-```bash
-f=postgres/migrations/V407__x.sql; echo "$((100*$(grep -c '^\s*--' $f)/$(wc -l <$f)))%"
-```
-
-La cabecera responde tres cosas y para:
+Cabecera ≤ 12 líneas, ≤ 20% de comentario y `COMMENT ON` ≤ 600 caracteres; el
+linter lo mide y en una migración nueva es **error**. El criterio (qué se gana
+un comentario y qué va al commit) está en `.claude/rules/migraciones.md`
+§ Comentarios. La cabecera responde tres cosas y para:
 
 ```sql
 -- V407 -- fn_x + GET /ruta
@@ -187,13 +183,6 @@ La cabecera responde tres cosas y para:
 -- Por qué aquí: la decisión que no se deduce leyendo el SQL.
 -- Depende de: V224 (fn_actividad_listar), V29 (gate).
 ```
-
-Lo que **sí** vale un comentario en el cuerpo: una trampa de PostgreSQL que
-parece un error de tipeo (`GREATEST(NULL, 1) = 1`, `count(DISTINCT) OVER`), o
-una guarda cuya ausencia no se notaría. Lo que **no**: repetir en prosa lo que
-la línea siguiente ya dice, ni el registro de las alternativas descartadas —
-eso va en el mensaje de commit o en la descripción del PR, que es donde se
-busca la historia.
 
 ## Al cerrar
 
