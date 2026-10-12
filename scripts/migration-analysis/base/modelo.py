@@ -62,8 +62,11 @@ def guardar(model: dict, destino: Path = CACHE) -> None:
     """Escritura atomica: el hook de lint y una sesion pueden leer a la vez."""
     destino.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=destino.parent, suffix=".json")
+    # Una sola escritura y sin espacios: `json.dump` a fichero escribe a trozos
+    # y tardaba ~2,8 s con un modelo de ~40 MB.
+    texto = json.dumps(model, ensure_ascii=False, separators=(",", ":"))
     with os.fdopen(fd, "w", encoding="utf-8") as f:
-        json.dump(model, f, ensure_ascii=False)
+        f.write(texto)
     os.replace(tmp, destino)
 
 
