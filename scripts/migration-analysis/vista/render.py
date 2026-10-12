@@ -9,6 +9,7 @@ from datetime import datetime
 
 from base.nucleo import vnum
 from vista.render_categories import CAT_CSS, CAT_JS, CAT_PANEL
+from vista import render_calidad
 
 
 VERDICTS = ["obsoleta", "residual", "parcial", "viva", "solo-binds", "sin-cambios"]
@@ -1620,6 +1621,8 @@ def build(model: dict) -> str:
         for o in data["orphans"][:200]) or \
         '<tr><td colspan="3" class="empty">Sin funciones huérfanas</td></tr>'
 
+    calidad_panel = render_calidad.panel(model)
+
     edge_rows = "".join(
         f'<tr><td class="m"><button class="node n-live" data-goto="{e["from"]}">V{e["from"]}</button></td>'
         f'<td class="m"><button class="node n-live" data-goto="{e["to"]}">V{e["to"]}</button></td>'
@@ -1764,6 +1767,7 @@ no mata lo anterior, lo modifica. Regenerá esta página con
   <button class="tab" data-tab="autoria" role="tab" aria-selected="false">Autoría</button>
   <button class="tab" data-tab="matriz" role="tab" aria-selected="false">Matriz</button>
   <button class="tab" data-tab="diagnosticos" role="tab" aria-selected="false">Diagnósticos</button>
+  <button class="tab" data-tab="calidad" role="tab" aria-selected="false">Calidad</button>
   <button class="tab" data-tab="tipos" role="tab" aria-selected="false">Tipos de cambio</button>
   <button class="tab" data-tab="slots" role="tab" aria-selected="false">Slots</button>
   <button class="tab" data-tab="dependencias" role="tab" aria-selected="false">Dependencias</button>
@@ -2120,6 +2124,7 @@ no mata lo anterior, lo modifica. Regenerá esta página con
   los comentarios de cabecera) están en el panel de detalle de cada migración, en la pestaña
   Migraciones.</p>
 </section>
+{calidad_panel}
 </main>
 <script>window.__DATA__ = {payload};</script>
 <script>{JS}

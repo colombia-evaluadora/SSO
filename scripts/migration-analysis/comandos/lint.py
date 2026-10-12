@@ -542,6 +542,50 @@ def lint_file(path: Path, ctx: Contexto) -> list[Finding]:
     return [f for r in REGLAS for f in r.revisar(a, ctx)]
 
 
+def _baseline() -> set[str]:
+    try:
+        return set(json.loads(BASELINE.read_text(encoding="utf-8")))
+    except (OSError, ValueError):
+        return set()
+
+
+def _escribir_baseline(huellas: set[str]) -> None:
+    """Atomica: el hook de lint puede leerla mientras el informe de fondo la poda."""
+    tmp = BASELINE.with_suffix(".tmp")
+    tmp.write_text(json.dumps(sorted(huellas), ensure_ascii=False, indent=1), encoding="utf-8")
+    tmp.replace(BASELINE)
+
+
+def resumen(model: dict) -> dict:
+    """Lint de todo el historial para el informe, con el modelo ya construido
+    (no lo vuelve a cargar). Separa lo nuevo de la deuda congelada."""
+    paths = sorted(MIGRATIONS.glob("V*.sql"), key=version_of)
+    ctx = Contexto(arities=live_arities(model), nuevas=migraciones_nuevas(paths))
+    findings = [f for p in paths for f in lint_file(p, ctx)]
+    known = _baseline()
+    reglas: dict[str, dict] = {}
+    nuevos = []
+    for f in findings:
+        r = reglas.setdefault(f.rule, {"severidad": f.severity, "nuevos": 0, "deuda": 0,
+                                       "doc": ""})
+        if f.severity == "error":
+            r["severidad"] = "error"
+        if f.fingerprint() in known:
+            r["deuda"] += 1
+        else:
+            r["nuevos"] += 1
+            nuevos.append(f.as_dict())
+    for regla in REGLAS:
+        if regla.codigo in reglas:
+            reglas[regla.codigo]["doc"] = (regla.__doc__ or "").strip().split("\n")[0]
+    vivas = {f.fingerprint() for f in findings}
+    return {"reglas": dict(sorted(reglas.items(), key=lambda kv: (-kv[1]["nuevos"], kv[0]))),
+            "nuevos": sorted(nuevos, key=lambda d: (d["severity"] != "error", d["file"],
+                                                    d["line"]))[:400],
+            "total_nuevos": len(nuevos),
+            "baseline": len(known), "baseline_corregida": len(known - vivas)}
+
+
 def version_of(path: Path) -> float:
     m = re.match(r"V(\d+(?:\.\d+)*)", path.name)
     return vnum(m.group(1)) if m else -1.0
@@ -563,6 +607,9 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--baseline-regla", action="append", metavar="CODIGO",
                     help="congela solo los hallazgos de esa regla (repetible): para cuando "
                          "una regla nace o cambia, sin congelar la deuda de las demas")
+    ap.add_argument("--baseline-podar", action="store_true",
+                    help="con --all: quita de la baseline la deuda que ya no aparece (se "
+                         "corrigio). Nunca anade: lo nuevo no se congela solo")
     ap.add_argument("--no-baseline", action="store_true",
                     help="reporta tambien la deuda historica ya congelada")
     args = ap.parse_args(argv)
@@ -582,6 +629,18 @@ def main(argv: list[str] | None = None) -> int:
     ctx = Contexto(arities=live_arities(load_model(args.refresh)),
                    nuevas=migraciones_nuevas(paths))
     findings = [f for p in paths for f in lint_file(p, ctx)]
+
+    if args.baseline_podar:
+        if not args.all:
+            ap.error("--baseline-podar necesita --all: con menos ficheros borraria deuda viva")
+        known = _baseline()
+        vivas = {f.fingerprint() for f in findings}
+        corregida = known - vivas
+        if corregida:
+            _escribir_baseline(known & vivas)
+        print(f"baseline: {len(corregida)} hallazgo(s) ya corregidos fuera; "
+              f"quedan {len(known & vivas)}.")
+        return 0
 
     if args.baseline_regla:
         reglas = set(args.baseline_regla)

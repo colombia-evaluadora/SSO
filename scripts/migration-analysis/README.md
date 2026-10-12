@@ -107,6 +107,46 @@ Se añade en `categories.categorize()` (o en `lineas()` si sale del mapa de
 líneas) y se pinta en `render_categories.py`. Nada más: `render.compact` pasa
 las definiciones tal cual, y `docs/MAPA.md` usa la misma asignación.
 
+## Calidad: el grafo de llamadas vivo
+
+La pestaña **Calidad** (`analisis/calidad.py`, en `model["calidad"]`) trabaja
+sobre las llamadas que hace la definición **vigente** de cada función o fila de
+`public.query` (las de versiones muertas se descartan):
+
+- **radio de impacto**: cuántos endpoints ejecutan una función, directa o
+  transitivamente, con su fan-in, fan-out y profundidad. Es lo que hay que
+  volver a probar al tocarla;
+- **endpoints sin gate en su cadena**: ninguna función alcanzada es un gate
+  (`fn_assert_*`, `*_gate_escritura`) ni un filtro de alcance (`*_puede_*`,
+  `*_alcance*`). Se separan los que lanzan 42501 a mano de los que no tienen
+  ningún control;
+- **violaciones de capa**: un `_interno` o una validación que llama a un gate
+  que lanza;
+- **cadenas más profundas** y **ciclos** (componentes fuertemente conexas);
+- **dependencias dinámicas**: funciones con `EXECUTE` y los objetos existentes
+  que nombran en literales, invisibles para el grafo estático.
+
+La capa sale del nombre (`capa_de`); el grafo, de `uses`. Debajo, el **lint**
+de todo el historial (`comandos/lint.resumen`): por regla, lo nuevo frente a la
+deuda congelada, y cuánta deuda de la baseline ya se corrigió.
+
+## Rendimiento
+
+El informe completo tarda ~15 s (antes ~23 s; el modelo solo, ~10 s frente a
+~36 s). Lo que lo bajó, por si se vuelve a perfilar:
+
+- `sqlscan.strip_comments` / `split_statements` saltan con una regex hasta el
+  siguiente carácter relevante y casan el dollar-quote con `pattern.match(s, i)`:
+  antes miraban carácter a carácter y hacían `re.match(..., s[i:])`, que copiaba
+  el resto del fichero en cada `$`. Ambas están cacheadas por contenido
+  (`lru_cache`): modelo, usos y precision parten el mismo fichero 4-6 veces.
+- `usos.collect_java_callsites` poda `node_modules`, `.git`, `target`... en vez
+  de `rglob` sobre todo el repo.
+- `modelo.guardar` serializa de una vez y sin espacios.
+
+Cualquier cambio así se valida con el modelo: tiene que salir idéntico antes y
+después (comparación canónica de JSON), además de `oraculo.py`.
+
 ## Por elemento
 
 La pestaña **Objetos** responde, para cada elemento, qué migraciones lo

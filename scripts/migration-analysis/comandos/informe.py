@@ -74,8 +74,17 @@ def main(argv: list[str] | None = None) -> int:
         print(f"JSON  -> {args.json}")
 
     if out:
+        # El lint no es parte del modelo cacheado (es un comando), pero el
+        # informe lo pinta: asi el HTML dice tambien que se puede mejorar.
+        try:
+            from comandos import lint
+            model["lint"] = lint.resumen(model)
+        except Exception as exc:  # el informe no se cae por el lint
+            model["lint"] = {"error": repr(exc)}
         out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_text(render.build(model), encoding="utf-8")
+        tmp = out.with_suffix(".tmp")
+        tmp.write_text(render.build(model), encoding="utf-8")
+        tmp.replace(out)  # quien tenga el HTML abierto nunca lee uno a medias
 
     v = {k: 0 for k in ("obsoleta", "residual", "parcial", "viva", "solo-binds", "sin-cambios")}
     for m in migs:

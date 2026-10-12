@@ -11,7 +11,7 @@ from dataclasses import asdict
 
 from base.nucleo import FILE_RE, MIGRATIONS, REPO, vnum
 from lectura.extraccion import Registro, analyze_file
-from analisis import categories
+from analisis import calidad, categories
 from analisis.grafo import build_graph, line_budget, object_state, verdict_for
 from analisis.usos import (broken_calls, collect_java_callsites, collect_sql_callsites,
                            collect_table_refs, element_uses, orphan_functions,
@@ -114,4 +114,6 @@ def construir(use_git: bool = False, highlight: tuple = (None, None),
     # precision acaba de corregir. Es la unica pasada que los toca.
     apply_precision(model)
     model["categories"] = categories.categorize(model)
+    # Sobre el modelo ya resuelto: solo lee que vive y quien llama a quien.
+    model["calidad"] = calidad.analizar(model)
     return model
