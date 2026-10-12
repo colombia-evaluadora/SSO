@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import re
 from collections import defaultdict
+from dataclasses import dataclass
 
 from base.nucleo import REPO
 
@@ -175,24 +176,62 @@ def _dinamicas(chains: dict, cuerpos: dict[str, str]) -> list[dict]:
     return out
 
 
-def analizar(model: dict) -> dict:
+@dataclass
+class GrafoVivo:
+    """Llamadas y referencias que hace la definicion VIGENTE de cada objeto."""
+    vivas: dict[str, set[str]]                 # objeto -> versiones vivas
+    funciones: set[str]                        # funciones con definicion viva
+    sucesores: dict[str, set[str]]             # quien llama a quien (solo funciones)
+    llamadores: dict[str, set[str]]
+    lee: dict[str, set[str]]                   # objeto -> tablas/vistas que referencia
+    leido_por: dict[str, set[str]]
+    java: dict[str, list[dict]]                # funcion -> llamadas desde .java
+
+    def cierre(self, raiz: str, hacia: str = "abajo") -> set[str]:
+        """Todo lo alcanzable desde `raiz` llamando (abajo) o siendo llamado (arriba)."""
+        vecinos = self.sucesores if hacia == "abajo" else self.llamadores
+        visto, pila = set(), [raiz]
+        while pila:
+            for s in vecinos.get(pila.pop(), ()):
+                if s not in visto:
+                    visto.add(s)
+                    pila.append(s)
+        return visto
+
+
+def grafo_vivo(model: dict) -> GrafoVivo:
+    """El grafo sobre el que razonan la pestana Calidad y deps.py: una llamada
+    cuenta solo si la hace una version viva del que llama."""
     chains, uses = model["chains"], model.get("uses", [])
     vivas = _versiones_vivas(chains)
     funciones = {k for k in vivas if k.startswith("function:")
                  and _definicion_viva(chains[k])}
-
     sucesores: dict[str, set[str]] = defaultdict(set)
     llamadores: dict[str, set[str]] = defaultdict(set)
+    lee: dict[str, set[str]] = defaultdict(set)
+    leido_por: dict[str, set[str]] = defaultdict(set)
+    java: dict[str, list[dict]] = defaultdict(list)
     for u in uses:
-        de, a = u.get("from") or "", u.get("to") or ""
-        if u.get("kind") != "call" or not de or a not in funciones:
+        de, a, kind = u.get("from") or "", u.get("to") or "", u.get("kind")
+        if kind == "java":
+            if a in funciones:
+                java[a].append(u)
             continue
-        if de not in vivas or u.get("v") not in vivas[de]:
-            continue  # la llamada la hace una definicion que ya murio
-        if de == a:
-            continue
-        sucesores[de].add(a)
-        llamadores[a].add(de)
+        if not de or de == a or de not in vivas or u.get("v") not in vivas[de]:
+            continue  # la hace una definicion que ya murio (o una sentencia suelta)
+        if kind == "call" and a in funciones:
+            sucesores[de].add(a)
+            llamadores[a].add(de)
+        elif kind == "ref" and a.split(":", 1)[0] in ("table", "view"):
+            lee[de].add(a)
+            leido_por[a].add(de)
+    return GrafoVivo(vivas, funciones, sucesores, llamadores, lee, leido_por, java)
+
+
+def analizar(model: dict) -> dict:
+    chains = model["chains"]
+    g = grafo_vivo(model)
+    vivas, funciones, sucesores, llamadores = g.vivas, g.funciones, g.sucesores, g.llamadores
 
     endpoints = sorted(k for k in vivas if k.startswith("query:"))
     migs_por_v = {m["version"]: m for m in model.get("migrations", [])}
