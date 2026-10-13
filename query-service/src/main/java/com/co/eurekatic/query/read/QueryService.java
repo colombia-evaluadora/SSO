@@ -155,10 +155,12 @@ public class QueryService {
         } catch (BulkheadFullException bfe) {
             metrics.recordExecution(mode[0], QueryMetrics.Outcome.FAILURE,
                     System.nanoTime() - start);
-            log.warn("Bulkhead full for query uuid={} (dialect={})", req.uuid(),
+            // No stack trace: a full bulkhead is load shedding, not a bug.
+            // GlobalExceptionHandler turns it into 503 + Retry-After and
+            // code BULKHEAD_FULL, same as the write path.
+            log.warn("Bulkhead full for query uuid={} ({})", req.uuid(),
                     bfe.getMessage());
-            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
-                    "Service busy, retry shortly");
+            throw bfe;
         } catch (RuntimeException e) {
             metrics.recordExecution(mode[0], QueryMetrics.Outcome.FAILURE,
                     System.nanoTime() - start);
