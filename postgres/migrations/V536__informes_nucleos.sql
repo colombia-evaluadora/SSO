@@ -1,7 +1,7 @@
 -- V536 — Informes por capas (2 de 4): núcleos _interno, sin permisos.
 --
 -- Qué hace: la lógica reutilizable de informes, sin gate: detalle por
--- asignatura, nota requerida, métricas, historial, el listado de grupo, el
+-- asignatura (y sus cambios propuestos, tolerando un dato malo), nota requerida, métricas, historial, el listado de grupo, el
 -- lazo de los dos guardados y la escritura única de la nota del periodo, que
 -- con una Habilitación (Regla 68) guarda la base y recombina la definitiva con
 -- el módulo de recuperación. Los que se renombran a _interno se dropean con su
@@ -15,6 +15,52 @@ DROP FUNCTION IF EXISTS academico_test.fn_informe_estudiante_asignaturas(BIGINT,
 DROP FUNCTION IF EXISTS academico_test.fn_informe_periodo_requerido(BIGINT, BIGINT, BIGINT);
 DROP FUNCTION IF EXISTS academico_test.fn_informe_metricas_recalcular(BIGINT, BIGINT, BIGINT);
 DROP FUNCTION IF EXISTS academico_test.fn_informe_historial_registrar(BIGINT, BIGINT, BIGINT, BIGINT, CHARACTER VARYING, JSONB);
+
+CREATE OR REPLACE FUNCTION academico_test.fn_informe_estudiante_universo_interno(
+    p_fk_tmatricula          BIGINT,
+    p_fk_periodos_evaluacion BIGINT[]
+)
+RETURNS TABLE (fk_tasignatura BIGINT)
+LANGUAGE sql
+STABLE
+AS $function$
+    WITH periodos AS (
+        SELECT pe.PK_TPERIODO_EVALUACION AS pk
+          FROM academico_test.TMATRICULA m
+          JOIN academico_test.TGRUPO gr ON gr.PK_TGRUPO = m.FK_TGRUPO
+          JOIN academico_test.TGRADO gd ON gd.PK_TGRADO = gr.FK_TGRADO
+          JOIN academico_test.TPERIODO_EVALUACION pe
+            ON pe.FK_TPERIODO_ACADEMICO = gd.FK_TPERIODO_ACADEMICO
+         WHERE m.PK_TMATRICULA = p_fk_tmatricula
+           AND pe.ACTIVE = TRUE
+           AND (p_fk_periodos_evaluacion IS NULL
+                OR CARDINALITY(p_fk_periodos_evaluacion) = 0
+                OR pe.PK_TPERIODO_EVALUACION = ANY (p_fk_periodos_evaluacion))
+    )
+    SELECT DISTINCT x.fk_tasignatura
+      FROM (
+            SELECT sn.FK_TASIGNATURA
+              FROM academico_test.TASIGNATURA_NOTA sn
+              JOIN periodos p ON p.pk = sn.FK_TPERIODO_EVALUACION
+             WHERE sn.FK_TMATRICULA = p_fk_tmatricula AND sn.ACTIVE = TRUE
+            UNION
+            SELECT a.FK_TASIGNATURA
+              FROM academico_test.TACTIVIDAD a
+              JOIN academico_test.TACTIVIDAD_ESTUDIANTE ae
+                ON ae.FK_TACTIVIDAD = a.PK_TACTIVIDAD
+               AND ae.FK_TMATRICULA = p_fk_tmatricula
+               AND ae.ACTIVE = TRUE
+              JOIN periodos p
+                ON EXISTS (SELECT 1 FROM academico_test.TPERIODO_EVALUACION pev
+                            WHERE pev.PK_TPERIODO_EVALUACION = p.pk
+                              AND COALESCE(a.FECHA_CIERRE, a.FECHA_INICIO, a.FECHA_CREACION::DATE)
+                                  BETWEEN pev.FECHA_INICIO AND pev.FECHA_FIN)
+             WHERE a.ACTIVE = TRUE
+           ) x(fk_tasignatura);
+$function$;
+
+COMMENT ON FUNCTION academico_test.fn_informe_estudiante_universo_interno(BIGINT, BIGINT[])
+    IS 'INTERNO: las asignaturas del informe de un estudiante en los periodos pedidos (NULL o vacio = todos los del año de su matricula): las que tienen nota guardada o actividades asignadas en esos periodos, no el plan de estudios. Es el universo de fn_informe_estudiante_asignaturas_interno, sacado aparte para que fn_informe_periodo_requerido_interno lo obtenga sin calcular el informe entero del año (antes lo hacia una vez por cada periodo sin notas). Sin gate.';
 
 CREATE OR REPLACE FUNCTION academico_test.fn_informe_estudiante_asignaturas_interno(p_fk_tmatricula bigint, p_fk_periodos_evaluacion bigint[], p_solo_cambios boolean DEFAULT false)
  RETURNS TABLE(fk_tasignatura bigint, asignatura_nombre character varying, area_nombre character varying, fk_tperiodo_evaluacion bigint, periodo_nombre character varying, periodo_inicio date, nota_guardada numeric, nota_proyectada numeric, estado_nota character varying, es_numerico boolean, nota_homologada numeric, nota_proyectada_homologada numeric, nota_maxima numeric, formato_valor character varying, valoracion_nombre character varying, valoracion_simbolo character varying, aprobada boolean, desempeno_minimo numeric, calificado_por character varying, calificado_en timestamp without time zone, nota_original numeric, nota_original_homologada numeric, nota_original_valoracion character varying, nota_original_simbolo character varying, con_recuperacion boolean)
@@ -61,25 +107,13 @@ BEGIN
                 OR pe.PK_TPERIODO_EVALUACION = ANY (p_fk_periodos_evaluacion))
     ),
     asignaturas AS (
-        SELECT DISTINCT x.fk_tasignatura
-          FROM (
-                SELECT sn.FK_TASIGNATURA
-                  FROM academico_test.TASIGNATURA_NOTA sn
-                  JOIN periodos p ON p.pk = sn.FK_TPERIODO_EVALUACION
-                 WHERE sn.FK_TMATRICULA = p_fk_tmatricula AND sn.ACTIVE = TRUE
-                UNION
-                SELECT a.FK_TASIGNATURA
-                  FROM academico_test.TACTIVIDAD a
-                  JOIN academico_test.TACTIVIDAD_ESTUDIANTE ae
-                    ON ae.FK_TACTIVIDAD = a.PK_TACTIVIDAD
-                   AND ae.FK_TMATRICULA = p_fk_tmatricula
-                   AND ae.ACTIVE = TRUE
-                  JOIN periodos p
-                    ON academico_test.fn_actividad_en_periodo_eval(a.PK_TACTIVIDAD, p.pk) = TRUE
-                 WHERE a.ACTIVE = TRUE
-               ) x(fk_tasignatura)
+        SELECT u.fk_tasignatura
+          FROM academico_test.fn_informe_estudiante_universo_interno(
+                   p_fk_tmatricula, p_fk_periodos_evaluacion) u
     ),
-    base AS (
+    -- MATERIALIZED: sin esto Postgres incrusta la CTE y recalcula la proyeccion
+    -- en cada uso de f_proyectada (unas 5 veces por fila).
+    base AS MATERIALIZED (
         SELECT asg.fk_tasignatura AS f_asig,
                p.pk               AS f_pe,
                p.nombre           AS f_pe_nombre,
@@ -114,7 +148,10 @@ BEGIN
                    AND n.ACTIVE = TRUE
                  WHERE a3.ACTIVE = TRUE
                    AND a3.FK_TASIGNATURA = asg.fk_tasignatura
-                   AND academico_test.fn_actividad_en_periodo_eval(a3.PK_TACTIVIDAD, p.pk) = TRUE
+                   AND EXISTS (SELECT 1 FROM academico_test.TPERIODO_EVALUACION pev
+                            WHERE pev.PK_TPERIODO_EVALUACION = p.pk
+                              AND COALESCE(a3.FECHA_CIERRE, a3.FECHA_INICIO, a3.FECHA_CREACION::DATE)
+                                  BETWEEN pev.FECHA_INICIO AND pev.FECHA_FIN)
                  ORDER BY COALESCE(n.MODIFIED_AT, n.CREATED_AT) DESC
                  LIMIT 1
           ) ult ON TRUE
@@ -133,6 +170,13 @@ BEGIN
                END::VARCHAR AS f_estado,
                COALESCE(b.f_guardada, b.f_proyectada) AS f_visible
           FROM base b
+    ),
+    -- El formato depende de (asignatura, grado), no de la nota: una vez por
+    -- asignatura, no una por fila y otra por cada nota que se homologa.
+    formatos AS MATERIALIZED (
+        SELECT a.asig, t.*
+          FROM (SELECT DISTINCT c.f_asig AS asig FROM calificado c) a
+          CROSS JOIN LATERAL academico_test.fn_asignatura_tipo_evaluacion(a.asig, v_fk_grado) t
     )
     SELECT cal.f_asig,
            asg.NOMBRE,
@@ -176,15 +220,17 @@ BEGIN
       -- V428 -- el tipo (numerico o cualitativo) sale de la cadena
       -- referente -> plan de estudio -> criterio, no solo del criterio. Las
       -- columnas se llaman igual, asi que el SELECT de abajo no cambia.
-      LEFT JOIN LATERAL academico_test.fn_asignatura_tipo_evaluacion(
-                    cal.f_asig, v_fk_grado) fmt ON TRUE
-      LEFT JOIN LATERAL academico_test.fn_nota_homologar(
-                    cal.f_visible, cal.f_asig, v_fk_grado) h ON TRUE
-      LEFT JOIN LATERAL academico_test.fn_nota_homologar(
-                    cal.f_proyectada, cal.f_asig, v_fk_grado) hp ON TRUE
+      LEFT JOIN formatos fmt ON fmt.asig = cal.f_asig
+      LEFT JOIN LATERAL academico_test.fn_nota_homologar_formato(
+                    cal.f_visible, fmt.es_numerico, fmt.formato_valor, fmt.formato_nombre,
+                    fmt.nota_maxima, fmt.decimales, fmt.fk_tescala) h ON TRUE
+      LEFT JOIN LATERAL academico_test.fn_nota_homologar_formato(
+                    cal.f_proyectada, fmt.es_numerico, fmt.formato_valor, fmt.formato_nombre,
+                    fmt.nota_maxima, fmt.decimales, fmt.fk_tescala) hp ON TRUE
       LEFT JOIN LATERAL (
-                SELECT x.* FROM academico_test.fn_nota_homologar(
-                    cal.f_original, cal.f_asig, v_fk_grado) x
+                SELECT x.* FROM academico_test.fn_nota_homologar_formato(
+                    cal.f_original, fmt.es_numerico, fmt.formato_valor, fmt.formato_nombre,
+                    fmt.nota_maxima, fmt.decimales, fmt.fk_tescala) x
                  WHERE cal.f_original IS NOT NULL) ho ON TRUE
       LEFT JOIN academico_test.TUSUARIO uc
              ON uc.PK_TUSUARIO = CASE
@@ -198,6 +244,32 @@ END;
 $function$;
 COMMENT ON FUNCTION academico_test.fn_informe_estudiante_asignaturas_interno(BIGINT, BIGINT[], BOOLEAN)
     IS 'INTERNO: La grilla NUMERICA del informe para un estudiante: una fila por (asignatura, periodo de evaluacion) de los periodos pedidos (NULL o vacio = todos los del periodo academico de su matricula). Devuelve LAS DOS notas a la vez, que es lo que la vista necesita para pintar gris sobre negro: NOTA_GUARDADA es TASIGNATURA_NOTA.DEFINITIVA (el consolidado) y NOTA_PROYECTADA se recalcula siempre desde las actividades con fn_asignatura_definitiva_proyectada_periodo. Ya NO devuelve la observacion de la IA: la llevaba mientras el resumen era por asignatura, y al pasar a ser del estudiante y el periodo (V330) dejo de tener lugar en una grilla por asignatura -- vive en fn_informe_grupo_listar, donde el grano coincide. ESTADO_NOTA es el contrato con el front: sin_nota / proyectada (gris) / guardada (negro) / cambio_propuesto (negro + gris). cambio_propuesto es el docente que califico despues de consolidar el periodo, y por eso NO se creo ninguna tabla de "notas pendientes de aprobar": el docente nunca deja de escribir en TACTIVIDAD_NOTA, el consolidado esta en TASIGNATURA_NOTA, y la propuesta es la diferencia entre recalcular y lo guardado. INCLUYE UN CASO QUE ANTES SE ESCAPABA: si hay nota guardada y la proyectada pasa a NULL -- el docente dio de baja las actividades que la sustentaban -- eso tambien es cambio_propuesto, con NOTA_PROYECTADA en NULL y la propuesta siendo "ya no hay nota"; la version anterior lo reportaba como guardada y la bandera del listado no se encendia, de modo que el cambio pasaba en silencio. CALIFICADO_POR y CALIFICADO_EN dicen quien toco por ultima vez las notas de esa asignatura en ese periodo, desde TACTIVIDAD_NOTA.MODIFIED_BY/MODIFIED_AT; el join es defensivo porque MODIFIED_BY es VARCHAR sin FK y otros procesos escriben ahi valores que no son un id, asi que solo se resuelve cuando es numerico y la fecha se devuelve resuelva o no. p_solo_cambios reduce la salida a las filas con cambio propuesto. Lo cualitativo no se fuerza a numero: NOTA_HOMOLOGADA y la valoracion salen de fn_nota_homologar, que decide por (asignatura, grado) si el colegio califica con numero (CINCO/DIEZ/CIEN) o con valoracion (LITERAL/SIMBOLO/CARITA); ES_NUMERICO se devuelve explicito. APROBADA es NULL (desconocida) cuando el grado no tiene DESEMPENHO_MINIMO configurado, nunca FALSE. El universo de asignaturas son las que tienen nota guardada o actividades asignadas -- no el plan de estudios, que llenaria el boletin de filas vacias por configuracion incompleta. En preescolar devolvera filas en NULL o ninguna, y es correcto: alli el informe se arma con TESTUDIANTE_PERIODO_OBSERVACION. Con una recuperacion de destino NOTA_FINAL (TASIGNATURA_NOTA.RECUPERACION no nula, Regla 68) devuelve ademas NOTA_ORIGINAL (CALIFICACION, la nota antes de recuperar) con su homologacion, valoracion y simbolo, y CON_RECUPERACION; NOTA_GUARDADA sigue siendo la DEFINITIVA resultante, la que promedia y aprueba, y ESTADO_NOTA compara la proyectada contra la original. Sin gate: lo aplican fn_informe_grupo_listar, fn_informe_cambios_pendientes y los guardados; la reutilizan tambien fn_informe_periodo_requerido_interno y fn_informe_metricas_recalcular_interno.';
+
+CREATE OR REPLACE FUNCTION academico_test.fn_informe_estudiante_cambios_interno(
+    p_fk_tmatricula           BIGINT,
+    p_fk_periodos_evaluacion  BIGINT[]
+)
+RETURNS TABLE (fk_tasignatura BIGINT, asignatura_nombre VARCHAR, fk_tperiodo_evaluacion BIGINT,
+               periodo_nombre VARCHAR, periodo_inicio DATE, calificado_en TIMESTAMP)
+LANGUAGE plpgsql
+STABLE
+AS $$
+BEGIN
+    RETURN QUERY
+    SELECT d.fk_tasignatura, d.asignatura_nombre, d.fk_tperiodo_evaluacion,
+           d.periodo_nombre, d.periodo_inicio, d.calificado_en
+      FROM academico_test.fn_informe_estudiante_asignaturas_interno(
+               p_fk_tmatricula, p_fk_periodos_evaluacion, TRUE) d;
+EXCEPTION WHEN OTHERS THEN
+    -- Una configuracion incompleta (p. ej. una actividad sin ponderacion) no
+    -- debe tumbar la alerta de todos los grupos: este estudiante no aporta
+    -- cambios y el error se ve al abrir el informe de su grupo.
+    RAISE WARNING 'Cambios pendientes: no se pudo calcular la matricula %: %', p_fk_tmatricula, SQLERRM;
+END;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_informe_estudiante_cambios_interno(BIGINT, BIGINT[])
+    IS 'INTERNO: las filas con cambio propuesto de un estudiante (fn_informe_estudiante_asignaturas_interno con p_solo_cambios), solo las columnas que usa la alerta de cambios pendientes. Si el calculo falla por un dato de configuracion, devuelve vacio y deja un WARNING en vez de abortar: la alerta cubre muchos grupos a la vez y un dato malo de uno no debe dejar sin alerta a los demas. Sin gate: lo aplica fn_informe_cambios_pendientes.';
 
 CREATE OR REPLACE FUNCTION academico_test.fn_informe_periodo_requerido_interno(p_fk_tmatricula bigint, p_fk_tperiodo_evaluacion bigint)
  RETURNS TABLE(fk_tasignatura bigint, asignatura_nombre character varying, abreviacion character varying, area_nombre character varying, orden_reporte numeric, requerido numeric, requerido_homologado numeric, es_numerico boolean, nota_maxima numeric, formato_valor character varying, ya_asegurado boolean, alcanzable boolean)
@@ -226,9 +298,8 @@ BEGIN
     -- de modo que las asignaturas son las mismas que el estudiante cursa en
     -- los periodos que si tienen notas.
     WITH universo AS (
-        SELECT DISTINCT d.fk_tasignatura AS asig
-          FROM academico_test.fn_informe_estudiante_asignaturas_interno(
-                   p_fk_tmatricula, NULL) d
+        SELECT u.fk_tasignatura AS asig
+          FROM academico_test.fn_informe_estudiante_universo_interno(p_fk_tmatricula, NULL) u
     ),
     calculado AS (
         SELECT u.asig,
@@ -618,7 +689,10 @@ BEGIN
                    AND n2.ACTIVE = TRUE
                  WHERE a2.ACTIVE = TRUE
                    AND NULLIF(TRIM(COALESCE(n2.OBSERVACION, '')), '') IS NOT NULL
-                   AND academico_test.fn_actividad_en_periodo_eval(a2.PK_TACTIVIDAD, p.pk) = TRUE
+                   AND EXISTS (SELECT 1 FROM academico_test.TPERIODO_EVALUACION pev
+                            WHERE pev.PK_TPERIODO_EVALUACION = p.pk
+                              AND COALESCE(a2.FECHA_CIERRE, a2.FECHA_INICIO, a2.FECHA_CREACION::DATE)
+                                  BETWEEN pev.FECHA_INICIO AND pev.FECHA_FIN)
                ) AS n
           FROM estudiantes e
           CROSS JOIN periodos p
@@ -637,7 +711,10 @@ BEGIN
                    AND a4.ACTIVE = TRUE
                  WHERE so.ACTIVE = TRUE
                    AND so.FK_TARCHIVO IS NOT NULL
-                   AND academico_test.fn_actividad_en_periodo_eval(a4.PK_TACTIVIDAD, p.pk) = TRUE
+                   AND EXISTS (SELECT 1 FROM academico_test.TPERIODO_EVALUACION pev
+                            WHERE pev.PK_TPERIODO_EVALUACION = p.pk
+                              AND COALESCE(a4.FECHA_CIERRE, a4.FECHA_INICIO, a4.FECHA_CREACION::DATE)
+                                  BETWEEN pev.FECHA_INICIO AND pev.FECHA_FIN)
                ) AS n
           FROM estudiantes e
           CROSS JOIN periodos p
@@ -881,8 +958,10 @@ BEGIN
                                  FROM academico_test.TPERIODO_EVALUACION pe2
                                 WHERE pe2.ACTIVE = TRUE
                                   AND pe2.FK_TPERIODO_ACADEMICO = v_fk_peraca
-                                  AND academico_test.fn_actividad_en_periodo_eval(
-                                          a6.PK_TACTIVIDAD, pe2.PK_TPERIODO_EVALUACION) = TRUE)
+                                  AND EXISTS (SELECT 1 FROM academico_test.TPERIODO_EVALUACION pev
+                            WHERE pev.PK_TPERIODO_EVALUACION = pe2.PK_TPERIODO_EVALUACION
+                              AND COALESCE(a6.FECHA_CIERRE, a6.FECHA_INICIO, a6.FECHA_CREACION::DATE)
+                                  BETWEEN pev.FECHA_INICIO AND pev.FECHA_FIN))
                ) AS n
           FROM estudiantes_final e
     ),

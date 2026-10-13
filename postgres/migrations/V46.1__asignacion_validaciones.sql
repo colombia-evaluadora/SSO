@@ -79,7 +79,12 @@ BEGIN
           JOIN academico_test.TASIGNATURA s ON s.PK_TASIGNATURA = p_fk_asignatura AND s.ACTIVE = TRUE
          WHERE gr.PK_TGRUPO = p_fk_grupo AND gr.ACTIVE = TRUE
     ) THEN
-        RAISE EXCEPTION 'La asignatura % no corresponde al grupo % en el plan del periodo', p_fk_asignatura, p_fk_grupo
+        RAISE EXCEPTION 'La asignatura % no corresponde al grupo % en el plan de estudio del periodo.',
+            (SELECT a.NOMBRE FROM academico_test.TASIGNATURA a WHERE a.PK_TASIGNATURA = p_fk_asignatura),
+            (SELECT format('%s del grado %s', gr.NOMBRE, g.NOMBRE)
+                   FROM academico_test.TGRUPO gr
+                   JOIN academico_test.TGRADO g ON g.PK_TGRADO = gr.FK_TGRADO
+                  WHERE gr.PK_TGRUPO = p_fk_grupo)
             USING ERRCODE = '22023';
     END IF;
 END;

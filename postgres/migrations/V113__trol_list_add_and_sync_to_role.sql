@@ -33,7 +33,7 @@ BEGIN
          WHERE ru.user_id = p_user_pk
            AND r.name     = 'CEVAL-SUPER_ADMINISTRADOR'
     ) THEN
-        RAISE EXCEPTION 'fn_assert_superadmin: usuario pk=% no tiene el rol CEVAL-SUPER_ADMINISTRADOR', p_user_pk
+        RAISE EXCEPTION 'Esta acción solo la puede realizar un super administrador.'
             USING ERRCODE = '42501'; -- insufficient_privilege
     END IF;
 END;
@@ -129,7 +129,7 @@ BEGIN
      WHERE UPPER(TRIM(t.codigo)) = v_codigo AND t.active = TRUE
      LIMIT 1;
     IF v_existente IS NOT NULL THEN
-        RAISE EXCEPTION 'fn_add_trol: ya existe un TROL activo con codigo=% (pk=%)', v_codigo, v_existente
+        RAISE EXCEPTION 'Ya existe un rol activo con el código %.', v_codigo
             USING ERRCODE = '23505'; -- unique_violation -> 409 Conflict
     END IF;
 
@@ -139,7 +139,7 @@ BEGIN
      WHERE UPPER(TRIM(t.nombre)) = UPPER(v_nombre)
      LIMIT 1;
     IF v_existente IS NOT NULL THEN
-        RAISE EXCEPTION 'fn_add_trol: ya existe un TROL con nombre=% (pk=%)', v_nombre, v_existente
+        RAISE EXCEPTION 'Ya existe un rol con el nombre %.', v_nombre
             USING ERRCODE = '23505'; -- unique_violation -> 409 Conflict
     END IF;
 
@@ -343,7 +343,7 @@ BEGIN
        AND m.active = TRUE
      LIMIT 1;
     IF v_pk IS NOT NULL THEN
-        RAISE EXCEPTION 'Ya existe el menu "%" con el codigo % (pk=%)', v_nombre, p_codigo, v_pk
+        RAISE EXCEPTION 'Ya existe el menú "%" con el código %.', v_nombre, p_codigo
             USING ERRCODE = '23505';
     END IF;
 END;
@@ -471,7 +471,8 @@ BEGIN
             ) THEN
                 -- Solo 2 niveles de jerarquia (V22): un menu que YA tiene
                 -- hijos no puede convertirse el mismo en hijo de otro.
-                RAISE EXCEPTION 'fn_upsert_menu: pk=% tiene submenus propios, no puede convertirse en submenu', p_pk_tmenu_editar
+                RAISE EXCEPTION 'El menú "%" tiene submenús propios, así que no puede convertirse en submenú.',
+                    (SELECT mn.NOMBRE FROM academico_test.TMENU mn WHERE mn.PK_TMENU = p_pk_tmenu_editar)
                     USING ERRCODE = '22023';
             END IF;
         END IF;
@@ -790,7 +791,7 @@ BEGIN
        AND lv.active = TRUE
      LIMIT 1;
     IF v_existente IS NOT NULL THEN
-        RAISE EXCEPTION 'fn_create_plan_from_value: ya existe un plan activo con valor=% (pk=%)', v_valor, v_existente
+        RAISE EXCEPTION 'Ya existe un plan activo con el valor %.', v_valor
             USING ERRCODE = '23505'; -- unique_violation -> 409 Conflict
     END IF;
 

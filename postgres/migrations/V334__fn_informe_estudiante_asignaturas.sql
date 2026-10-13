@@ -11,9 +11,13 @@ CREATE OR REPLACE FUNCTION academico_test.fn_grado_desempeno_minimo(
     p_fk_tgrado BIGINT
 )
 RETURNS NUMERIC
-LANGUAGE sql
+LANGUAGE plpgsql
 STABLE
 AS $function$
+BEGIN
+    -- plpgsql y no sql: una sql con FROM no se incrusta y se replanifica en
+    -- cada llamada; aqui el plan queda en cache. Primera fila o NULL, como antes.
+    RETURN (SELECT * FROM (
     SELECT cp.DESEMPENHO_MINIMO
       FROM academico_test.TGRADO g
       JOIN academico_test.TCRITERIO_PROMOCION cp
@@ -27,7 +31,9 @@ AS $function$
      -- ordena antes que TRUE, asi que "no es del grado" cae al final.
      ORDER BY (cp.FK_TGRADO IS DISTINCT FROM g.PK_TGRADO),
               cp.PK_TCRITERIO_PROMOCION DESC
-     LIMIT 1;
+     LIMIT 1
+    ) q LIMIT 1);
+END;
 $function$;
 
 COMMENT ON FUNCTION academico_test.fn_grado_desempeno_minimo(BIGINT)
