@@ -29,7 +29,7 @@ Herramientas de esta skill (todas locales, nunca contra un servidor):
 | `usos.py V<n> ...` | Usos que se ejecutan al migrar y se quedaron sin definicion |
 
 Y las del repo: `scripts/migration-analysis/analisis/construir.py` (modelo),
-`.claude/skills/next-migration-number/deps.py` (+ `precision.py`),
+`.claude/skills/next-migration-number/deps.py` (+ `scripts/migration-analysis/analisis/precision.py`),
 `scripts/migration-reapply-set.py`, `scripts/migration-analysis/comandos/orden.py`,
 `scripts/migration-analysis/comandos/lint.py`, `scripts/migration-analysis/comandos/mapa.py`, `scripts/migration-analysis/comandos/hueco.py`.
 
