@@ -9,6 +9,7 @@ en stderr como REVISAR es una decision, no un automatismo.
 """
 from __future__ import annotations
 
+import argparse
 import json
 import re
 import sys
@@ -127,12 +128,16 @@ def proponer(model: dict, R, v: str) -> dict:
     return plan
 
 
-def main() -> int:
-    vs = [a.lstrip("Vv") for a in sys.argv[1:]]
-    if not vs:
-        print(__doc__)
-        return 2
+def main(argv: list[str] | None = None) -> int:
+    ap = argparse.ArgumentParser(prog="propuesta.py", description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("versiones", nargs="+", metavar="V", help="migraciones a recortar: 51, V51 o 51.2")
+    vs = [a.lstrip("Vv") for a in ap.parse_args(argv).versiones]
     model = modelo()
+    conocidas = {m["version"] for m in model["migrations"]}
+    faltan = [v for v in vs if v not in conocidas]
+    if faltan:
+        ap.error(f"no existe la migracion {', '.join('V' + v for v in faltan)} en postgres/migrations")
     R = P.load()
     out = {"comentarios": {"fichero": "V<n>__comment_funciones_recortadas.sql",
                            "cabecera": "-- ===========================================================================\n"
