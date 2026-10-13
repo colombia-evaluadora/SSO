@@ -84,3 +84,60 @@ $$;
 
 COMMENT ON FUNCTION ai.fn_menus_usuario_interno(BIGINT) IS
     'INTERNO: permisos por menu (ver, crear, editar, eliminar) del usuario public.users p_user_id, reutilizando academico_test.fn_usuario_permisos_menu. El filtro por menus del agente es UX; la autoridad es el gate de cada ruta.';
+
+CREATE OR REPLACE FUNCTION ai.fn_pantallas_interno()
+RETURNS TABLE (
+    codigo       VARCHAR,
+    menu_codigo  VARCHAR,
+    nombre       VARCHAR,
+    url          VARCHAR,
+    menu_padre   VARCHAR,
+    descripcion  TEXT,
+    sinonimos    TEXT[]
+)
+LANGUAGE sql
+STABLE
+AS $$
+    SELECT r.codigo::VARCHAR,
+           m.codigo::VARCHAR,
+           m.nombre::VARCHAR,
+           (m.url || COALESCE(r.ruta_sufijo, ''))::VARCHAR,
+           p.nombre::VARCHAR,
+           r.descripcion,
+           r.sinonimos
+      FROM ai.ruta_ui r
+      JOIN academico_test.tmenu m ON m.codigo = r.menu_codigo AND m.active = TRUE
+      LEFT JOIN academico_test.tmenu p ON p.pk_tmenu = m.fk_tmenu AND p.active = TRUE
+     WHERE r.active = TRUE
+       AND NULLIF(m.url, '') IS NOT NULL
+     ORDER BY p.nombre NULLS FIRST, m.nombre;
+$$;
+
+COMMENT ON FUNCTION ai.fn_pantallas_interno() IS
+    'INTERNO: pantallas que el agente puede indicar (buscar_pantalla): ai.ruta_ui con nombre, URL y menu padre de TMENU. Sin filtro de usuario: el servicio las cruza con ai.fn_menus_usuario_interno y nunca indica una pantalla sin acceso.';
+
+CREATE OR REPLACE FUNCTION ai.fn_formularios_ui_interno()
+RETURNS TABLE (
+    codigo                VARCHAR,
+    menu_codigo           VARCHAR,
+    origen                VARCHAR,
+    campos_fuente         VARCHAR,
+    herramienta_escritura VARCHAR
+)
+LANGUAGE sql
+STABLE
+AS $$
+    SELECT f.codigo::VARCHAR,
+           r.menu_codigo::VARCHAR,
+           f.origen::VARCHAR,
+           f.campos_fuente::VARCHAR,
+           h.codigo::VARCHAR
+      FROM ai.ui_formulario f
+      JOIN ai.ruta_ui r ON r.id = f.ruta_ui_id AND r.active = TRUE
+      LEFT JOIN ai.herramienta h ON h.id = f.herramienta_escritura AND h.active = TRUE
+     WHERE f.active = TRUE
+     ORDER BY f.codigo;
+$$;
+
+COMMENT ON FUNCTION ai.fn_formularios_ui_interno() IS
+    'INTERNO: registro de formularios que el agente puede rellenar. En origen DB, campos_fuente es el codigo de la herramienta de lectura que da la configuracion de campos con el gate del usuario.';

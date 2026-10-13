@@ -325,7 +325,8 @@ ON CONFLICT (codigo) WHERE active = TRUE DO UPDATE SET
     modified_at = CURRENT_TIMESTAMP;
 
 -- ---------------------------------------------------------------------------
--- 4. ui_formulario. FRONT: los campos los manda la UI. DB: los da la funcion indicada.
+-- 4. ui_formulario. FRONT: los campos los manda la UI. DB: campos_fuente es la herramienta de
+--    lectura que da su configuracion con el gate del usuario (no se llama a la funcion directa).
 --    funcionario.crear no lleva herramienta: crear funcionario no es escritura del agente.
 -- ---------------------------------------------------------------------------
 DO $$
@@ -341,8 +342,8 @@ SELECT v.codigo, r.id, v.origen, v.campos_fuente, h.id, 'migracion'
   FROM (VALUES
     ('funcionario.crear',  'funcionarios', 'FRONT', NULL::VARCHAR, NULL::VARCHAR),
     ('funcionario.editar', 'funcionarios', 'FRONT', NULL::VARCHAR, 'editar_funcionario'),
-    ('planeador.actividad', 'planeador', 'DB', 'academico_test.fn_actividad_campos_disponibles', 'editar_actividad_planeador'),
-    ('planeador.unidad',    'planeador', 'DB', 'academico_test.fn_unidad_campos_disponibles',    'editar_unidad_planeador')
+    ('planeador.actividad', 'planeador', 'DB', 'actividad_configuracion', 'editar_actividad_planeador'),
+    ('planeador.unidad',    'planeador', 'DB', 'unidad_detalle',          'editar_unidad_planeador')
   ) AS v (codigo, ruta, origen, campos_fuente, herramienta)
   JOIN ai.ruta_ui r ON r.codigo = v.ruta AND r.active = TRUE
   LEFT JOIN ai.herramienta h ON h.codigo = v.herramienta AND h.active = TRUE

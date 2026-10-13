@@ -1,7 +1,7 @@
 # Mapa del dominio
 
 **Generado** por `python scripts/migration-analysis mapa` — no editar a mano.
-Estado: 495 migraciones (V1–V556.3), 1323 funciones vivas, 49 endpoints vivos. Ultima generacion: 2026-10-13.
+Estado: 495 migraciones (V1–V556.3), 1325 funciones vivas, 49 endpoints vivos. Ultima generacion: 2026-10-13.
 
 Para una **funcion**, la migracion dueña es la que hay que editar: es su ultima escritura viva, no la que la creo.
 
@@ -28,10 +28,10 @@ Las secciones son las categorias funcionales de `scripts/migration-analysis/anal
 - [Funcionarios](#funcionarios) — 40 funcion(es), 2 endpoint(s)
 - [Sedes](#sedes) — 29 funcion(es), 0 endpoint(s)
 - [Establecimiento](#establecimiento) — 14 funcion(es), 0 endpoint(s)
-- [Menús](#menus) — 28 funcion(es), 1 endpoint(s)
+- [Menús](#menus) — 29 funcion(es), 1 endpoint(s)
 - [Permisos](#permisos) — 23 funcion(es), 0 endpoint(s)
 - [Estructura académica](#academico) — 171 funcion(es), 0 endpoint(s)
-- [Plataforma SSO](#plataforma) — 54 funcion(es), 0 endpoint(s)
+- [Plataforma SSO](#plataforma) — 55 funcion(es), 0 endpoint(s)
 
 <a id="pigse"></a>
 
@@ -1289,6 +1289,7 @@ Las secciones son las categorias funcionales de `scripts/migration-analysis/anal
 | `academico_test.fn_usuario_permisos_menu` | 1 | V303 | V29, V127, V556.1 |
 | `academico_test.fn_usuario_puede_en_menu` | 3 | V29 | V40, V43.3, V51, V52, V53, V116… |
 | `ai.fn_menus_usuario_interno` | 1 | V556.1 | — |
+| `ai.fn_pantallas_interno` | 0 | V556.1 | — |
 
 <a id="permisos"></a>
 
@@ -1553,6 +1554,7 @@ Las secciones son las categorias funcionales de `scripts/migration-analysis/anal
 | `academico_test.fn_usuario_otros_usos` | 3 | V162 | V160, V161 |
 | `academico_test.fn_usuario_peso_categoria` | 1 | V298 | — |
 | `academico_test.fn_usuario_rango_en_ee` | 4 | V298 | V297 |
+| `ai.fn_formularios_ui_interno` | 0 | V556.1 | — |
 | `ai.fn_herramienta_catalogo_interno` | 0 | V556.1 | — |
 | `public.fn_get_academico_usuario_id` | 1 | V299 | V64, V67, V69, V75, V76, V77… |
 | `public.fn_microservice_validar_file_storage` | 0 | V147 | — |
