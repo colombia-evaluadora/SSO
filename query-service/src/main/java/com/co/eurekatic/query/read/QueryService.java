@@ -23,6 +23,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataAccessException;
 import org.springframework.http.HttpStatus;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.security.core.Authentication;
@@ -89,6 +91,21 @@ public class QueryService {
     private final QueryResilience resilience;
     private final ObjectMapper objectMapper;
     private final CatalogResultCacheService resultCache;
+
+    /** Header the caller sets to ask for the long (report) statement timeout. */
+    static final String TIMEOUT_PROFILE_HEADER = "X-Query-Timeout-Profile";
+
+    // Per-statement limits (query.execution.*). Plain fields with
+    // matching defaults so a manually built service (unit tests) is
+    // still bounded; Spring overrides them from application.yml.
+    @Value("${query.execution.timeout-seconds:15}")
+    private int timeoutSeconds = 15;
+    @Value("${query.execution.report-timeout-seconds:180}")
+    private int reportTimeoutSeconds = 180;
+    @Value("${query.execution.max-rows:50001}")
+    private int maxRows = 50001;
+    @Value("${query.execution.fetch-size:500}")
+    private int fetchSize = 500;
 
     public QueryService(CatalogClient catalog, JdbcTemplateRegistry registry,
                          QueryMetrics metrics, QueryResilience resilience,
@@ -194,7 +211,7 @@ public class QueryService {
                     "La consulta no es pública");
         }
 
-        NamedParameterJdbcTemplate jdbc = registry.resolve(def.type());
+        NamedParameterJdbcTemplate jdbc = withStatementLimits(registry.resolve(def.type()));
 
         // Caller params + CONTEXT.* from the JWT/request. Keys are NOT
         // re-cased here: Spring JDBC binds case-sensitively against the
@@ -332,6 +349,10 @@ public class QueryService {
 
                 List<Map<String, Object>> rows = jdbc.query(finalSql, params,
                         (rs, rn) -> mapRow(rs, rn, objectMapper));
+                if (maxRows > 0 && rows.size() >= maxRows) {
+                    log.warn("uuid={} reached the row cap ({}); result truncated",
+                            req.uuid(), maxRows);
+                }
                 log.debug("uuid={} returned {} rows (mode={})", req.uuid(), rows.size(), mode);
                 return QueryResult.rowsOnly(rows);
             } catch (DataAccessException dae) {
@@ -340,6 +361,30 @@ public class QueryService {
         } finally {
             bulkhead.onComplete();
         }
+    }
+
+    /**
+     * Wraps the dialect's shared template in a throwaway one carrying the
+     * statement limits for THIS call (the timeout depends on the request's
+     * profile header, so the shared template must not be mutated). It is
+     * cheap: same DataSource and the same exception translator, no new pool.
+     */
+    private NamedParameterJdbcTemplate withStatementLimits(NamedParameterJdbcTemplate shared) {
+        JdbcTemplate base = shared.getJdbcTemplate();
+        JdbcTemplate t = new JdbcTemplate(base.getDataSource());
+        t.setExceptionTranslator(base.getExceptionTranslator());
+        t.setQueryTimeout(resolveTimeoutSeconds());
+        if (maxRows > 0) t.setMaxRows(maxRows);
+        if (fetchSize > 0) t.setFetchSize(fetchSize);
+        return new NamedParameterJdbcTemplate(t);
+    }
+
+    private int resolveTimeoutSeconds() {
+        if (RequestContextHolder.getRequestAttributes() instanceof ServletRequestAttributes sra
+                && "report".equalsIgnoreCase(sra.getRequest().getHeader(TIMEOUT_PROFILE_HEADER))) {
+            return reportTimeoutSeconds;
+        }
+        return timeoutSeconds;
     }
 
     /* ====================== parámetros del llamante ====================== */
@@ -507,6 +552,7 @@ public class QueryService {
         return jdbc.getJdbcTemplate().execute(
                 (Connection con) -> {
                     try (CallableStatement cs = con.prepareCall(sql)) {
+                        cs.setQueryTimeout(jdbc.getJdbcTemplate().getQueryTimeout());
                         for (Map.Entry<String, Object> e : params.getValues().entrySet()) {
                             Integer sqlType = sqlTypes.get(e.getKey());
                             if (sqlType != null && sqlType.intValue() != Types.ARRAY) {

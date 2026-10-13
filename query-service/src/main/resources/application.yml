@@ -132,6 +132,13 @@ query:
   # the dispatcher is warm before the first request.
   path-registry:
     refresh-ms: ${QUERY_PATH_REGISTRY_REFRESH_MS:60000}
+  # Per-statement JDBC limits. The report profile (header
+  # X-Query-Timeout-Profile: report) gets the longer timeout.
+  execution:
+    timeout-seconds: ${QUERY_TIMEOUT_SECONDS:15}
+    report-timeout-seconds: ${QUERY_REPORT_TIMEOUT_SECONDS:180}
+    max-rows: ${QUERY_MAX_ROWS:50001}
+    fetch-size: ${QUERY_FETCH_SIZE:500}
   # V33 — Resilience4j protection for the read path.
   #   bulkhead caps CONCURRENT JDBC calls per dialect so a
   #     single slow query can't starve the HikariCP pool.
