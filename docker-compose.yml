@@ -345,6 +345,9 @@ services:
     ports:
       - "${BIND_IP:-127.0.0.1}:${AUTH_CENTER_PORT:-8081}:8081"
     environment:
+      # Logins concurrentes (0 = 2 por núcleo, acotado por heap) y espera por permiso.
+      SSO_LOGIN_MAX_CONCURRENT: ${SSO_LOGIN_MAX_CONCURRENT:-0}
+      SSO_LOGIN_ACQUIRE_TIMEOUT_MS: ${SSO_LOGIN_ACQUIRE_TIMEOUT_MS:-200}
       # JVM acotada aunque el contenedor no tenga mem_limit: sin -Xmx la JVM
       # toma el 75% de la RAM del host y, con la basura de Argon2, llegó a
       # 4,4 GiB y p99 de login de 6,9s. Con esto (benchmark local, 10 logins
@@ -443,6 +446,11 @@ services:
     ports:
       - "${API_GATEWAY_PORT:-8080}:8080"
     environment:
+      # Timeouts del cliente HTTP del gateway (ver application.yml).
+      GATEWAY_RESPONSE_TIMEOUT: ${GATEWAY_RESPONSE_TIMEOUT:-180s}
+      GATEWAY_REPORTING_RESPONSE_TIMEOUT_MS: ${GATEWAY_REPORTING_RESPONSE_TIMEOUT_MS:-300000}
+      GATEWAY_AI_RESPONSE_TIMEOUT_MS: ${GATEWAY_AI_RESPONSE_TIMEOUT_MS:-125000}
+      GATEWAY_FILE_RESPONSE_TIMEOUT_MS: ${GATEWAY_FILE_RESPONSE_TIMEOUT_MS:-300000}
       # Sólo verifica: la pareja pública de la JWT_PRIVATE_KEY
       # de auth-center. El gateway no puede emitir tokens.
       JWT_PUBLIC_KEY: ${JWT_PUBLIC_KEY}
@@ -687,6 +695,7 @@ services:
     ports:
       - "${BIND_IP:-127.0.0.1}:${SSO_ADMIN_PORT:-8083}:8083"
     environment:
+      SSO_ADMIN_VIRTUAL_THREADS: ${SSO_ADMIN_VIRTUAL_THREADS:-true}
       # Neon cloud DB. compose composes the JDBC URL inline from
       # DB_URL (host:port) + DB_NAME + DB_SSLMODE + DB_CHANNEL_BINDING
       # and overrides spring.datasource.url via the standard
@@ -1535,6 +1544,7 @@ services:
       rabbitmq:
         condition: service_healthy
     environment:
+      CDC_LOG_LEVEL: ${CDC_LOG_LEVEL:-INFO}
       SPRING_PROFILES_ACTIVE: docker
       CDC_PG_URL: ${CDC_PG_URL:-jdbc:postgresql://postgres:5432/${POSTGRES_DB:-sso}}
       CDC_PG_USER: ${CDC_PG_USER:-${POSTGRES_USER}}
@@ -1620,6 +1630,8 @@ services:
       cdc-clickhouse:
         condition: service_healthy
     environment:
+      CDC_LOG_LEVEL: ${CDC_LOG_LEVEL:-INFO}
+      CDC_WORKER_PREFETCH: ${CDC_WORKER_PREFETCH:-10}
       SPRING_PROFILES_ACTIVE: docker
       CDC_AMQP_HOST: ${CDC_AMQP_HOST:-rabbitmq}
       CDC_AMQP_PORT: ${CDC_AMQP_PORT:-5672}
@@ -1846,6 +1858,7 @@ services:
       eurekaserver:
         condition: service_started
     environment:
+      REPORTING_MAX_CONCURRENT_EXPORTS: ${REPORTING_MAX_CONCURRENT_EXPORTS:-4}
       EUREKA_URL: "http://eurekaserver:8761/eureka"
       # Directo a la instancia del catalogo eval-col: es la que tiene
       # registradas las filas query de reporte (V67).
