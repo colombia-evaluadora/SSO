@@ -1550,6 +1550,13 @@ services:
       CDC_OFFSETS_DIR: ${CDC_OFFSETS_DIR:-/var/cdc-capture/offsets}
     volumes:
       - cdc-capture-offsets:${CDC_OFFSETS_DIR:-/var/cdc-capture/offsets}
+    # Sin HTTP: la app refresca /tmp/cdc-health mientras su salud agregada es UP.
+    healthcheck:
+      test: ["CMD-SHELL", "test -n \"$$(find /tmp/cdc-health -mmin -1 2>/dev/null)\""]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 120s
     ports:
       - "${BIND_IP:-127.0.0.1}:${CDC_CAPTURE_PORT:-58081}:8081"
 
@@ -1623,7 +1630,13 @@ services:
       CDC_WORKER_CONCURRENCY_MIN: ${CDC_WORKER_CONCURRENCY_MIN:-1}
       CDC_WORKER_CONCURRENCY_MAX: ${CDC_WORKER_CONCURRENCY_MAX:-1}
     ports:
-      - "${BIND_IP:-127.0.0.1}:${CDC_WORKER_PORT:-58082}:8081"
+      - "${BIND_IP:-127.0.0.1}:${CDC_WORKER_PORT:-58082}:8080"
+    healthcheck:
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/localhost/8080; printf 'GET /actuator/health HTTP/1.0\r\n\r\n' >&3; grep -q UP <&3"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 90s
 
   # ===========================================================================
   # Almacenamiento de objetos (perfil `storage`) — APAGADO POR DEFECTO
