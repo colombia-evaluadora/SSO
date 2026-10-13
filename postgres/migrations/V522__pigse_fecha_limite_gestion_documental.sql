@@ -349,6 +349,22 @@ BEGIN
             USING ERRCODE = '23514';
     END IF;
 
+    -- Un anexo obligatorio no se borra suelto: solo se reemplaza desde el
+    -- guardado completo (PUT /documentos/:TIPO/anexos). Plan de estudios sí
+    -- puede perder un archivo mientras le quede otro.
+    IF p_categoria = 'PLAN_ESTUDIOS'
+       AND NOT EXISTS (SELECT 1 FROM pigse.tdocumento_institucional t
+                        WHERE t.fk_testablecimiento = v_fk_establecimiento
+                          AND t.tipo = p_tipo AND t.categoria = 'PLAN_ESTUDIOS'
+                          AND t.active AND t.fk_tarchivo IS NOT NULL
+                          AND t.fk_tarchivo IS DISTINCT FROM p_fk_tarchivo) THEN
+        RAISE EXCEPTION 'pigse: Plan de estudios es obligatorio -- no se puede eliminar su unico archivo, reemplacelo'
+            USING ERRCODE = '23514';
+    ELSIF p_categoria NOT IN ('PLAN_ESTUDIOS', 'PLAN_GESTION_RIESGO') THEN
+        RAISE EXCEPTION 'pigse: el anexo % es obligatorio -- no se puede eliminar, solo reemplazar', p_categoria
+            USING ERRCODE = '23514';
+    END IF;
+
     IF p_categoria = 'PLAN_ESTUDIOS' THEN
         SELECT t.pk_documento_institucional, t.fk_tarchivo
           INTO v_pk_doc, v_fk_tarchivo_previo
@@ -410,7 +426,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION pigse.fn_documento_eliminar(BIGINT, VARCHAR, VARCHAR, VARCHAR, BIGINT) IS
-    'V522: gana el gate de fecha limite, igual que fn_documento_guardar -- bloquea tambien eliminar.';
+    'PATCH /documentos/:TIPO/categorias/:CATEGORIA: baja de un anexo. Gate de fecha limite igual que fn_documento_guardar. 23514 si el anexo es obligatorio (solo se reemplaza via PUT /documentos/:TIPO/anexos); Plan de estudios admite bajar un archivo mientras quede otro; PLAN_GESTION_RIESGO (opcional) se baja libre.';
 
 -- ---------------------------------------------------------------------------
 -- 8. Endpoints + permisos. Lectura para todo rol que ya interactua con
