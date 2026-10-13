@@ -41,6 +41,9 @@ BEGIN
     PERFORM academico_test.fn_informe_assert_puede_escribir(p_pk_usuario_solicitante);
     PERFORM academico_test.fn_informe_assert_grupo_propio(
         p_pk_usuario_solicitante, p_fk_tgrupo);
+    -- Periodo cerrado: solo el super admin corrige.
+    PERFORM academico_test.fn_informe_validar_periodo_abierto(
+        p_fk_tperiodo_evaluacion, academico_test.fn_es_super_admin(p_pk_usuario_solicitante));
 
     PERFORM academico_test.fn_audit_declarar(
         p_pk_usuario_solicitante,
@@ -58,7 +61,7 @@ END;
 $function$;
 
 COMMENT ON FUNCTION academico_test.fn_informe_periodo_guardar(BIGINT, BIGINT, BIGINT, BIGINT[])
-    IS 'POST /informes/guardar: consolida un periodo completo del grupo (o solo las matriculas indicadas). Valida el grupo y que el periodo sea de su año, pide INFORMES/EDITAR sobre la sede y jornada del grupo, reserva la escritura a quien no solo tiene roles de grupo (Regla 76) y recorta a grupos propios, declara la etiqueta de auditoria y delega en fn_informe_periodo_guardar_interno, donde esta documentado el resultado.';
+    IS 'POST /informes/guardar: consolida un periodo completo del grupo (o solo las matriculas indicadas). Valida el grupo y que el periodo sea de su año, pide INFORMES/EDITAR sobre la sede y jornada del grupo, reserva la escritura a quien no solo tiene roles de grupo (Regla 76) y recorta a grupos propios, declara la etiqueta de auditoria y rechaza con 23514 un periodo cerrado (fn_informe_validar_periodo_abierto; el super admin pasa) y delega en fn_informe_periodo_guardar_interno, donde esta documentado el resultado.';
 
 CREATE OR REPLACE FUNCTION academico_test.fn_informe_planilla_guardar(p_pk_usuario_solicitante bigint, p_fk_tgrupo bigint, p_fk_tasignatura bigint, p_fk_tperiodo_evaluacion bigint, p_fk_tmatriculas bigint[] DEFAULT NULL::bigint[])
  RETURNS TABLE(fk_tmatricula bigint, estudiante character varying, resultado character varying, nota_anterior numeric, nota_guardada numeric, promedio_periodo numeric, aprobadas bigint, reprobadas bigint)
@@ -98,6 +101,9 @@ BEGIN
     PERFORM academico_test.fn_informe_assert_puede_escribir(p_pk_usuario_solicitante);
     PERFORM academico_test.fn_informe_assert_grupo_propio(
         p_pk_usuario_solicitante, p_fk_tgrupo);
+    -- Periodo cerrado: solo el super admin corrige.
+    PERFORM academico_test.fn_informe_validar_periodo_abierto(
+        p_fk_tperiodo_evaluacion, academico_test.fn_es_super_admin(p_pk_usuario_solicitante));
 
     PERFORM academico_test.fn_audit_declarar(
         p_pk_usuario_solicitante,

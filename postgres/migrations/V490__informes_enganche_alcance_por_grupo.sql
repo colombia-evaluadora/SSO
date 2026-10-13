@@ -395,7 +395,9 @@ BEGIN
 END;
 $function$;
 
-CREATE OR REPLACE FUNCTION academico_test.fn_estudiante_periodo_observacion_guardar(p_pk_usuario_solicitante bigint, p_fk_tmatricula bigint, p_fk_tperiodo_evaluacion bigint, p_observacion text, p_observacion_ia text DEFAULT NULL::text, p_observaciones_origen numeric DEFAULT NULL::numeric)
+-- Suma p_es_borrador (ES_BORRADOR, lo manda ai-control-service): otra aridad.
+DROP FUNCTION IF EXISTS academico_test.fn_estudiante_periodo_observacion_guardar(BIGINT, BIGINT, BIGINT, TEXT, TEXT, NUMERIC);
+CREATE OR REPLACE FUNCTION academico_test.fn_estudiante_periodo_observacion_guardar(p_pk_usuario_solicitante bigint, p_fk_tmatricula bigint, p_fk_tperiodo_evaluacion bigint, p_observacion text, p_observacion_ia text DEFAULT NULL::text, p_observaciones_origen numeric DEFAULT NULL::numeric, p_es_borrador character varying DEFAULT NULL::character varying)
  RETURNS bigint
  LANGUAGE plpgsql
 AS $function$
@@ -462,6 +464,8 @@ BEGIN
     -- quien alcanza la sede entera es un no-op.
     PERFORM academico_test.fn_informe_assert_grupo_propio(
         p_pk_usuario_solicitante, academico_test.fn_matricula_grupo(p_fk_tmatricula));
+    PERFORM academico_test.fn_informe_validar_periodo_abierto(
+        p_fk_tperiodo_evaluacion, academico_test.fn_es_super_admin(p_pk_usuario_solicitante));
 
     -- *** V433 (2) *** El borrador guardado, si lo hay.
     SELECT ob.OBSERVACION_IA
@@ -508,8 +512,10 @@ BEGIN
     END IF;
 
     -- El estado se DEDUCE del texto, no se pide por parametro: asi no puede
-    -- contradecirlo.
-    v_estado := CASE WHEN v_texto = TRIM(v_ia) THEN 'APROBADA' ELSE 'MODIFICADA' END;
+    -- contradecirlo. ES_BORRADOR = S (texto de la IA sin revisar) queda fuera
+    -- del boletin hasta que un humano lo guarde sin la marca.
+    v_estado := CASE WHEN UPPER(TRIM(COALESCE(p_es_borrador, 'N'))) = 'S' THEN 'BORRADOR'
+                     WHEN v_texto = TRIM(v_ia) THEN 'APROBADA' ELSE 'MODIFICADA' END;
 
     SELECT lv.PK_LISTA_VALOR INTO v_pk_estado
       FROM academico_test.TLISTA_VALOR lv
@@ -585,6 +591,8 @@ BEGIN
     -- quien alcanza la sede entera es un no-op.
     PERFORM academico_test.fn_informe_assert_grupo_propio(
         p_pk_usuario_solicitante, academico_test.fn_matricula_grupo(p_fk_tmatricula));
+    PERFORM academico_test.fn_informe_validar_periodo_abierto(
+        p_fk_tperiodo_evaluacion, academico_test.fn_es_super_admin(p_pk_usuario_solicitante));
 
     -- Borrado fisico, no logico: el unico es TOTAL sobre (matricula,
     -- periodo), asi que una fila inactiva seguiria ocupando el lugar e
@@ -660,7 +668,8 @@ BEGIN
 END;
 $function$;
 
-CREATE OR REPLACE FUNCTION academico_test.fn_estudiante_anio_observacion_guardar(p_pk_usuario_solicitante bigint, p_fk_tmatricula bigint, p_observacion text, p_observacion_ia text DEFAULT NULL::text, p_periodos_origen numeric DEFAULT NULL::numeric)
+DROP FUNCTION IF EXISTS academico_test.fn_estudiante_anio_observacion_guardar(BIGINT, BIGINT, TEXT, TEXT, NUMERIC);
+CREATE OR REPLACE FUNCTION academico_test.fn_estudiante_anio_observacion_guardar(p_pk_usuario_solicitante bigint, p_fk_tmatricula bigint, p_observacion text, p_observacion_ia text DEFAULT NULL::text, p_periodos_origen numeric DEFAULT NULL::numeric, p_es_borrador character varying DEFAULT NULL::character varying)
  RETURNS bigint
  LANGUAGE plpgsql
 AS $function$
@@ -744,7 +753,8 @@ BEGIN
            AND NULLIF(TRIM(COALESCE(ob.OBSERVACION, '')), '') IS NOT NULL;
     END IF;
 
-    v_estado := CASE WHEN v_texto = TRIM(v_ia) THEN 'APROBADA' ELSE 'MODIFICADA' END;
+    v_estado := CASE WHEN UPPER(TRIM(COALESCE(p_es_borrador, 'N'))) = 'S' THEN 'BORRADOR'
+                     WHEN v_texto = TRIM(v_ia) THEN 'APROBADA' ELSE 'MODIFICADA' END;
 
     SELECT lv.PK_LISTA_VALOR INTO v_pk_estado
       FROM academico_test.TLISTA_VALOR lv
@@ -917,3 +927,9 @@ END;
 $function$$crear$;
     END IF;
 END $guarda$;
+
+COMMENT ON FUNCTION academico_test.fn_estudiante_periodo_observacion_guardar(BIGINT, BIGINT, BIGINT, TEXT, TEXT, NUMERIC, VARCHAR)
+    IS 'POST /informes/observacion/guardar: guarda (reemplaza) el resumen del periodo de un estudiante. Estado: P_ES_BORRADOR = S -> BORRADOR (texto de la IA sin revisar, el boletin no lo imprime); si no, APROBADA si el texto es igual al borrador de la IA (el enviado o el ya guardado) y MODIFICADA si no, lo que saca al texto de borrador. Gate INFORMES/EDITAR, escritura reservada (Regla 76) y grupo propio; 23514 si el periodo esta cerrado salvo super admin. Sin OBSERVACIONES_ORIGEN las cuenta al guardar (V433).';
+
+COMMENT ON FUNCTION academico_test.fn_estudiante_anio_observacion_guardar(BIGINT, BIGINT, TEXT, TEXT, NUMERIC, VARCHAR)
+    IS 'POST /informes/observacion/final/guardar: guarda (reemplaza) el comentario del AÑO de un estudiante en TESTUDIANTE_ANIO_OBSERVACION. Estado como su gemela de periodo: P_ES_BORRADOR = S -> BORRADOR; si no, APROBADA si el texto es igual al borrador de la IA (enviado o ya guardado) y MODIFICADA si no. Sin PERIODOS_ORIGEN los cuenta al guardar. Gate INFORMES/EDITAR, escritura reservada (Regla 76) y grupo propio.';
