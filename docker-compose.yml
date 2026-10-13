@@ -95,11 +95,6 @@ x-logging: &default-logging
     max-size: "${DOCKER_LOG_MAX_SIZE:-20m}"
     max-file: "${DOCKER_LOG_MAX_FILE:-5}"
 
-# Defaults de los servicios Java: tiempo para apagado ordenado + logging rotado.
-x-java-defaults: &java-defaults
-  stop_grace_period: ${JAVA_STOP_GRACE_PERIOD:-40s}
-  logging: *default-logging
-
 services:
 
   postgres:
@@ -240,7 +235,8 @@ services:
     image: ${IMAGE_PREFIX:-eurekatic}/eurekaserver:${IMAGE_TAG:-1.0.0-SNAPSHOT}
     container_name: sso-eureka
     restart: unless-stopped
-    <<: *java-defaults
+    stop_grace_period: ${JAVA_STOP_GRACE_PERIOD:-40s}
+    logging: *default-logging
     # Cap the cgroup memory so MaxRAMPercentage=75 inside the JVM
     # translates to a sane heap (180MB instead of "whatever the
     # host has"). On a 1.9GiB colima with 5 JVMs this is the
@@ -272,12 +268,10 @@ services:
 
   # Backing store for the rotating refresh-token flow. Internal-only:
   # no host port mapping (Redis is reachable solely from auth-center
-  # over the compose network). Persistence is intentionally disabled
-  # (`--save "" --appendonly no`): refresh tokens have a 30-day TTL
-  # set on every key, so if Redis loses state the worst case is
-  # every active session gets a forced re-login once. This is the
-  # correct trade-off for an admin SPA — we never want stale
-  # refresh tokens surviving a Redis crash.
+  # over the compose network). Persistencia AOF (everysec) sobre el
+  # volumen redis-data: un reinicio del contenedor ya no cierra todas
+  # las sesiones. Si Redis pierde el estado, el peor caso sigue siendo
+  # un re-login forzado una vez (refresh tokens con TTL de 30 días).
   redis:
     image: redis:7-alpine
     container_name: sso-redis
@@ -292,11 +286,30 @@ services:
     # deployments may need to remove or firewall this mapping.
     ports:
       - "127.0.0.1:${REDIS_PORT:-6379}:6379"
-    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+      REDIS_MAXMEMORY: ${REDIS_MAXMEMORY:-200mb}
+      REDIS_MAXMEMORY_POLICY: ${REDIS_MAXMEMORY_POLICY:-volatile-lru}
+    # AOF (everysec) + volumen: las sesiones sobreviven a un reinicio del
+    # contenedor. --requirepass solo se añade si REDIS_PASSWORD no está
+    # vacío (con vacío, Redis arranca sin autenticación como antes).
+    # maxmemory < mem_limit; volatile-lru solo expulsa claves con TTL.
+    # `$$` evita la interpolación de compose; la expansión es del shell.
+    command:
+      - sh
+      - -c
+      - >-
+        exec redis-server --save ""
+        --appendonly yes --appendfsync everysec
+        --maxmemory "$$REDIS_MAXMEMORY"
+        --maxmemory-policy "$$REDIS_MAXMEMORY_POLICY"
+        $${REDIS_PASSWORD:+--requirepass "$$REDIS_PASSWORD"}
+    volumes:
+      - redis-data:/data
     healthcheck:
-      # `redis-cli ping` returns "PONG" when the server is ready
-      # to accept commands.
-      test: ["CMD", "redis-cli", "ping"]
+      # PONG = listo. Con contraseña, REDISCLI_AUTH evita el aviso de -a y
+      # no deja la clave en la línea de comandos.
+      test: ["CMD-SHELL", "[ -z \"$$REDIS_PASSWORD\" ] || export REDISCLI_AUTH=\"$$REDIS_PASSWORD\"; redis-cli ping | grep -q PONG"]
       interval: 5s
       timeout: 3s
       retries: 10
@@ -309,7 +322,8 @@ services:
     image: ${IMAGE_PREFIX:-eurekatic}/auth-center:${IMAGE_TAG:-1.0.0-SNAPSHOT}
     container_name: sso-auth-center
     restart: unless-stopped
-    <<: *java-defaults
+    stop_grace_period: ${JAVA_STOP_GRACE_PERIOD:-40s}
+    logging: *default-logging
     # Subido de 640m a 896m el 2026-09-09. En el servidor de pruebas el
     # contenedor estaba estable en 583MiB — el 91% de los 640m — y es el
     # único servicio cuya caída deja a TODO el mundo fuera: es quien
@@ -412,7 +426,8 @@ services:
     image: ${IMAGE_PREFIX:-eurekatic}/api-gateway:${IMAGE_TAG:-1.0.0-SNAPSHOT}
     container_name: sso-api-gateway
     restart: unless-stopped
-    <<: *java-defaults
+    stop_grace_period: ${JAVA_STOP_GRACE_PERIOD:-40s}
+    logging: *default-logging
     mem_limit: 512m
     mem_reservation: 384m
     depends_on:
@@ -577,7 +592,8 @@ services:
     image: ${IMAGE_PREFIX:-eurekatic}/hello-service:${IMAGE_TAG:-1.0.0-SNAPSHOT}
     container_name: sso-hello-service
     restart: unless-stopped
-    <<: *java-defaults
+    stop_grace_period: ${JAVA_STOP_GRACE_PERIOD:-40s}
+    logging: *default-logging
     mem_limit: 256m
     mem_reservation: 192m
     depends_on:
@@ -614,7 +630,8 @@ services:
     image: ${IMAGE_PREFIX:-eurekatic}/sso-admin:${IMAGE_TAG:-1.0.0-SNAPSHOT}
     container_name: sso-admin
     restart: unless-stopped
-    <<: *java-defaults
+    stop_grace_period: ${JAVA_STOP_GRACE_PERIOD:-40s}
+    logging: *default-logging
     # Bumped to 3g after JVM 25 + Spring Boot 4 + Spring Cloud
     # 2025.1.x exceeded 1.5g during startup under steady traffic
     # (Hibernate schema-validate + Eureka lease renewal + first
@@ -850,7 +867,8 @@ services:
     image: ${IMAGE_PREFIX:-eurekatic}/notification-service:${IMAGE_TAG:-1.0.0-SNAPSHOT}
     container_name: sso-notification-service
     restart: unless-stopped
-    <<: *java-defaults
+    stop_grace_period: ${JAVA_STOP_GRACE_PERIOD:-40s}
+    logging: *default-logging
     mem_limit: 640m
     mem_reservation: 512m
     depends_on:
@@ -967,7 +985,8 @@ services:
     image: ${IMAGE_PREFIX:-eurekatic}/query-service:${IMAGE_TAG:-1.0.0-SNAPSHOT}
     container_name: sso-query-service-postgres
     restart: unless-stopped
-    <<: *java-defaults
+    stop_grace_period: ${JAVA_STOP_GRACE_PERIOD:-40s}
+    logging: *default-logging
     mem_limit: 384m
     mem_reservation: 256m
     depends_on:
@@ -1056,7 +1075,8 @@ services:
     image: ${IMAGE_PREFIX:-eurekatic}/query-service:${IMAGE_TAG:-1.0.0-SNAPSHOT}
     container_name: sso-query-service-postgres-analytics
     restart: unless-stopped
-    <<: *java-defaults
+    stop_grace_period: ${JAVA_STOP_GRACE_PERIOD:-40s}
+    logging: *default-logging
     mem_limit: 384m
     mem_reservation: 256m
     depends_on:
@@ -1170,7 +1190,8 @@ services:
     image: ${IMAGE_PREFIX:-eurekatic}/provisioner:${IMAGE_TAG:-1.0.0-SNAPSHOT}
     container_name: sso-provisioner
     restart: unless-stopped
-    <<: *java-defaults
+    stop_grace_period: ${JAVA_STOP_GRACE_PERIOD:-40s}
+    logging: *default-logging
     mem_limit: 384m
     mem_reservation: 256m
     # PRIVILEGE BOUNDARY: the docker socket is the only path
@@ -1467,7 +1488,8 @@ services:
     image: ${IMAGE_PREFIX:-eurekatic}/cdc-capture:${IMAGE_TAG:-1.0.0-SNAPSHOT}
     container_name: cdc-capture
     restart: unless-stopped
-    <<: *java-defaults
+    stop_grace_period: ${JAVA_STOP_GRACE_PERIOD:-40s}
+    logging: *default-logging
     mem_limit: 640m
     mem_reservation: 384m
     depends_on:
@@ -1556,7 +1578,8 @@ services:
     image: ${IMAGE_PREFIX:-eurekatic}/cdc-worker:${IMAGE_TAG:-1.0.0-SNAPSHOT}
     container_name: cdc-worker
     restart: unless-stopped
-    <<: *java-defaults
+    stop_grace_period: ${JAVA_STOP_GRACE_PERIOD:-40s}
+    logging: *default-logging
     mem_limit: 768m
     mem_reservation: 512m
     depends_on:
@@ -1661,7 +1684,8 @@ services:
     image: ${IMAGE_PREFIX:-eurekatic}/file-service:${IMAGE_TAG:-1.0.0-SNAPSHOT}
     container_name: sso-file-service
     restart: unless-stopped
-    <<: *java-defaults
+    stop_grace_period: ${JAVA_STOP_GRACE_PERIOD:-40s}
+    logging: *default-logging
     depends_on:
       eurekaserver:
         condition: service_healthy
@@ -1765,7 +1789,8 @@ services:
     image: ${IMAGE_PREFIX:-eurekatic}/reporting-service:${IMAGE_TAG:-1.0.0-SNAPSHOT}
     container_name: sso-reporting-service
     restart: unless-stopped
-    <<: *java-defaults
+    stop_grace_period: ${JAVA_STOP_GRACE_PERIOD:-40s}
+    logging: *default-logging
     # PID 1 es el JVM crudo (sin tini/dumb-init), asi que no reapea hijos
     # huerfanos. El healthcheck de abajo forkea bash+grep cada intervalo;
     # si grep queda huerfano (carrera al cortar la sesion del exec antes
@@ -1832,7 +1857,8 @@ services:
     image: ${IMAGE_PREFIX:-eurekatic}/ai-control-service:${IMAGE_TAG:-1.0.0-SNAPSHOT}
     container_name: sso-ai-control-service
     restart: unless-stopped
-    <<: *java-defaults
+    stop_grace_period: ${JAVA_STOP_GRACE_PERIOD:-40s}
+    logging: *default-logging
     # tini como PID 1 para reapear los hijos del healthcheck (ver
     # reporting-service).
     init: true
@@ -1889,6 +1915,7 @@ volumes:
     # volumen que se pierda en cada redespliegue agota la cuota en dos
     # días y deja el sitio sin TLS hasta la semana siguiente.
     name: sso-traefik-acme
+  redis-data:
   postgres-data:
     # Named volume keeps the database across `docker compose down`
     # but a `docker compose down -v` clears it (handy for dev).
