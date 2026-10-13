@@ -22,7 +22,16 @@ public class ManejadorErrores {
 
     @ExceptionHandler(ErrorAgente.class)
     public ResponseEntity<ErrorDto> dominio(ErrorAgente error) {
-        HttpStatus estado = switch (error) {
+        HttpHeaders cabeceras = new HttpHeaders();
+        if (error instanceof ErrorAgente.LimiteExcedido limite) {
+            cabeceras.set(HttpHeaders.RETRY_AFTER, String.valueOf(limite.reintentoEn().toSeconds()));
+        }
+        return ResponseEntity.status(estado(error)).headers(cabeceras).body(new ErrorDto(error.getMessage()));
+    }
+
+    /** Estado HTTP de cada error de dominio; lo reutiliza el streaming para su evento de error. */
+    public static HttpStatus estado(ErrorAgente error) {
+        return switch (error) {
             case ErrorAgente.ConversacionNoEncontrada _ -> HttpStatus.NOT_FOUND;
             case ErrorAgente.AccionNoEncontrada _ -> HttpStatus.NOT_FOUND;
             case ErrorAgente.ConversacionCerrada _ -> HttpStatus.CONFLICT;
@@ -33,11 +42,6 @@ public class ManejadorErrores {
             case ErrorAgente.SinIdentidad _ -> HttpStatus.FORBIDDEN;
             case ErrorAgente.PeticionInvalida _ -> HttpStatus.BAD_REQUEST;
         };
-        HttpHeaders cabeceras = new HttpHeaders();
-        if (error instanceof ErrorAgente.LimiteExcedido limite) {
-            cabeceras.set(HttpHeaders.RETRY_AFTER, String.valueOf(limite.reintentoEn().toSeconds()));
-        }
-        return ResponseEntity.status(estado).headers(cabeceras).body(new ErrorDto(error.getMessage()));
     }
 
     /** Errores del modelo o del query-service que llegan ya con estado HTTP (cupo, circuito, timeout). */

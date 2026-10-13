@@ -11,6 +11,7 @@ import com.co.eurekatic.aicontrol.agente.web.dto.RespuestaDto;
 import com.co.eurekatic.aicontrol.config.agente.AgenteProperties;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -21,6 +22,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 import tools.jackson.databind.json.JsonMapper;
 
 import java.util.List;
@@ -42,14 +44,16 @@ public class AgenteController {
     private final AccionesService acciones;
     private final AgenteProperties props;
     private final JsonMapper json;
+    private final TransmisorTurno transmisor;
 
     public AgenteController(ConversacionesService conversaciones, AgenteService agente, AccionesService acciones,
-                            AgenteProperties props, JsonMapper json) {
+                            AgenteProperties props, JsonMapper json, TransmisorTurno transmisor) {
         this.conversaciones = conversaciones;
         this.agente = agente;
         this.acciones = acciones;
         this.props = props;
         this.json = json;
+        this.transmisor = transmisor;
     }
 
     @PostMapping("/conversaciones")
@@ -84,12 +88,31 @@ public class AgenteController {
     public RespuestaDto mensaje(@PathVariable UUID id, @Valid @RequestBody MensajeRequest peticion,
                                 Authentication autenticacion) {
         UsuarioAgente usuario = UsuarioActual.de(autenticacion);
+        validarLongitud(peticion);
+        return RespuestaDto.de(agente.procesar(id, usuario, peticion.texto(), contextoUi(peticion)));
+    }
+
+    /**
+     * Mismo turno por Server-Sent Events: eventos {@code estado} mientras avanza y {@code respuesta} o
+     * {@code error} al final. Los errores previos al turno (identidad, longitud) responden como siempre.
+     */
+    @PostMapping(value = "/conversaciones/{id}/mensajes/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    public SseEmitter mensajeStream(@PathVariable UUID id, @Valid @RequestBody MensajeRequest peticion,
+                                    Authentication autenticacion) {
+        UsuarioAgente usuario = UsuarioActual.de(autenticacion);
+        validarLongitud(peticion);
+        return transmisor.transmitir(id, usuario, peticion.texto(), contextoUi(peticion));
+    }
+
+    private void validarLongitud(MensajeRequest peticion) {
         if (peticion.texto().length() > props.limites().textoMaxCaracteres()) {
             throw new ErrorAgente.PeticionInvalida("El mensaje supera el máximo de "
                     + props.limites().textoMaxCaracteres() + " caracteres.");
         }
-        String contextoUi = peticion.contextoUi() == null ? "" : json.writeValueAsString(peticion.contextoUi());
-        return RespuestaDto.de(agente.procesar(id, usuario, peticion.texto(), contextoUi));
+    }
+
+    private String contextoUi(MensajeRequest peticion) {
+        return peticion.contextoUi() == null ? "" : json.writeValueAsString(peticion.contextoUi());
     }
 
     @PostMapping("/acciones/{id}/confirmar")

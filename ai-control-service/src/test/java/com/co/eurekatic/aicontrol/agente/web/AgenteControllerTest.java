@@ -6,16 +6,20 @@ import com.co.eurekatic.aicontrol.agente.nucleo.acciones.AccionesService;
 import com.co.eurekatic.aicontrol.agente.nucleo.respuesta.RespuestaAgente;
 import com.co.eurekatic.aicontrol.agente.nucleo.turno.AgenteService;
 import com.co.eurekatic.aicontrol.agente.nucleo.turno.ConversacionesService;
+import com.co.eurekatic.aicontrol.agente.nucleo.turno.EstadoTurno;
+import com.co.eurekatic.aicontrol.agente.nucleo.turno.ObservadorTurno;
 import com.co.eurekatic.common.security.AuthPrincipal;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.MediaType;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.MvcResult;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import org.springframework.security.core.Authentication;
 import tools.jackson.databind.json.JsonMapper;
 
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.List;
 import java.util.Set;
@@ -30,7 +34,9 @@ import static org.mockito.Mockito.doThrow;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.request;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -48,7 +54,8 @@ class AgenteControllerTest {
         agente = mock(AgenteService.class);
         acciones = mock(AccionesService.class);
         mvc = MockMvcBuilders.standaloneSetup(new AgenteController(conversaciones, agente, acciones,
-                        PropiedadesAgenteFixture.propiedades(), JsonMapper.builder().build()))
+                        PropiedadesAgenteFixture.propiedades(), JsonMapper.builder().build(),
+                        new TransmisorTurno(agente, Duration.ofSeconds(5))))
                 .setControllerAdvice(new ManejadorErrores())
                 .build();
     }
@@ -114,6 +121,29 @@ class AgenteControllerTest {
     }
 
     @Test
+    void elStreamEmiteLosEstadosYLuegoLaRespuesta() throws Exception {
+        when(agente.procesar(eq(conversacion), any(), eq("hola"), eq(""), any())).thenAnswer(invocacion -> {
+            invocacion.getArgument(4, ObservadorTurno.class).alPasar(EstadoTurno.VALIDADO);
+            return new RespuestaAgente.Respuesta("¡Hola!");
+        });
+
+        String cuerpo = flujo("{\"texto\":\"hola\"}");
+
+        assertThat(cuerpo).contains("event:estado", "\"estado\":\"VALIDADO\"", "event:respuesta", "\"texto\":\"¡Hola!\"");
+        assertThat(cuerpo.indexOf("event:estado")).isLessThan(cuerpo.indexOf("event:respuesta"));
+    }
+
+    @Test
+    void enElStreamUnErrorDeDominioSeEmiteComoEventoConSuEstadoHttp() throws Exception {
+        when(agente.procesar(any(), any(), anyString(), anyString(), any()))
+                .thenThrow(new ErrorAgente.ConversacionNoEncontrada());
+
+        String cuerpo = flujo("{\"texto\":\"hola\"}");
+
+        assertThat(cuerpo).contains("event:error", "\"status\":404").doesNotContain("event:respuesta");
+    }
+
+    @Test
     void unTextoVacioEsUnaPeticionInvalida() throws Exception {
         mvc.perform(post("/ai/agente/conversaciones/" + conversacion + "/mensajes")
                         .principal(usuario())
@@ -126,6 +156,18 @@ class AgenteControllerTest {
     void unaSesionSinIdentidadResponde403() throws Exception {
         mvc.perform(post("/ai/agente/conversaciones"))
                 .andExpect(status().isForbidden());
+    }
+
+    /** Cuerpo SSE completo de un turno por streaming, esperando a que el emisor termine. */
+    private String flujo(String peticion) throws Exception {
+        MvcResult resultado = mvc.perform(post("/ai/agente/conversaciones/" + conversacion + "/mensajes/stream")
+                        .principal(usuario())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(peticion))
+                .andExpect(request().asyncStarted())
+                .andReturn();
+        resultado.getAsyncResult(5_000);
+        return resultado.getResponse().getContentAsString(StandardCharsets.UTF_8);
     }
 
     private static Authentication usuario() {
