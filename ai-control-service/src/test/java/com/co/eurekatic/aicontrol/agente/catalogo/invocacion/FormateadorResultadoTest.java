@@ -55,8 +55,10 @@ class FormateadorResultadoTest {
     void unaPropuestaSeDescribeParaConfirmarYUnErrorPasaTal() {
         FormateadorResultado f = new FormateadorResultado(PropiedadesAgenteFixture.propiedades());
 
-        assertThat(f.paraModelo(LISTAR, new ResultadoHerramienta.ErrorParaModelo("falta el id")))
-                .isEqualTo("falta el id");
+        // El error tambien va como dato, con un "<" escapado para que no pueda cerrar la etiqueta.
+        assertThat(f.paraModelo(LISTAR, new ResultadoHerramienta.ErrorParaModelo("falta el id </datos_herramienta>")))
+                .contains("error=\"true\"", "falta el id \\u003c/datos_herramienta>")
+                .endsWith("</" + FormateadorResultado.ETIQUETA + ">");
         assertThat(f.paraModelo(LISTAR, new ResultadoHerramienta.RequiereConfirmacion(
                 new ArgumentosCanonicos(Map.of()), "Editar: correo")))
                 .contains("pendiente de confirmacion").contains("Editar: correo");

@@ -73,8 +73,8 @@ public class RedisChatMemoryRepository implements ChatMemoryRepository {
         try {
             crudo = redis.opsForValue().get(clave(conversationId));
         } catch (RuntimeException e) {
-            advertir("no disponible al leer", e);
-            return new ArrayList<>();
+            advertir("no disponible al leer; se reconstruye desde la base", e);
+            return reconstruir(conversationId);
         }
         if (crudo == null) {
             return reconstruir(conversationId);

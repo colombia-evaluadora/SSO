@@ -54,19 +54,19 @@ class RegistroIdsRedisTest {
         when(sets.isMember(anyString(), eq("6"))).thenReturn(false);
         RegistroIdsRedis registro = new RegistroIdsRedis(redis, PropiedadesAgenteFixture.propiedades());
 
-        assertThat(registro.contiene("conv-1", "5")).isTrue();
-        assertThat(registro.contiene("conv-1", "6")).isFalse();
+        assertThat(registro.consultar("conv-1", "5")).isEqualTo(RegistroIds.Presencia.VISTO);
+        assertThat(registro.consultar("conv-1", "6")).isEqualTo(RegistroIds.Presencia.NO_VISTO);
     }
 
     @SuppressWarnings("unchecked")
     @Test
-    void siRedisFallaSePermiteElValor() {
+    void siRedisFallaLaPresenciaEsDesconocida() {
         StringRedisTemplate redis = mock(StringRedisTemplate.class);
         SetOperations<String, String> sets = mock(SetOperations.class);
         when(redis.opsForSet()).thenReturn(sets);
         when(sets.isMember(anyString(), anyString())).thenThrow(new DataAccessResourceFailureException("caido"));
         RegistroIdsRedis registro = new RegistroIdsRedis(redis, PropiedadesAgenteFixture.propiedades());
 
-        assertThat(registro.contiene("conv-1", "5")).isTrue();
+        assertThat(registro.consultar("conv-1", "5")).isEqualTo(RegistroIds.Presencia.DESCONOCIDO);
     }
 }

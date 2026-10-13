@@ -111,8 +111,13 @@ public class AgenteController {
         }
     }
 
+    /** El contexto de pantalla serializado; uno enorme se rechaza antes de llegar al turno. */
     private String contextoUi(MensajeRequest peticion) {
-        return peticion.contextoUi() == null ? "" : json.writeValueAsString(peticion.contextoUi());
+        String contexto = peticion.contextoUi() == null ? "" : json.writeValueAsString(peticion.contextoUi());
+        if (contexto.length() > props.limites().contextoMaxCaracteres()) {
+            throw new ErrorAgente.PeticionInvalida("El contexto de la pantalla es demasiado grande.");
+        }
+        return contexto;
     }
 
     @PostMapping("/acciones/{id}/confirmar")

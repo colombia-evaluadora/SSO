@@ -38,13 +38,26 @@ public class VerificadorIds {
             }
             boolean justificado = elementos(valor).stream().allMatch(elemento -> {
                 String id = ExtractorIds.textoDe(elemento);
-                return id != null && (estaEnTexto(texto, id) || registro.contiene(conversationId, id));
+                return id != null && (estaEnTexto(texto, id)
+                        || admite(registro.consultar(conversationId, id), herramienta));
             });
             if (!justificado) {
                 errores.add(mensaje(parametro, nombres.nombreModelo(parametro.clave())));
             }
         }
         return List.copyOf(errores);
+    }
+
+    /**
+     * Con el registro caido una lectura se permite (el gate de la ruta sigue decidiendo) pero una
+     * escritura no: es justo cuando un id inventado haria mas dano.
+     */
+    static boolean admite(RegistroIds.Presencia presencia, HerramientaDef herramienta) {
+        return switch (presencia) {
+            case VISTO -> true;
+            case NO_VISTO -> false;
+            case DESCONOCIDO -> !herramienta.tipo().escribe();
+        };
     }
 
     private static List<?> elementos(Object valor) {

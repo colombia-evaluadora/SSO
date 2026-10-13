@@ -1,5 +1,6 @@
 package com.co.eurekatic.aicontrol.agente.memoria.redis;
 
+import com.co.eurekatic.aicontrol.agente.comun.DatosDelUsuario;
 import com.co.eurekatic.aicontrol.agente.memoria.MensajeMemoria;
 import com.co.eurekatic.aicontrol.agente.memoria.MensajeMemoria.Asistente;
 import com.co.eurekatic.aicontrol.agente.memoria.MensajeMemoria.LlamadaHerramienta;
@@ -94,7 +95,8 @@ class RedisChatMemoryRepositoryTest {
         when(mensajes.listarFinales(id)).thenReturn(List.of(
                 new MensajeStore.Mensaje(1L, id, 1, RolMensaje.USER, "hola", null, null, null)));
 
-        assertThat(repo.findByConversationId(ID)).extracting(Message::getText).containsExactly("hola");
+        assertThat(repo.findByConversationId(ID)).extracting(Message::getText)
+                .containsExactly(DatosDelUsuario.mensaje("hola"));
     }
 
     @Test
@@ -107,16 +109,19 @@ class RedisChatMemoryRepositoryTest {
 
         List<Message> r = repo.findByConversationId(ID);
 
-        assertThat(r).extracting(Message::getText).containsExactly("hola", "buenas");
+        // El mensaje de la persona vuelve envuelto como dato, igual que en el turno original.
+        assertThat(r).extracting(Message::getText).containsExactly(DatosDelUsuario.mensaje("hola"), "buenas");
         assertThat(r.get(1)).isInstanceOf(AssistantMessage.class);
     }
 
     @Test
-    void redisCaidoEnLecturaDevuelveVacioSinConsultarLaBase() {
+    void redisCaidoEnLecturaReconstruyeDesdeLaBase() {
+        UUID id = UUID.fromString(ID);
         when(valores.get(CLAVE)).thenThrow(new RedisConnectionFailureException("sin conexion"));
+        when(mensajes.listarFinales(id)).thenReturn(List.of(
+                new MensajeStore.Mensaje(1L, id, 1, RolMensaje.USER, "hola", null, null, null)));
 
-        assertThat(repo.findByConversationId(ID)).isEmpty();
-        verifyNoInteractions(mensajes);
+        assertThat(repo.findByConversationId(ID)).hasSize(1);
     }
 
     @Test

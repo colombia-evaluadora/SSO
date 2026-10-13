@@ -23,7 +23,6 @@ import java.util.List;
 public class PromptTurno {
 
     private static final String PLANTILLA = "prompts/agente-sistema.st";
-    private static final String ETIQUETA_USUARIO = "mensaje_usuario";
     private static final String ETIQUETA_CONTEXTO = "contexto_ui";
 
     private final String sistema;
@@ -41,7 +40,7 @@ public class PromptTurno {
 
     /** Bloque del mensaje del usuario: tal cual queda en la memoria y en el prompt del turno. */
     public static String bloqueUsuario(String textoNormalizado) {
-        return DatosDelUsuario.bloque(ETIQUETA_USUARIO, textoNormalizado);
+        return DatosDelUsuario.mensaje(textoNormalizado);
     }
 
     /**

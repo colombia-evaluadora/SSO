@@ -17,7 +17,11 @@ final class RegistroIdsEnMemoria implements RegistroIds {
     }
 
     @Override
-    public boolean contiene(String conversationId, String id) {
-        return porConversacion.getOrDefault(conversationId, Set.of()).contains(id);
+    public Presencia consultar(String conversationId, String id) {
+        return porConversacion.getOrDefault(conversationId, Set.of()).contains(id) ? Presencia.VISTO : Presencia.NO_VISTO;
+    }
+
+    boolean contiene(String conversationId, String id) {
+        return consultar(conversationId, id) == Presencia.VISTO;
     }
 }

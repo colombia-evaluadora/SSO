@@ -9,7 +9,8 @@ import com.co.eurekatic.aicontrol.agente.web.dto.RespuestaDto;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.DisposableBean;
-import org.springframework.beans.factory.annotation.Value;
+import com.co.eurekatic.aicontrol.config.agente.AgenteProperties;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
@@ -41,8 +42,12 @@ public class TransmisorTurno implements DisposableBean {
     private final Duration timeout;
     private final ExecutorService hilos = Executors.newVirtualThreadPerTaskExecutor();
 
-    public TransmisorTurno(AgenteService agente,
-                           @Value("${sso.ai.agente.stream-timeout:PT150S}") Duration timeout) {
+    @Autowired
+    public TransmisorTurno(AgenteService agente, AgenteProperties props) {
+        this(agente, props.limites().streamTimeout());
+    }
+
+    TransmisorTurno(AgenteService agente, Duration timeout) {
         this.agente = agente;
         this.timeout = timeout;
     }

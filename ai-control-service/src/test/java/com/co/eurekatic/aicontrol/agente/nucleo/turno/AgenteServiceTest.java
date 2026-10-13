@@ -65,7 +65,7 @@ class AgenteServiceTest {
                 new PromptTurno(new org.springframework.core.io.ClassPathResource("prompts/agente-sistema.st"),
                         PropiedadesAgenteFixture.propiedades().limites().textoMaxCaracteres()),
                 bucle, acciones, salida,
-                new PresentadorAnalitica(mock(ConsultaAnaliticaStore.class)));
+                new PresentadorAnalitica(mock(ConsultaAnaliticaStore.class)), new TurnosEnCurso());
     }
 
     @Test

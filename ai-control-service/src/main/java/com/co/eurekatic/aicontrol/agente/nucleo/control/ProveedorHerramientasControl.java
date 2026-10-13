@@ -15,4 +15,9 @@ import java.util.List;
 public interface ProveedorHerramientasControl {
 
     List<ToolCallback> callbacks();
+
+    /** Si actua sobre la pantalla de la persona: con riesgo MEDIO esas herramientas no se ofrecen. */
+    default boolean manejaPantalla() {
+        return false;
+    }
 }

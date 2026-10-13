@@ -82,6 +82,11 @@ public class AccionUiHerramienta implements ProveedorHerramientasControl {
         return callbacks;
     }
 
+    @Override
+    public boolean manejaPantalla() {
+        return true;
+    }
+
     String ejecutar(Map<String, Object> argumentos, ToolContext contexto) {
         TurnoContexto turno = TurnoContexto.de(contexto);
         ContextoInvocacion invocacion = ContextoInvocacion.de(contexto);

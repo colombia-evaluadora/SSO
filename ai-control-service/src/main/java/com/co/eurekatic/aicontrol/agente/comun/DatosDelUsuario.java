@@ -10,8 +10,17 @@ import java.util.regex.Pattern;
 public final class DatosDelUsuario {
 
     private static final String SUSTITUTO = "[etiqueta]";
+    private static final String ETIQUETA_MENSAJE = "mensaje_usuario";
 
     private DatosDelUsuario() {
+    }
+
+    /**
+     * El mensaje de la persona tal como lo ve el modelo, en el turno y al reconstruir la memoria: siempre
+     * dentro de su bloque, para que el modelo lo trate como dato y no como instruccion.
+     */
+    public static String mensaje(String textoNormalizado) {
+        return bloque(ETIQUETA_MENSAJE, textoNormalizado);
     }
 
     public static String bloque(String etiqueta, String contenido) {

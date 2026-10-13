@@ -1,5 +1,6 @@
 package com.co.eurekatic.aicontrol.agente.memoria;
 
+import com.co.eurekatic.aicontrol.agente.comun.DatosDelUsuario;
 import com.co.eurekatic.aicontrol.agente.memoria.MensajeMemoria.Asistente;
 import com.co.eurekatic.aicontrol.agente.memoria.MensajeMemoria.LlamadaHerramienta;
 import com.co.eurekatic.aicontrol.agente.memoria.MensajeMemoria.ResultadoHerramienta;
@@ -73,7 +74,8 @@ public final class MensajeMemoriaMapper {
      */
     public static MensajeMemoria desdeTurno(MensajeStore.Mensaje fila) {
         return switch (fila.rol()) {
-            case USER -> new Usuario(fila.contenido());
+            // Igual que en el turno: el mensaje de la persona vuelve al modelo dentro de su bloque de datos.
+            case USER -> new Usuario(DatosDelUsuario.mensaje(fila.contenido()));
             case ASSISTANT -> new Asistente(fila.contenido(), List.of());
             case TOOL, SYSTEM -> throw new IllegalStateException(
                     "La memoria de respaldo solo admite turnos de texto, no " + fila.rol());

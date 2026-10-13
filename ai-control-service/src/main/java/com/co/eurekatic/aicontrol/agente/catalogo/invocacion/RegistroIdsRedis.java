@@ -45,12 +45,14 @@ public class RegistroIdsRedis implements RegistroIds {
     }
 
     @Override
-    public boolean contiene(String conversationId, String id) {
+    public Presencia consultar(String conversationId, String id) {
         try {
-            return Boolean.TRUE.equals(redis.opsForSet().isMember(clave(conversationId), id));
+            return Boolean.TRUE.equals(redis.opsForSet().isMember(clave(conversationId), id))
+                    ? Presencia.VISTO
+                    : Presencia.NO_VISTO;
         } catch (RuntimeException e) {
-            log.warn("Registro de ids no disponible al leer; se permite el valor: {}", e.getClass().getSimpleName());
-            return true;
+            log.warn("Registro de ids no disponible al leer: {}", e.getClass().getSimpleName());
+            return Presencia.DESCONOCIDO;
         }
     }
 

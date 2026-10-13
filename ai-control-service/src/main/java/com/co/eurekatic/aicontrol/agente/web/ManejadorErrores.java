@@ -2,6 +2,9 @@ package com.co.eurekatic.aicontrol.agente.web;
 
 import com.co.eurekatic.aicontrol.agente.comun.ErrorAgente;
 import com.co.eurekatic.aicontrol.agente.web.dto.ErrorDto;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.dao.DataAccessException;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -19,6 +22,7 @@ public class ManejadorErrores {
 
     private static final String MENSAJE_PETICION = "El mensaje no es válido.";
     private static final String MENSAJE_GENERICO = "No se pudo completar la operación.";
+    private static final Logger log = LoggerFactory.getLogger(ManejadorErrores.class);
 
     @ExceptionHandler(ErrorAgente.class)
     public ResponseEntity<ErrorDto> dominio(ErrorAgente error) {
@@ -41,7 +45,15 @@ public class ManejadorErrores {
             case ErrorAgente.LimiteExcedido _ -> HttpStatus.TOO_MANY_REQUESTS;
             case ErrorAgente.SinIdentidad _ -> HttpStatus.FORBIDDEN;
             case ErrorAgente.PeticionInvalida _ -> HttpStatus.BAD_REQUEST;
+            case ErrorAgente.TurnoEnCurso _ -> HttpStatus.CONFLICT;
         };
+    }
+
+    /** Un fallo de la base no se cuenta al cliente: su mensaje puede llevar SQL o nombres internos. */
+    @ExceptionHandler(DataAccessException.class)
+    public ResponseEntity<ErrorDto> base(DataAccessException error) {
+        log.error("Fallo de acceso a datos del agente: {}", error.getClass().getSimpleName());
+        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).body(new ErrorDto(MENSAJE_GENERICO));
     }
 
     /** Errores del modelo o del query-service que llegan ya con estado HTTP (cupo, circuito, timeout). */

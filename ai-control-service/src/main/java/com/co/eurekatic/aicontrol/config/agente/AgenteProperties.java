@@ -61,13 +61,20 @@ public record AgenteProperties(
      * @param rateLimitUsuarioPorMin turnos por minuto y por usuario
      * @param textoMaxCaracteres     longitud maxima de un mensaje del usuario
      * @param maxConcurrentRazonador llamadas simultaneas al razonador por instancia
+     * @param contextoMaxCaracteres  tamano maximo del contextoUi serializado
+     * @param duracionMaximaTurno    pasado este tiempo el bucle no inicia otra vuelta; por debajo del
+     *                               timeout del gateway para que la respuesta llegue
+     * @param streamTimeout          vida de una conexion SSE; entre la duracion del turno y el gateway
      */
     public record Limites(
             @DefaultValue("15") int maxTotalToolCalls,
             @DefaultValue("5") int maxCallsPorHerramienta,
             @DefaultValue("20") int rateLimitUsuarioPorMin,
             @DefaultValue("4000") int textoMaxCaracteres,
-            @DefaultValue("2") int maxConcurrentRazonador) {
+            @DefaultValue("2") int maxConcurrentRazonador,
+            @DefaultValue("20000") int contextoMaxCaracteres,
+            @DefaultValue("PT140S") Duration duracionMaximaTurno,
+            @DefaultValue("PT165S") Duration streamTimeout) {
     }
 
     /**
@@ -97,7 +104,8 @@ public record AgenteProperties(
             @DefaultValue("50") int maxFilas,
             @DefaultValue("12000") int maxCaracteres,
             @DefaultValue({"identificacion", "documento", "correo", "email", "telefono", "celular",
-                    "direccion", "fecha_nacimiento", "password", "contrasena", "token"})
+                    "direccion", "nacimiento", "identification", "phone", "address", "birth", "acudiente",
+                    "tutor", "eps", "sisben", "barrio", "password", "contrasena", "token"})
             List<String> columnasSensibles) {
 
         public Catalogo {

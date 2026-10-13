@@ -9,12 +9,16 @@ import java.util.Map;
  */
 public interface RegistroIds {
 
+    /** Si el registro conoce un id en la conversacion; {@code DESCONOCIDO} cuando el almacen no responde. */
+    enum Presencia {
+        VISTO,
+        NO_VISTO,
+        DESCONOCIDO
+    }
+
     /** Guarda los ids visibles en un resultado de la conversacion. */
     void registrar(String conversationId, List<Map<String, Object>> filas);
 
-    /**
-     * @return si el id aparecio antes en la conversacion. Si el almacen no responde, se
-     *         permite: la base sigue siendo la autoridad y el gate se aplica igual.
-     */
-    boolean contiene(String conversationId, String id);
+    /** Presencia del id en la conversacion; quien pregunta decide que hacer si es desconocida. */
+    Presencia consultar(String conversationId, String id);
 }

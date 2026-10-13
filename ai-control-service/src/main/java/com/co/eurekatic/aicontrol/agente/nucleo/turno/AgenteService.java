@@ -32,10 +32,11 @@ public class AgenteService {
     private final AccionesService acciones;
     private final SalidaTurno salida;
     private final PresentadorAnalitica analitica;
+    private final TurnosEnCurso enCurso;
 
     public AgenteService(ConversacionesService conversaciones, PreparadorTurno preparador, RegistradorTurno registrador,
                          PromptTurno prompts, BucleAgente bucle, AccionesService acciones, SalidaTurno salida,
-                         PresentadorAnalitica analitica) {
+                         PresentadorAnalitica analitica, TurnosEnCurso enCurso) {
         this.conversaciones = conversaciones;
         this.preparador = preparador;
         this.registrador = registrador;
@@ -44,6 +45,7 @@ public class AgenteService {
         this.acciones = acciones;
         this.salida = salida;
         this.analitica = analitica;
+        this.enCurso = enCurso;
     }
 
     /**
@@ -54,9 +56,20 @@ public class AgenteService {
         return procesar(conversacionId, usuario, texto, contextoUiJson, ObservadorTurno.NINGUNO);
     }
 
-    /** Igual, avisando de cada paso al observador (streaming). */
+    /**
+     * Igual, avisando de cada paso al observador (streaming).
+     *
+     * @throws com.co.eurekatic.aicontrol.agente.comun.ErrorAgente.TurnoEnCurso si el usuario ya tiene un turno en marcha
+     */
     public RespuestaAgente procesar(UUID conversacionId, UsuarioAgente usuario, String texto, String contextoUiJson,
                                     ObservadorTurno observador) {
+        try (TurnosEnCurso.Turno _ = enCurso.abrir(usuario.userId())) {
+            return procesarReservado(conversacionId, usuario, texto, contextoUiJson, observador);
+        }
+    }
+
+    private RespuestaAgente procesarReservado(UUID conversacionId, UsuarioAgente usuario, String texto,
+                                              String contextoUiJson, ObservadorTurno observador) {
         long inicio = System.nanoTime();
         TrazaTurno traza = TrazaTurno.iniciar(conversacionId, observador);
         conversaciones.activa(conversacionId, usuario);

@@ -39,7 +39,7 @@ class FabricaToolCallbacksTest {
 
         String salida = callback.call("{\"id\": 12, \"person_email\": \"a@b.co\"}", new ToolContext(ctx.comoMapa()));
 
-        assertThat(salida).isEqualTo("falta el id");
+        assertThat(salida).contains("falta el id").contains("<" + FormateadorResultado.ETIQUETA);
         assertThat(callback.getToolDefinition().name()).isEqualTo("editar_funcionario");
         assertThat(callback.getToolDefinition().inputSchema()).contains("\"additionalProperties\":false");
         ArgumentCaptor<Map<String, Object>> args = ArgumentCaptor.forClass(Map.class);

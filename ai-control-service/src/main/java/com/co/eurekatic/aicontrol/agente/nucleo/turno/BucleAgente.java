@@ -29,7 +29,9 @@ import org.springframework.stereotype.Component;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 /**
  * Bucle manual del razonador: pide una respuesta, ejecuta las herramientas que pide y vuelve a pedir,
@@ -49,6 +51,8 @@ public class BucleAgente {
     static final String MENSAJE_VACIO = "No he podido responder a eso. ¿Puedes reformularlo?";
     static final String MENSAJE_UNA_ACCION = "Solo puedo preparar una acción a la vez. "
             + "Confirma o cancela la anterior y luego pide la siguiente.";
+    static final String MENSAJE_TIEMPO = "Esto está tomando más de lo esperado. "
+            + "Prueba a pedirlo en pasos más concretos.";
 
     private final ChatClient razonador;
     private final ModeloInvoker invocador;
@@ -88,9 +92,17 @@ public class BucleAgente {
         List<Message> mensajes = entrada.mensajes();
         Uso uso = Uso.NINGUNO;
         String modelo = modeloConfigurado;
+        long limiteNanos = System.nanoTime() + limites.duracionMaximaTurno().toNanos();
+        Set<String> ofrecidas = entrada.callbacks().stream()
+                .map(c -> c.getToolDefinition().name())
+                .collect(Collectors.toUnmodifiableSet());
         // Cada ronda con herramientas consume al menos una llamada del presupuesto: el bucle no puede
         // dar mas vueltas que el total mas la respuesta final.
         for (int vuelta = 0; vuelta <= limites.maxTotalToolCalls(); vuelta++) {
+            if (vuelta > 0 && System.nanoTime() > limiteNanos) {
+                log.warn("Turno cortado por tiempo: conversacion={} vueltas={}", entrada.conversacionId(), vuelta);
+                return new ResultadoBucle.Final(new RespuestaAgente.Respuesta(MENSAJE_TIEMPO), uso, modelo);
+            }
             ChatResponse respuesta = llamar(mensajes, entrada.callbacks(), ambito);
             uso = uso.sumar(Uso.de(respuesta));
             modelo = modeloDe(respuesta);
@@ -98,6 +110,11 @@ public class BucleAgente {
                 return new ResultadoBucle.Final(textoFinal(respuesta), uso, modelo);
             }
             List<String> nombres = nombres(respuesta);
+            if (!ofrecidas.containsAll(nombres)) {
+                // El modelo pidio una herramienta que no se le ofrecio en este turno: no se ejecuta nada.
+                log.warn("Herramienta no ofrecida pedida por el modelo: conversacion={}", entrada.conversacionId());
+                return new ResultadoBucle.Final(new RespuestaAgente.Respuesta(MENSAJE_VACIO), uso, modelo);
+            }
             if (!contador.cabe(nombres)) {
                 log.warn("Turno cortado por limite de herramientas: conversacion={} llamadas={}",
                         entrada.conversacionId(), contador.total());

@@ -48,7 +48,9 @@ public class SelectorHerramientas {
                 menusUsuario, intencion.riesgo(), tipos);
         List<ToolCallback> callbacks = new ArrayList<>(fabrica.crearTodas(herramientas));
         if (tipos.contains(TipoHerramienta.CONTROL)) {
-            controles.forEach(proveedor -> callbacks.addAll(proveedor.callbacks()));
+            controles.stream()
+                    .filter(proveedor -> intencion.riesgo().permiteEscritura() || !proveedor.manejaPantalla())
+                    .forEach(proveedor -> callbacks.addAll(proveedor.callbacks()));
         }
         return new Seleccion(herramientas, List.copyOf(callbacks), menusUsuario);
     }

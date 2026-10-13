@@ -28,7 +28,10 @@ public class FormateadorResultado {
     public String paraModelo(HerramientaDef herramienta, ResultadoHerramienta resultado) {
         return switch (resultado) {
             case ResultadoHerramienta.Datos datos -> datos(herramienta, datos);
-            case ResultadoHerramienta.ErrorParaModelo error -> error.texto();
+            // El error puede traer el mensaje de la base (y en el, texto que escribio alguien): tambien es dato.
+            case ResultadoHerramienta.ErrorParaModelo error -> AVISO + "\n<" + ETIQUETA + " herramienta=\""
+                    + herramienta.codigo() + "\" error=\"true\">\n" + error.texto().replace("<", "\\u003c")
+                    + "\n</" + ETIQUETA + ">";
             case ResultadoHerramienta.RequiereConfirmacion confirmacion ->
                     "Accion preparada, pendiente de confirmacion del usuario: " + confirmacion.resumen()
                             + ". No la repitas: el usuario la confirmara o la cancelara.";

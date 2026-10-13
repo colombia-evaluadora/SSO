@@ -148,6 +148,10 @@ sso:
         rate-limit-usuario-por-min: ${AI_AGENTE_RATE_LIMIT_USUARIO_POR_MIN:20}
         texto-max-caracteres: ${AI_AGENTE_TEXTO_MAX_CARACTERES:4000}
         max-concurrent-razonador: ${AI_AGENTE_MAX_CONCURRENT_REASONING:2}
+        contexto-max-caracteres: ${AI_AGENTE_CONTEXTO_MAX_CARACTERES:20000}
+        # Escalonados: turno < stream < gateway (GATEWAY_AI_RESPONSE_TIMEOUT_MS).
+        duracion-maxima-turno: ${AI_AGENTE_DURACION_MAXIMA_TURNO:PT140S}
+        stream-timeout: ${AI_AGENTE_STREAM_TIMEOUT:PT165S}
       memoria:
         max-mensajes: ${AI_AGENTE_MEMORIA_MAX_MENSAJES:30}
         ttl: ${AI_AGENTE_MEMORIA_TTL:24h}
@@ -169,7 +173,16 @@ sso:
           - telefono
           - celular
           - direccion
-          - fecha_nacimiento
+          - nacimiento
+          - identification
+          - phone
+          - address
+          - birth
+          - acudiente
+          - tutor
+          - eps
+          - sisben
+          - barrio
           - password
           - contrasena
           - token
