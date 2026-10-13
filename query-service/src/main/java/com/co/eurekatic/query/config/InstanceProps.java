@@ -28,6 +28,11 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  *       (optional — defaults per dialect)</li>
  *   <li>{@code QUERY_DS_POOL_SIZE} → {@code maximum-pool-size}
  *       (default 10)</li>
+ *   <li>{@code QUERY_DS_CONNECTION_TIMEOUT_MS},
+ *       {@code QUERY_DS_MINIMUM_IDLE}, {@code QUERY_DS_MAX_LIFETIME_MS},
+ *       {@code QUERY_DS_KEEPALIVE_TIME_MS}, {@code QUERY_DS_LEAK_DETECTION_MS},
+ *       {@code QUERY_DS_STATEMENT_TIMEOUT_MS} → Hikari tunables
+ *       (statement timeout is postgres-only)</li>
  *   <li>{@code QUERY_INSTANCE_NAME} → {@code instance-name}
  *       (optional — used as the Eureka service-id suffix and
  *       as the {@code spring.application.name} override.
@@ -44,6 +49,12 @@ public class InstanceProps {
     private String password;
     private String driverClassName;
     private int maximumPoolSize = 10;
+    private long connectionTimeoutMs = 2_000;
+    private int minimumIdle = 4;
+    private long maxLifetimeMs = 1_500_000;
+    private long keepaliveTimeMs = 120_000;
+    private long leakDetectionMs = 20_000;
+    private long statementTimeoutMs = 185_000;
     /**
      * Optional. Used in two places:
      * <ul>
@@ -68,6 +79,18 @@ public class InstanceProps {
     public void setDriverClassName(String driverClassName) { this.driverClassName = driverClassName; }
     public int getMaximumPoolSize() { return maximumPoolSize; }
     public void setMaximumPoolSize(int maximumPoolSize) { this.maximumPoolSize = maximumPoolSize; }
+    public long getConnectionTimeoutMs() { return connectionTimeoutMs; }
+    public void setConnectionTimeoutMs(long v) { this.connectionTimeoutMs = v; }
+    public int getMinimumIdle() { return minimumIdle; }
+    public void setMinimumIdle(int v) { this.minimumIdle = v; }
+    public long getMaxLifetimeMs() { return maxLifetimeMs; }
+    public void setMaxLifetimeMs(long v) { this.maxLifetimeMs = v; }
+    public long getKeepaliveTimeMs() { return keepaliveTimeMs; }
+    public void setKeepaliveTimeMs(long v) { this.keepaliveTimeMs = v; }
+    public long getLeakDetectionMs() { return leakDetectionMs; }
+    public void setLeakDetectionMs(long v) { this.leakDetectionMs = v; }
+    public long getStatementTimeoutMs() { return statementTimeoutMs; }
+    public void setStatementTimeoutMs(long v) { this.statementTimeoutMs = v; }
     public String getInstanceName() { return instanceName; }
     public void setInstanceName(String instanceName) { this.instanceName = instanceName; }
 }

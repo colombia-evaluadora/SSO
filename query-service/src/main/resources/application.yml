@@ -99,6 +99,13 @@ query:
         username: ${QUERY_DS_POSTGRES_USER:query}
         password: ${QUERY_DS_POSTGRES_PASSWORD:change-me}
         maximum-pool-size: 10
+        hikari:
+          connection-timeout: ${QUERY_DS_CONNECTION_TIMEOUT_MS:2000}
+          minimum-idle: ${QUERY_DS_MINIMUM_IDLE:4}
+          max-lifetime: ${QUERY_DS_MAX_LIFETIME_MS:1500000}
+          keepalive-time: ${QUERY_DS_KEEPALIVE_TIME_MS:120000}
+          leak-detection-threshold: ${QUERY_DS_LEAK_DETECTION_MS:20000}
+          statement-timeout-ms: ${QUERY_DS_STATEMENT_TIMEOUT_MS:185000}
       # oracle:
       #   enabled: ${QUERY_DS_ORACLE_ENABLED:false}
       #   url: ${QUERY_DS_ORACLE_URL:jdbc:oracle:thin:@//oracle-host:1521/ORCLPDB1}
