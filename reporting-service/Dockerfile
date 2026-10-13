@@ -55,6 +55,7 @@ EXPOSE 8087
 ENTRYPOINT ["java", \
     "-XX:+UseContainerSupport", \
     "-XX:MaxRAMPercentage=75", \
+    "-XX:+ExitOnOutOfMemoryError", \
     "-Djava.awt.headless=true", \
     "-Djava.security.egd=file:/dev/./urandom", \
     "-jar", "/app/app.jar"]
