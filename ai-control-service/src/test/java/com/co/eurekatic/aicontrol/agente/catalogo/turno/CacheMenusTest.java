@@ -35,7 +35,7 @@ class CacheMenusTest {
     @Test
     void unaEntradaVenceAlCumplirseElTtl() {
         RelojMovil reloj = new RelojMovil();
-        CacheMenus cache = new CacheMenus(Duration.ofSeconds(60), reloj);
+        CacheMenus<String> cache = new CacheMenus<>(Duration.ofSeconds(60), reloj);
         Map<String, AccesoMenu> menus = Map.of("FUNCIONARIOS", new AccesoMenu(true));
         cache.poner("h1", menus);
 
@@ -48,7 +48,7 @@ class CacheMenusTest {
 
     @Test
     void unaClaveAusenteNoEsUnaEntrada() {
-        CacheMenus cache = new CacheMenus(Duration.ofSeconds(60), new RelojMovil());
+        CacheMenus<String> cache = new CacheMenus<>(Duration.ofSeconds(60), new RelojMovil());
 
         assertThat(cache.obtener("nada")).isEmpty();
     }

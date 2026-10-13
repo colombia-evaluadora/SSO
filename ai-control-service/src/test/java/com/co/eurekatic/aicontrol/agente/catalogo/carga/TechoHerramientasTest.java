@@ -53,13 +53,13 @@ class TechoHerramientasTest {
 
     @Test
     void herramientaDeControlSinRutaPasa() {
-        HerramientaDef control = new HerramientaDef("buscar_pantalla", TipoHerramienta.CONTROL, "d", List.of(),
+        HerramientaDef control = new HerramientaDef(401L, "buscar_pantalla", TipoHerramienta.CONTROL, "d", List.of(),
                 false, List.of(), 1, Optional.empty(), Optional.empty(), Set.of());
         assertThat(techo.motivoRechazo(control)).isEmpty();
     }
 
     private static HerramientaDef herramienta(TipoHerramienta tipo, String ruta, HttpMethod metodo, boolean confirma) {
-        return new HerramientaDef("h_prueba", tipo, "d", List.of(), confirma, List.of(), 1,
+        return new HerramientaDef(402L, "h_prueba", tipo, "d", List.of(), confirma, List.of(), 1,
                 Optional.of("MENU"), Optional.of(new RutaQuery(metodo, ruta, Map.of(), Map.<String, Restriccion>of())),
                 Set.of());
     }

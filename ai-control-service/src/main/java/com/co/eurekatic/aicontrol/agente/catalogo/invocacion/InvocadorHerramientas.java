@@ -36,6 +36,7 @@ public class InvocadorHerramientas {
     private final RegistroIds registroIds;
     private final ToolInvocacionStore almacen;
     private final int maxFilas;
+    private final FiltroColumnasSensibles filtro;
     private final ValidadorArgumentos validador = new ValidadorArgumentos();
 
     public InvocadorHerramientas(QueryServiceClient queryService, VerificadorIds verificadorIds,
@@ -45,6 +46,7 @@ public class InvocadorHerramientas {
         this.registroIds = registroIds;
         this.almacen = almacen;
         this.maxFilas = props.catalogo().maxFilas();
+        this.filtro = new FiltroColumnasSensibles(props.catalogo().columnasSensibles());
     }
 
     /**
@@ -93,8 +95,9 @@ public class InvocadorHerramientas {
                 peticion.metodo(), peticion.ruta(), peticion.query(), peticion.body(), contexto.bearer());
         return switch (respuesta) {
             case RespuestaQuery.Exito exito -> {
-                boolean truncado = exito.filas().size() > maxFilas;
-                List<Map<String, Object>> visibles = truncado ? exito.filas().subList(0, maxFilas) : exito.filas();
+                List<Map<String, Object>> sinSensibles = filtro.aplicar(exito.filas());
+                boolean truncado = sinSensibles.size() > maxFilas;
+                List<Map<String, Object>> visibles = truncado ? sinSensibles.subList(0, maxFilas) : sinSensibles;
                 // Solo cuenta como visto lo que el modelo recibe: el resto no existe para el.
                 registroIds.registrar(contexto.conversationId(), visibles);
                 yield new Ejecucion(new ResultadoHerramienta.Datos(visibles, truncado), EstadoInvocacion.OK, null,
@@ -142,7 +145,7 @@ public class InvocadorHerramientas {
         try {
             almacen.insertar(new ToolInvocacionStore.NuevaInvocacion(
                     contexto.mensajeId(),
-                    null,
+                    herramienta.id(),
                     herramienta.codigo(),
                     Redaccion.clavesJson(argumentos, nombres),
                     ejecucion.estado(),

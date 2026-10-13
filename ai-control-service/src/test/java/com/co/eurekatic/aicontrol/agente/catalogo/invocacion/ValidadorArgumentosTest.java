@@ -4,6 +4,7 @@ import com.co.eurekatic.aicontrol.agente.catalogo.CatalogoFixture;
 import com.co.eurekatic.aicontrol.agente.catalogo.dominio.HerramientaDef;
 import org.junit.jupiter.api.Test;
 
+import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -40,6 +41,20 @@ class ValidadorArgumentosTest {
         ArgumentosCanonicos args = ((ResultadoValidacion.Valido) r).argumentos();
         assertThat(args.planos()).doesNotContainKeys("BODY.STATUS", "BODY.FKTARCHIVOFOTO");
         assertThat(args.body()).doesNotContainKeys("STATUS", "FKTARCHIVOFOTO");
+    }
+
+    @Test
+    void unObligatorioDeCuerpoSinValorSeExigeAunqueLaBaseNoLoMarqueConBang() {
+        var fila = new com.co.eurekatic.aicontrol.agente.catalogo.carga.FilaCatalogo(
+                501L, "crear_x", "ESCRITURA", "d",
+                "{\"BODY.TITULO\":{\"descripcion\":\"Titulo\",\"resuelve_con\":null,\"inferible\":false,\"obligatorio\":true}}",
+                true, "[]", 1, null, "/planeador/actividades", "POST", "{\"BODY.TITULO\":\"VARCHAR\"}", null, List.of());
+        HerramientaDef h = new com.co.eurekatic.aicontrol.agente.catalogo.carga.MapeadorHerramienta().mapear(fila);
+
+        ResultadoValidacion sinTitulo = validador.validar(h, Map.of());
+
+        assertThat(sinTitulo).isInstanceOf(ResultadoValidacion.Invalido.class);
+        assertThat(((ResultadoValidacion.Invalido) sinTitulo).errores()).anySatisfy(e -> assertThat(e).contains("'titulo'"));
     }
 
     @Test

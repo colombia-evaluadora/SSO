@@ -19,6 +19,7 @@ public final class CatalogoFixture {
     /** PATCH con PARAM.ID y dos campos de persona. {@code BODY.STATUS} y el FILE quedan fuera de la allowlist. */
     public static FilaCatalogo editarFuncionario() {
         return new FilaCatalogo(
+                101L,
                 "editar_funcionario",
                 "ESCRITURA",
                 "Edita datos de un funcionario existente. Requiere confirmacion.",
@@ -45,6 +46,7 @@ public final class CatalogoFixture {
     /** POST con fechas, un FK con su herramienta de resolucion y un NUMERIC. */
     public static FilaCatalogo crearActividad() {
         return new FilaCatalogo(
+                102L,
                 "crear_actividad_planeador",
                 "ESCRITURA",
                 "Crea una actividad del planeador dentro de una unidad. Requiere confirmacion.",
@@ -71,6 +73,7 @@ public final class CatalogoFixture {
     /** GET con binds de query: fecha, pk de grupo y un entero de paginacion. */
     public static FilaCatalogo actividadesMias() {
         return new FilaCatalogo(
+                103L,
                 "actividades_mias_listar",
                 "LECTURA",
                 "Lista las actividades del docente con filtros.",

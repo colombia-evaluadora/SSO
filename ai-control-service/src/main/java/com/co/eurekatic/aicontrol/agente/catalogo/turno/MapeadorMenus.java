@@ -5,33 +5,25 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Filas de la ruta de menus a {@link AccesoMenu}. Pura.
+ * Filas de permisos a {@link AccesoMenu}. Pura.
  *
- * <p>Columnas esperadas de {@code academico_test.fn_usuario_permisos_menu}: {@code codigo},
- * {@code puede_ver}, {@code puede_crear}, {@code puede_editar}, {@code puede_eliminar}. Un menu
- * sin codigo no se puede cruzar con las herramientas y se omite.
+ * <p>Solo cuentan los menus que el usuario ve. Un menu es de solo lectura si no puede crear
+ * ni editar dentro de el; eliminar no cambia la clasificacion porque el agente no borra.
  */
 public final class MapeadorMenus {
 
     private MapeadorMenus() {
     }
 
-    public static Map<String, AccesoMenu> desde(List<Map<String, Object>> filas) {
+    public static Map<String, AccesoMenu> desde(List<FilaMenu> filas) {
         Map<String, AccesoMenu> menus = new LinkedHashMap<>();
-        for (Map<String, Object> fila : filas) {
-            String codigo = fila.get("codigo") instanceof String texto && !texto.isBlank() ? texto.trim() : null;
-            if (codigo == null || !esTrue(fila.get("puede_ver"))) {
+        for (FilaMenu fila : filas) {
+            if (!fila.puedeVer() || fila.codigo() == null || fila.codigo().isBlank()) {
                 continue;
             }
-            boolean puedeModificar = esTrue(fila.get("puede_crear"))
-                    || esTrue(fila.get("puede_editar"))
-                    || esTrue(fila.get("puede_eliminar"));
-            menus.put(codigo, new AccesoMenu(!puedeModificar));
+            boolean soloLectura = !(fila.puedeCrear() || fila.puedeEditar());
+            menus.put(fila.codigo().trim(), new AccesoMenu(soloLectura));
         }
         return Map.copyOf(menus);
-    }
-
-    private static boolean esTrue(Object valor) {
-        return Boolean.TRUE.equals(valor);
     }
 }

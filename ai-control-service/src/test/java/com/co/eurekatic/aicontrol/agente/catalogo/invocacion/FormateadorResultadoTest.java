@@ -41,7 +41,8 @@ class FormateadorResultadoTest {
         AgenteProperties base = PropiedadesAgenteFixture.propiedades();
         AgenteProperties corto = new AgenteProperties(base.modelos(), base.limites(), base.memoria(), base.acciones(),
                 new AgenteProperties.Catalogo(base.catalogo().refresco(), base.catalogo().reintento(),
-                        base.catalogo().menusTtl(), base.catalogo().rutaMenus(), base.catalogo().maxFilas(), 30));
+                        base.catalogo().menusTtl(), base.catalogo().maxFilas(), 30,
+                        base.catalogo().columnasSensibles()));
         FormateadorResultado f = new FormateadorResultado(corto);
         List<Map<String, Object>> filas = List.of(Map.of("titulo", "un texto bastante largo para cortar"));
 

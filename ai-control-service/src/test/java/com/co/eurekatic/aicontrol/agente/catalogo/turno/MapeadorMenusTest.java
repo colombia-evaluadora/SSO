@@ -3,30 +3,36 @@ package com.co.eurekatic.aicontrol.agente.catalogo.turno;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
-import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
 class MapeadorMenusTest {
 
     @Test
-    void soloCuentaComoSoloLecturaLoQueNoPuedeModificar() {
-        Map<String, AccesoMenu> r = MapeadorMenus.desde(List.of(
-                Map.of("codigo", "FUNCIONARIOS", "puede_ver", true, "puede_crear", false,
-                        "puede_editar", false, "puede_eliminar", false),
-                Map.of("codigo", "PLANEADOR", "puede_ver", true, "puede_crear", false,
-                        "puede_editar", true, "puede_eliminar", false)));
+    void soloLecturaSiNoPuedeCrearNiEditar() {
+        var r = MapeadorMenus.desde(List.of(
+                new FilaMenu("FUNCIONARIOS", true, false, false, false),
+                new FilaMenu("PLANEADOR", true, false, true, false),
+                new FilaMenu("CREAR", true, true, false, false)));
 
         assertThat(r).containsEntry("FUNCIONARIOS", new AccesoMenu(true))
-                .containsEntry("PLANEADOR", new AccesoMenu(false));
+                .containsEntry("PLANEADOR", new AccesoMenu(false))
+                .containsEntry("CREAR", new AccesoMenu(false));
+    }
+
+    @Test
+    void eliminarSinCrearNiEditarSigueSiendoSoloLectura() {
+        var r = MapeadorMenus.desde(List.of(new FilaMenu("X", true, false, false, true)));
+
+        assertThat(r).containsEntry("X", new AccesoMenu(true));
     }
 
     @Test
     void unMenuNoVisibleOSinCodigoSeOmite() {
-        Map<String, AccesoMenu> r = MapeadorMenus.desde(List.of(
-                Map.of("codigo", "OCULTO", "puede_ver", false),
-                Map.of("puede_ver", true),
-                Map.of("codigo", "  ", "puede_ver", true)));
+        var r = MapeadorMenus.desde(List.of(
+                new FilaMenu("OCULTO", false, true, true, true),
+                new FilaMenu("  ", true, false, false, false),
+                new FilaMenu(null, true, false, false, false)));
 
         assertThat(r).isEmpty();
     }

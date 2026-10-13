@@ -21,9 +21,9 @@ class CatalogoHerramientasLoaderTest {
 
     @Test
     void cargaSoloLasHerramientasQueSuperanMapeoYTecho() {
-        FilaCatalogo rota = new FilaCatalogo("borrar_todo", "LECTURA", "d", "{}", false, "[]", 1,
+        FilaCatalogo rota = new FilaCatalogo(201L, "borrar_todo", "LECTURA", "d", "{}", false, "[]", 1,
                 "FUNCIONARIOS", "/usuarios/:ID/eliminar", "DELETE", "{}", null, List.of());
-        FilaCatalogo rota2 = new FilaCatalogo("sin_tipo", "LECTURA", "d",
+        FilaCatalogo rota2 = new FilaCatalogo(202L, "sin_tipo", "LECTURA", "d",
                 "{\"BODY.X\":{\"descripcion\":\"x\",\"resuelve_con\":null,\"inferible\":false}}",
                 false, "[]", 1, "FUNCIONARIOS", "/planeador/actividades", "POST", "{}", null, List.of());
         CatalogoRepositorioFalso repo = new CatalogoRepositorioFalso(

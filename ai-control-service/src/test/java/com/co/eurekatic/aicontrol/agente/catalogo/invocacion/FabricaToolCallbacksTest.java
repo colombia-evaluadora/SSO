@@ -57,7 +57,7 @@ class FabricaToolCallbacksTest {
 
     @Test
     void soloSeFabricanCallbacksDeDatos() {
-        HerramientaDef control = new HerramientaDef("buscar_pantalla", TipoHerramienta.CONTROL, "d", List.of(),
+        HerramientaDef control = new HerramientaDef(401L, "buscar_pantalla", TipoHerramienta.CONTROL, "d", List.of(),
                 false, List.of(), 1, Optional.empty(), Optional.empty(), Set.of());
         List<HerramientaDef> todas = new ArrayList<>(List.of(control, CatalogoFixture.actividadesMiasDef()));
 

@@ -3,6 +3,7 @@ package com.co.eurekatic.aicontrol.agente.comun;
 import com.co.eurekatic.aicontrol.config.agente.AgenteProperties;
 
 import java.time.Duration;
+import java.util.List;
 
 /**
  * Propiedades del agente para los tests: los valores de application.yml, salvo
@@ -30,6 +31,7 @@ public final class PropiedadesAgenteFixture {
                 new AgenteProperties.Memoria(30, Duration.ofHours(24)),
                 new AgenteProperties.Acciones(Duration.ofMinutes(10)),
                 new AgenteProperties.Catalogo(Duration.ofMinutes(5), Duration.ofSeconds(30), Duration.ofSeconds(60),
-                        "/usuarios/permisos-menu", 50, 12_000));
+                        50, 12_000, List.of("identificacion", "documento", "correo", "email", "telefono", "celular",
+                                "direccion", "fecha_nacimiento", "password", "contrasena", "token")));
     }
 }

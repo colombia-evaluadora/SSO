@@ -38,6 +38,7 @@ public final class MapeadorHerramienta {
         Optional<RutaQuery> ruta = ruta(fila, paramTypes, restricciones);
         List<ParametroDef> parametros = parametros(fila.parametrosJson(), paramTypes, ruta.isPresent());
         return new HerramientaDef(
+                fila.id(),
                 fila.codigo(),
                 tipo,
                 fila.descripcionModelo(),
@@ -89,7 +90,7 @@ public final class MapeadorHerramienta {
                     textoOpcional(meta, "descripcion").orElse(""),
                     textoOpcional(meta, "resuelve_con"),
                     meta.path("inferible").asBoolean(false),
-                    obligatorio || clave.startsWith(SECCION_PARAM)));
+                    obligatorio || meta.path("obligatorio").asBoolean(false) || clave.startsWith(SECCION_PARAM)));
         }
         return List.copyOf(resultado);
     }

@@ -8,6 +8,7 @@ import java.util.List;
  * de control no tiene ruta, por ejemplo); el mapeo a dominio es quien decide que hacer con ellos.
  */
 public record FilaCatalogo(
+        long id,
         String codigo,
         String tipo,
         String descripcionModelo,

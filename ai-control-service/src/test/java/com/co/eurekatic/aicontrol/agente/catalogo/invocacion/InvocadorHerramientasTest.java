@@ -74,8 +74,20 @@ class InvocadorHerramientasTest {
         assertThat(registro.contiene(CONV, "5")).isTrue();
         ToolInvocacionStore.NuevaInvocacion inv = auditada();
         assertThat(inv.estado()).isEqualTo(EstadoInvocacion.OK);
+        assertThat(inv.herramientaId()).isEqualTo(listar.id());
         assertThat(inv.argumentosJson()).isEqualTo("{\"claves\":[\"size\"],\"descartadas\":0}");
         assertThat(inv.argumentosJson()).doesNotContain("Secreto");
+    }
+
+    @Test
+    void lasColumnasSensiblesNoLlegan_AlResultado_PeroLosIdsSiSeRegistran() {
+        when(qs.invocar(any(), anyString(), anyMap(), anyMap(), anyString())).thenReturn(
+                new RespuestaQuery.Exito(List.of(Map.of("id", 5, "email", "a@b.co", "nombre", "Ana"))));
+
+        ResultadoHerramienta r = invocador.invocar(listar, Map.of(), contexto("lista"));
+
+        assertThat(((ResultadoHerramienta.Datos) r).filas().get(0)).containsOnlyKeys("id", "nombre");
+        assertThat(registro.contiene(CONV, "5")).isTrue();
     }
 
     @Test

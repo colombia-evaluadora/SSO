@@ -13,7 +13,7 @@ import java.util.List;
 public class JdbcCatalogoRepository implements CatalogoRepository {
 
     private static final String SQL_LEER_ACTIVAS = """
-            SELECT codigo, tipo, descripcion_modelo, parametros::text AS parametros,
+            SELECT id, codigo, tipo, descripcion_modelo, parametros::text AS parametros,
                    requiere_confirmacion, ejemplos::text AS ejemplos, version, menu_codigo,
                    path_template, http_method, param_types::text AS param_types,
                    restricciones::text AS restricciones, roles
@@ -30,6 +30,7 @@ public class JdbcCatalogoRepository implements CatalogoRepository {
     public List<FilaCatalogo> leerActivas() {
         return jdbc.sql(SQL_LEER_ACTIVAS)
                 .query((rs, fila) -> new FilaCatalogo(
+                        rs.getLong("id"),
                         rs.getString("codigo"),
                         rs.getString("tipo"),
                         rs.getString("descripcion_modelo"),

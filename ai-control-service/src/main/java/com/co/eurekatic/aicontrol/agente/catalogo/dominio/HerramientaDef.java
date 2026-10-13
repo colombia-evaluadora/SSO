@@ -10,6 +10,7 @@ import java.util.regex.Pattern;
  * Herramienta del catalogo: lo que el modelo ve (codigo, descripcion, parametros) y lo que
  * el servicio necesita para ejecutarla (ruta, menu, roles). Inmutable.
  *
+ * @param id                  pk de {@code ai.herramienta}; se guarda en cada invocacion
  * @param codigo              nombre que ve el modelo, p. ej. {@code funcionarios_listar}
  * @param tipo                clase de la herramienta
  * @param descripcion         texto que ve el modelo para decidir cuando usarla
@@ -22,6 +23,7 @@ import java.util.regex.Pattern;
  * @param roles               roles de {@code role_query}; vacio = no filtra por rol
  */
 public record HerramientaDef(
+        long id,
         String codigo,
         TipoHerramienta tipo,
         String descripcion,
@@ -41,6 +43,9 @@ public record HerramientaDef(
         Objects.requireNonNull(descripcion, "descripcion");
         Objects.requireNonNull(menuCodigo, "menuCodigo");
         Objects.requireNonNull(ruta, "ruta");
+        if (id <= 0) {
+            throw new IllegalArgumentException("id de herramienta no valido: " + codigo);
+        }
         if (!CODIGO.matcher(codigo).matches()) {
             throw new IllegalArgumentException("codigo de herramienta no valido: " + codigo);
         }

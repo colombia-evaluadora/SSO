@@ -39,9 +39,28 @@ class MapeadorHerramientaTest {
     }
 
     @Test
+    void elObligatorioDelJsonDeParametrosSeRespetaYElIdViaja() {
+        var base = CatalogoFixture.crearActividad();
+        var conFlag = new com.co.eurekatic.aicontrol.agente.catalogo.carga.FilaCatalogo(
+                base.id(), base.codigo(), base.tipo(), base.descripcionModelo(),
+                "{\"BODY.TITULO\":{\"descripcion\":\"Titulo\",\"resuelve_con\":null,\"inferible\":false,\"obligatorio\":true},"
+                        + "\"BODY.DURACION_ESTIMADA\":{\"descripcion\":\"Duracion\",\"resuelve_con\":null,\"inferible\":false}}",
+                true, "[]", 1, base.menuCodigo(), base.pathTemplate(), base.httpMethod(),
+                "{\"BODY.TITULO\":\"VARCHAR\",\"BODY.DURACION_ESTIMADA\":\"NUMERIC\"}", null, base.roles());
+
+        HerramientaDef h = mapeador.mapear(conFlag);
+
+        assertThat(h.id()).isEqualTo(base.id());
+        assertThat(h.parametros()).filteredOn(p -> p.clave().equals("BODY.TITULO"))
+                .allSatisfy(p -> assertThat(p.obligatorio()).isTrue());
+        assertThat(h.parametros()).filteredOn(p -> p.clave().equals("BODY.DURACION_ESTIMADA"))
+                .allSatisfy(p -> assertThat(p.obligatorio()).isFalse());
+    }
+
+    @Test
     void herramientaDeControlNoTieneRutaNiTipoDeBase() {
         var fila = new com.co.eurekatic.aicontrol.agente.catalogo.carga.FilaCatalogo(
-                "buscar_pantalla", "CONTROL", "Busca pantallas.",
+                301L, "buscar_pantalla", "CONTROL", "Busca pantallas.",
                 "{\"texto\":{\"descripcion\":\"Lo que busca\",\"resuelve_con\":null,\"inferible\":false}}",
                 false, "[]", 1, null, null, null, null, null, List.of());
 
@@ -57,7 +76,7 @@ class MapeadorHerramientaTest {
     void parametroDeDatosSinTipoEnParamTypesSeRechaza() {
         var base = CatalogoFixture.editarFuncionario();
         var sinTipo = new com.co.eurekatic.aicontrol.agente.catalogo.carga.FilaCatalogo(
-                base.codigo(), base.tipo(), base.descripcionModelo(), base.parametrosJson(), true, "[]",
+                base.id(), base.codigo(), base.tipo(), base.descripcionModelo(), base.parametrosJson(), true, "[]",
                 1, base.menuCodigo(), base.pathTemplate(), base.httpMethod(),
                 "{\"PARAM.ID\":\"BIGINT\"}", null, base.roles());
 
@@ -70,7 +89,7 @@ class MapeadorHerramientaTest {
     void unParametroFileDeLaAllowlistSeRechaza() {
         var base = CatalogoFixture.editarFuncionario();
         var conFile = new com.co.eurekatic.aicontrol.agente.catalogo.carga.FilaCatalogo(
-                base.codigo(), base.tipo(), base.descripcionModelo(),
+                base.id(), base.codigo(), base.tipo(), base.descripcionModelo(),
                 "{\"BODY.FKTARCHIVOFOTO\":{\"descripcion\":\"Foto\",\"resuelve_con\":null,\"inferible\":false}}",
                 true, "[]", 1, base.menuCodigo(), base.pathTemplate(), base.httpMethod(),
                 "{\"BODY.FKTARCHIVOFOTO\":\"FILE:perfilUsuario\"}", null, base.roles());

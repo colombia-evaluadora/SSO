@@ -4,6 +4,7 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.boot.context.properties.bind.DefaultValue;
 
 import java.time.Duration;
+import java.util.List;
 import java.util.Objects;
 
 /**
@@ -83,23 +84,27 @@ public record AgenteProperties(
     /**
      * @param refresco       cada cuanto se relee el catalogo de la base cuando todo va bien
      * @param reintento      cada cuanto se reintenta si el catalogo esta vacio o la base no responde
-     * @param menusTtl       vida de los menus del usuario en memoria (por hash del token)
-     * @param rutaMenus      ruta de query-service que devuelve los menus del usuario con su codigo y permisos
+     * @param menusTtl       vida de los menus del usuario en memoria (por id de usuario)
      * @param maxFilas       filas que ve el modelo de un resultado; el resto se corta y se marca
      * @param maxCaracteres  caracteres que ve el modelo de un resultado serializado
+     * @param columnasSensibles fragmentos de nombre de columna que no salen hacia el modelo (sin
+     *                       distinguir mayusculas); los ids y los nombres se conservan siempre
      */
     public record Catalogo(
             @DefaultValue("PT5M") Duration refresco,
             @DefaultValue("PT30S") Duration reintento,
             @DefaultValue("60s") Duration menusTtl,
-            @DefaultValue("/usuarios/permisos-menu") String rutaMenus,
             @DefaultValue("50") int maxFilas,
-            @DefaultValue("12000") int maxCaracteres) {
+            @DefaultValue("12000") int maxCaracteres,
+            @DefaultValue({"identificacion", "documento", "correo", "email", "telefono", "celular",
+                    "direccion", "fecha_nacimiento", "password", "contrasena", "token"})
+            List<String> columnasSensibles) {
 
         public Catalogo {
             if (maxFilas <= 0 || maxCaracteres <= 0) {
                 throw new IllegalArgumentException("maxFilas y maxCaracteres deben ser positivos");
             }
+            columnasSensibles = List.copyOf(columnasSensibles);
         }
     }
 }

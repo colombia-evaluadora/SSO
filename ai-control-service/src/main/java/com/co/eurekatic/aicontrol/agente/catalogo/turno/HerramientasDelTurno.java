@@ -17,13 +17,17 @@ import java.util.Set;
  * <p>Una herramienta pasa si cumple las cuatro condiciones:
  * <ol>
  *   <li>su tipo esta entre los permitidos por la intencion;</li>
- *   <li>su menu lo tiene el usuario; una herramienta sin menu solo vale si es de CONTROL;</li>
+ *   <li>su menu lo tiene el usuario. Sin menu, una LECTURA o una de CONTROL pasan (el gate de su
+ *       ruta decide); una ESCRITURA o una ANALITICA sin menu se excluyen;</li>
  *   <li>el rol del JWT figura en su {@code role_query}; sin roles declarados no se filtra por rol;</li>
  *   <li>las escrituras solo si el menu no es de solo lectura y el riesgo del turno es BAJO.</li>
  * </ol>
  */
 @Component
 public class HerramientasDelTurno {
+
+    /** Tipos que pueden no tener menu: la LECTURA lo filtra su rol y su ruta; la CONTROL no toca datos. */
+    private static final Set<TipoHerramienta> SIN_MENU_PERMITIDA = Set.of(TipoHerramienta.LECTURA, TipoHerramienta.CONTROL);
 
     /**
      * @param catalogo         catalogo vigente
@@ -47,7 +51,7 @@ public class HerramientasDelTurno {
     private static boolean menuPermitido(HerramientaDef herramienta, Map<String, AccesoMenu> menus) {
         return herramienta.menuCodigo()
                 .map(menus::containsKey)
-                .orElseGet(() -> herramienta.tipo() == TipoHerramienta.CONTROL);
+                .orElseGet(() -> SIN_MENU_PERMITIDA.contains(herramienta.tipo()));
     }
 
     private static boolean rolPermitido(HerramientaDef herramienta, Set<String> rolesUsuario) {

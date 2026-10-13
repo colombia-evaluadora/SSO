@@ -8,18 +8,20 @@ import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * Cache en memoria de los menus por clave (hash del token), con expiracion simple. Sin
- * dependencias: una entrada vence a los {@code ttl} y se purga al llenarse. Los menus de un
- * usuario cambian poco; un minuto de retraso es aceptable y el gate sigue siendo la base.
+ * Cache en memoria de los menus por clave, con expiracion simple. Sin dependencias: una entrada
+ * vence a los {@code ttl} y se purga al llenarse. Los menus de un usuario cambian poco; un
+ * minuto de retraso es aceptable y el gate de cada ruta sigue siendo la autoridad.
+ *
+ * @param <K> clave de la cache (aqui, el id de usuario)
  */
-final class CacheMenus {
+final class CacheMenus<K> {
 
     static final int MAX_ENTRADAS = 5_000;
 
     private record Entrada(Map<String, AccesoMenu> menus, Instant expira) {
     }
 
-    private final ConcurrentHashMap<String, Entrada> entradas = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<K, Entrada> entradas = new ConcurrentHashMap<>();
     private final Duration ttl;
     private final Clock reloj;
 
@@ -28,7 +30,7 @@ final class CacheMenus {
         this.reloj = reloj;
     }
 
-    Optional<Map<String, AccesoMenu>> obtener(String clave) {
+    Optional<Map<String, AccesoMenu>> obtener(K clave) {
         Entrada entrada = entradas.get(clave);
         if (entrada == null) {
             return Optional.empty();
@@ -40,7 +42,7 @@ final class CacheMenus {
         return Optional.of(entrada.menus());
     }
 
-    void poner(String clave, Map<String, AccesoMenu> menus) {
+    void poner(K clave, Map<String, AccesoMenu> menus) {
         if (entradas.size() >= MAX_ENTRADAS) {
             purgar();
         }

@@ -29,7 +29,7 @@ public final class ExtractorIds {
                 if (ids.size() >= MAX_POR_RESULTADO) {
                     return Set.copyOf(ids);
                 }
-                if (COLUMNA_ID.matcher(celda.getKey()).matches()) {
+                if (esColumnaId(celda.getKey())) {
                     String id = textoDe(celda.getValue());
                     if (id != null) {
                         ids.add(id);
@@ -44,6 +44,11 @@ public final class ExtractorIds {
      * Forma de texto de un valor que puede ser un id. Un entero llega como {@code 12} aunque
      * el JSON lo trajera como {@code 12.0}; un valor no entero o vacio no es un id: devuelve null.
      */
+    /** Si el nombre de una columna es de identificador. Lo usan la extraccion de ids y el filtro de columnas. */
+    public static boolean esColumnaId(String columna) {
+        return COLUMNA_ID.matcher(columna).matches();
+    }
+
     public static String textoDe(Object valor) {
         if (valor instanceof Number numero) {
             if (numero instanceof Double d && !Double.isFinite(d)) {

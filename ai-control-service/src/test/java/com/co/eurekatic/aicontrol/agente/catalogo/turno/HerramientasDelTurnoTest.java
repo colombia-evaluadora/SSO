@@ -31,6 +31,8 @@ class HerramientasDelTurnoTest {
                 herramienta("editar_funcionario", TipoHerramienta.ESCRITURA, Optional.of("FUNCIONARIOS"),
                         Set.of("ADMIN")),
                 herramienta("planeador_estadisticas", TipoHerramienta.ANALITICA, Optional.of("PLANEADOR"), Set.of()),
+                herramienta("stats_sin_menu", TipoHerramienta.ANALITICA, Optional.empty(), Set.of()),
+                herramienta("escritura_sin_menu", TipoHerramienta.ESCRITURA, Optional.empty(), Set.of()),
                 herramienta("buscar_pantalla", TipoHerramienta.CONTROL, Optional.empty(), Set.of()),
                 herramienta("mis_menus", TipoHerramienta.LECTURA, Optional.empty(), Set.of())));
     }
@@ -39,8 +41,8 @@ class HerramientasDelTurnoTest {
         Optional<RutaQuery> ruta = tipo == TipoHerramienta.CONTROL
                 ? Optional.empty()
                 : Optional.of(new RutaQuery(HttpMethod.GET, "/x/" + codigo, Map.of(), Map.of()));
-        return new HerramientaDef(codigo, tipo, "d", List.of(), tipo == TipoHerramienta.ESCRITURA, List.of(), 1,
-                menu, ruta, roles);
+        return new HerramientaDef(Math.abs((long) codigo.hashCode()) + 1, codigo, tipo, "d", List.of(),
+                tipo == TipoHerramienta.ESCRITURA, List.of(), 1, menu, ruta, roles);
     }
 
     private static Map<String, AccesoMenu> menus(boolean soloLectura) {
@@ -56,7 +58,7 @@ class HerramientasDelTurnoTest {
         List<String> r = codigos(calculo.calcular(catalogo, Set.of("ADMIN"), menus(false), Riesgo.BAJO, TODOS));
 
         assertThat(r).containsExactly("buscar_pantalla", "editar_funcionario", "funcionarios_listar",
-                "planeador_estadisticas");
+                "mis_menus", "planeador_estadisticas");
     }
 
     @Test
@@ -92,13 +94,15 @@ class HerramientasDelTurnoTest {
         List<String> r = codigos(calculo.calcular(catalogo, Set.of("ADMIN"), menus(false), Riesgo.BAJO,
                 Set.of(TipoHerramienta.LECTURA)));
 
-        assertThat(r).containsExactly("funcionarios_listar");
+        assertThat(r).containsExactly("funcionarios_listar", "mis_menus");
     }
 
     @Test
-    void sinMenusSoloQuedanLasDeControlYUnaSinMenuNoEsDeDatos() {
+    void unaLecturaSinMenuPasaPeroUnaAnaliticaOUnaEscrituraSinMenuNo() {
         List<String> r = codigos(calculo.calcular(catalogo, Set.of("ADMIN"), Map.of(), Riesgo.BAJO, TODOS));
 
-        assertThat(r).containsExactly("buscar_pantalla");
+        assertThat(r).contains("mis_menus", "buscar_pantalla")
+                .doesNotContain("stats_sin_menu", "escritura_sin_menu", "planeador_estadisticas", "editar_funcionario",
+                        "funcionarios_listar");
     }
 }
