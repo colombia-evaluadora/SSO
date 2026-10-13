@@ -561,7 +561,9 @@ management:
     endpoints:
       web:
         exposure:
-          include: health,info,gateway,prometheus
+          # Solo health/info en el puerto publico. `gateway` (rutas y filtros)
+          # y `prometheus` quedan fuera: la telemetria se empuja por OTLP.
+          include: ${GATEWAY_ACTUATOR_EXPOSURE:health,info}
     endpoint:
       health:
         probes:
