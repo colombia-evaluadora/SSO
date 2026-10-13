@@ -108,10 +108,18 @@ public class QueryResilience {
         this.rateLimitWindow = rateLimitWindow;
     }
 
+    /** Espera máxima por un permiso del bulkhead antes del 503. */
+    private Duration bulkheadMaxWait = Duration.ofMillis(200);
+
+    @Value("${query.resilience.bulkhead.max-wait:200ms}")
+    void setBulkheadMaxWait(Duration maxWait) {
+        this.bulkheadMaxWait = maxWait == null ? Duration.ZERO : maxWait;
+    }
+
     @PostConstruct
     void publishConfig() {
-        log.info("QueryResilience: bulkhead maxConcurrent={} (fail-fast, no queue)",
-                bulkheadMaxConcurrent);
+        log.info("QueryResilience: bulkhead maxConcurrent={} maxWait={} (sin cola larga)",
+                bulkheadMaxConcurrent, bulkheadMaxWait);
         log.info("QueryResilience: rateLimit rps={} window={}",
                 rateLimitRps, rateLimitWindow);
     }
@@ -153,12 +161,11 @@ public class QueryResilience {
         // SEMAPHORE bulkhead — the right choice for a synchronous MVC
         // controller, since there is no thread handoff.
         //
-        // No maxWaitDuration on purpose: QueryService acquires with
-        // tryAcquirePermission(), which never waits, so any value set here
-        // would be ignored. Waiting is also the wrong behaviour for this
-        // service — a caller that has to queue for a JDBC permit is better
-        // told 503 + Retry-After immediately than left holding a Tomcat
-        // thread hoping one frees up.
+        // tryAcquirePermission() SÍ respeta maxWaitDuration (Resilience4j
+        // hace Semaphore.tryAcquire(maxWait)). Una espera corta absorbe las
+        // ráfagas (una consulta típica libera su permiso en milisegundos)
+        // sin volver a la cola de 30 s de Hikari: pasado ese margen, 503
+        // con Retry-After. 0 = fallo inmediato.
         int maxConcurrent = effectiveMaxConcurrent(dialect);
         if (maxConcurrent != bulkheadMaxConcurrent) {
             log.info("QueryResilience: bulkhead {} acotado a {} por el pool del dialecto",
@@ -166,6 +173,7 @@ public class QueryResilience {
         }
         BulkheadConfig config = BulkheadConfig.custom()
                 .maxConcurrentCalls(maxConcurrent)
+                .maxWaitDuration(bulkheadMaxWait)
                 .build();
         Bulkhead bh = BulkheadRegistry.of(config).bulkhead("query-" + dialect, config);
         registerBulkheadMeters(bh, dialect);

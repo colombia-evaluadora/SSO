@@ -326,8 +326,8 @@ public class QueryService {
                 ? wrapWithAuditContext(rewrittenSql)
                 : rewrittenSql;
 
-        // Per-dialect bulkhead; fail fast (no wait) is the right call
-        // for a sync MVC controller — execute() maps it to 503.
+        // Per-dialect bulkhead: waits at most query.resilience.bulkhead.max-wait
+        // for a permit, then BulkheadFullException → 503 + Retry-After.
         var bulkhead = resilience.bulkheadFor(JdbcTemplateRegistry.dialectKey(def.type()));
         if (!bulkhead.tryAcquirePermission()) {
             throw BulkheadFullException.createBulkheadFullException(bulkhead);

@@ -160,6 +160,8 @@ query:
   resilience:
     bulkhead:
       max-concurrent: ${QUERY_BULKHEAD_MAX_CONCURRENT:8}
+      # Espera corta por un permiso antes del 503 (0 = fallo inmediato).
+      max-wait: ${QUERY_BULKHEAD_MAX_WAIT:200ms}
     rate-limit:
       rps: ${QUERY_RATE_LIMIT_RPS:100}
       window: ${QUERY_RATE_LIMIT_WINDOW:1s}
