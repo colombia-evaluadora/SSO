@@ -54,7 +54,8 @@ public class AmqpPublisher implements DebeziumEngine.ChangeConsumer<ChangeEvent<
     public void handleBatch(List<ChangeEvent<String, String>> records,
                             DebeziumEngine.RecordCommitter<ChangeEvent<String, String>> committer)
             throws InterruptedException {
-        for (ChangeEvent<String, String> record : records) {
+        for (int seq = 0; seq < records.size(); seq++) {
+            ChangeEvent<String, String> record = records.get(seq);
             if (record.value() == null) continue;
             try {
                 Map<String, Object> event = parseEvent(record.value());
@@ -66,7 +67,6 @@ public class AmqpPublisher implements DebeziumEngine.ChangeConsumer<ChangeEvent<
                 String routingKey = schema + "." + table;
                 long lsn = ((Number) source.getOrDefault("lsn", 0)).longValue();
                 long xid = ((Number) source.getOrDefault("txId", 0)).longValue();
-                int seq = records.indexOf(record);
 
                 String op = (String) event.get("op");
 
@@ -113,10 +113,11 @@ public class AmqpPublisher implements DebeziumEngine.ChangeConsumer<ChangeEvent<
                     envelope.put("context", contextToMap(ctx));
                 }
 
+                final int seqHeader = seq;
                 rabbitTemplate.convertAndSend(exchange, routingKey, envelope, m -> {
                     m.getMessageProperties().setHeader("x-lsn", lsn);
                     m.getMessageProperties().setHeader("x-xid", xid);
-                    m.getMessageProperties().setHeader("x-seq", seq);
+                    m.getMessageProperties().setHeader("x-seq", seqHeader);
                     return m;
                 });
                 captureMetrics.incrementPublished(table, op);
