@@ -88,7 +88,8 @@ SELECT (SELECT COALESCE(MAX(PK_LISTA_VALOR), 0) FROM academico_test.TLISTA_VALOR
        TRUE
   FROM (VALUES
             (1, 'APROBADA',   'Aprobada por el docente'),
-            (2, 'MODIFICADA', 'Modificada por el docente')
+            (2, 'MODIFICADA', 'Modificada por el docente'),
+            (3, 'BORRADOR',   'Borrador de la IA sin revisar')
        ) AS v(orden, valor, nombre)
  WHERE NOT EXISTS (
            SELECT 1 FROM academico_test.TLISTA_VALOR lv

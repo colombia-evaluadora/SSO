@@ -3,7 +3,7 @@
 -- Qué hace: reúne los validadores y predicados de alcance de informes, que no
 -- piden permisos y lanzan o devuelven: alcance de sede y jornada, grupo
 -- propio, escritura reservada (Regla 76), que el periodo pertenezca al año
--- del grupo y los grupos visibles de una lista (gate de las alertas).
+-- del grupo, que no este cerrado, y los grupos visibles de una lista.
 -- Por qué aquí: estructura por capas; un cambio futuro edita esta migración.
 -- Los usan también observaciones, final y formativo, con la misma firma.
 -- Incluye fn_usuario_solo_sus_grupos por sede y jornada (antes V446).
@@ -254,3 +254,44 @@ $function$;
 
 COMMENT ON FUNCTION academico_test.fn_informe_validar_periodo_del_grupo(BIGINT, BIGINT)
     IS 'Valida que el periodo de evaluacion exista (P0002) y pertenezca al periodo academico del grupo (22023), con los nombres de ambos en el mensaje. Sin gate: va antes del gate en los guardados de informe y planilla y en la planilla, que tenian el mismo bloque copiado tres veces.';
+
+-- Cerrado = NO Calificable (VALOR 2) con la fecha fin ya pasada. Calificable,
+-- Habilitado o En Recuperaciones despues del fin siguen abiertos: el colegio
+-- consolida cuando termina el periodo, no antes.
+CREATE OR REPLACE FUNCTION academico_test.fn_periodo_evaluacion_cerrado(
+    p_fk_tperiodo_evaluacion BIGINT
+)
+RETURNS BOOLEAN
+LANGUAGE sql
+STABLE
+AS $function$
+    SELECT COALESCE(BOOL_OR(lv.VALOR = '2' AND pe.FECHA_FIN < CURRENT_DATE), FALSE)
+      FROM academico_test.TPERIODO_EVALUACION pe
+      JOIN academico_test.TLISTA_VALOR lv
+        ON lv.PK_LISTA_VALOR = pe.FK_TLV_ESTADO
+       AND lv.CATEGORIA = 'ESTADOPERIODOEVALUACION'
+     WHERE pe.PK_TPERIODO_EVALUACION = p_fk_tperiodo_evaluacion;
+$function$;
+
+COMMENT ON FUNCTION academico_test.fn_periodo_evaluacion_cerrado(BIGINT)
+    IS 'INTERNO: TRUE si el periodo de evaluacion esta cerrado: estado NO Calificable (ESTADOPERIODOEVALUACION VALOR 2) y FECHA_FIN anterior a hoy. Un periodo futuro o uno vencido que sigue Calificable / Habilitado / En Recuperaciones no esta cerrado. La usan fn_informe_validar_periodo_abierto y fn_informe_periodos_evaluacion_listar (periodo_cerrado).';
+
+CREATE OR REPLACE FUNCTION academico_test.fn_informe_validar_periodo_abierto(
+    p_fk_tperiodo_evaluacion BIGINT,
+    p_omitir                 BOOLEAN DEFAULT FALSE
+)
+RETURNS VOID
+LANGUAGE plpgsql
+STABLE
+AS $function$
+BEGIN
+    IF NOT COALESCE(p_omitir, FALSE)
+       AND academico_test.fn_periodo_evaluacion_cerrado(p_fk_tperiodo_evaluacion) THEN
+        RAISE EXCEPTION 'El periodo de evaluación está cerrado; no se pueden modificar sus notas/observaciones.'
+            USING ERRCODE = '23514';
+    END IF;
+END;
+$function$;
+
+COMMENT ON FUNCTION academico_test.fn_informe_validar_periodo_abierto(BIGINT, BOOLEAN)
+    IS 'Valida que el periodo de evaluacion no este cerrado (fn_periodo_evaluacion_cerrado); si lo esta lanza 23514. p_omitir TRUE la salta: los wrappers le pasan fn_es_super_admin del solicitante, que puede corregir un periodo cerrado. La llaman los guardados de informe y planilla, guardar/eliminar observacion y las fuentes de la IA.';

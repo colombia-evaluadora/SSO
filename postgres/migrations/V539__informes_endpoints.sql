@@ -5,8 +5,8 @@
 -- se tocan roles (V496.26 quitó DOCENTE y DIRECTOR_GRUPO de las escrituras).
 -- Las consultas no cambian; el detail de /informes/grupo agrega la C y la R.
 -- /informes/tabla solo actualiza query, param_types y detail (la crea V434).
--- Quedan fuera las de observaciones, final, formativo, desactualizado y
--- boletin, que siguen en sus migraciones.
+-- Las de observaciones, final, formativo y boletin siguen en sus migraciones;
+-- aqui solo se suma ES_BORRADOR a los dos guardados de observacion (IA).
 -- Depende de: V537, V538, V496.25 (funciones), V342-V496.24 (filas).
 
 -- POST /informes/anos
@@ -306,3 +306,36 @@ SELECT 'eval-col-informes-tabla-001',
   FROM public.microservice m WHERE m.serviceid = 'eval-col'
 ON CONFLICT (microservice_id, path_template, http_method) WHERE path_template IS NOT NULL DO UPDATE
    SET query = EXCLUDED.query, param_types = EXCLUDED.param_types, detail = EXCLUDED.detail;
+
+-- POST /informes/observacion/guardar y /final/guardar: ES_BORRADOR opcional
+-- ("S" lo manda ai-control-service; el texto queda BORRADOR y no se imprime).
+UPDATE public.query q
+   SET query = $q$SELECT academico_test.fn_estudiante_periodo_observacion_guardar(
+    public.fn_get_academico_usuario_id(:CONTEXT.USER_ID::BIGINT),
+    CAST(:BODY.FK_TMATRICULA AS BIGINT),
+    CAST(:BODY.FK_TPERIODO_EVALUACION AS BIGINT),
+    CAST(:BODY.OBSERVACION AS TEXT),
+    CAST(:BODY.OBSERVACION_IA AS TEXT),
+    CAST(:BODY.OBSERVACIONES_ORIGEN AS NUMERIC),
+    CAST(:BODY.ES_BORRADOR AS VARCHAR)
+) AS pk_testudiante_periodo_observacion;$q$,
+       param_types = '{"BODY.FK_TMATRICULA": "BIGINT", "BODY.FK_TPERIODO_EVALUACION": "BIGINT", "BODY.OBSERVACION": "TEXT", "BODY.OBSERVACION_IA": "TEXT", "BODY.OBSERVACIONES_ORIGEN": "NUMERIC", "BODY.ES_BORRADOR": "VARCHAR"}'::jsonb,
+       detail = 'Guarda (reemplaza) el resumen del periodo de un estudiante. ES_BORRADOR = "S" (ai-control-service) lo deja en estado BORRADOR, que el boletin no imprime; sin el, o con "N", el estado se deduce comparando OBSERVACION con OBSERVACION_IA (iguales APROBADA, distintos MODIFICADA) y el texto sale de borrador. Reenvie OBSERVACION_IA y OBSERVACIONES_ORIGEN tal como llegaron. Errores: 400 texto vacio o periodo de otro año, 404 matricula/periodo, 23514 periodo de evaluacion cerrado (salvo super admin).'
+  FROM public.microservice m
+ WHERE m.id_microservice = q.microservice_id AND m.serviceid = 'eval-col'
+   AND q.path_template = '/informes/observacion/guardar' AND q.http_method = 'POST';
+
+UPDATE public.query q
+   SET query = $q$SELECT academico_test.fn_estudiante_anio_observacion_guardar(
+    public.fn_get_academico_usuario_id(:CONTEXT.USER_ID::BIGINT),
+    CAST(:BODY.FK_TMATRICULA AS BIGINT),
+    CAST(:BODY.OBSERVACION AS TEXT),
+    CAST(:BODY.OBSERVACION_IA AS TEXT),
+    CAST(:BODY.PERIODOS_ORIGEN AS NUMERIC),
+    CAST(:BODY.ES_BORRADOR AS VARCHAR)
+) AS pk_testudiante_anio_observacion;$q$,
+       param_types = '{"BODY.FK_TMATRICULA": "BIGINT", "BODY.OBSERVACION": "TEXT", "BODY.OBSERVACION_IA": "TEXT", "BODY.PERIODOS_ORIGEN": "NUMERIC", "BODY.ES_BORRADOR": "VARCHAR"}'::jsonb,
+       detail = 'Guarda (reemplaza) el comentario del AÑO de un estudiante (fila Final). ES_BORRADOR = "S" (ai-control-service) lo deja en estado BORRADOR; sin el, o con "N", el estado se deduce comparando OBSERVACION con OBSERVACION_IA (iguales APROBADA, distintos MODIFICADA). PERIODOS_ORIGEN se cuenta al guardar si no llega. Gate INFORMES/EDITAR. 400 con el texto vacio, 404 si la matricula no existe.'
+  FROM public.microservice m
+ WHERE m.id_microservice = q.microservice_id AND m.serviceid = 'eval-col'
+   AND q.path_template = '/informes/observacion/final/guardar' AND q.http_method = 'POST';

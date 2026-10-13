@@ -174,19 +174,26 @@ $function$;
 COMMENT ON FUNCTION academico_test.fn_informe_boletin_foto_interno(BIGINT)
     IS 'INTERNO: PK_TARCHIVO de la foto del estudiante de una matricula (TMATRICULA_ARCHIVO tipo ARCHIVO_MATRICULA 05); NULL si no tiene. Sin gate. La usan los dos boletines.';
 
+-- Suma los decimales del criterio: la firma de un argumento sobra.
+DROP FUNCTION IF EXISTS academico_test.fn_informe_boletin_nota_texto(NUMERIC);
 CREATE OR REPLACE FUNCTION academico_test.fn_informe_boletin_nota_texto(
-    p_nota NUMERIC
+    p_nota      NUMERIC,
+    p_decimales INT DEFAULT 1
 )
 RETURNS VARCHAR
 LANGUAGE sql
 IMMUTABLE
 AS $function$
-    -- Un decimal (Regla 30) y coma decimal, como se lee en Colombia.
-    SELECT REPLACE(TO_CHAR(p_nota, 'FM999990.0'), '.', ',')::VARCHAR;
+    -- TRUNC y no el redondeo de TO_CHAR: la nota ya viene redondeada con el
+    -- modo del criterio y con "No redondear" no se debe subir.
+    SELECT REPLACE(TO_CHAR(TRUNC(p_nota, GREATEST(COALESCE(p_decimales, 1), 0)),
+                           'FM999990' || CASE WHEN COALESCE(p_decimales, 1) > 0
+                                              THEN '.' || REPEAT('0', p_decimales) ELSE '' END),
+                   '.', ',')::VARCHAR;
 $function$;
 
-COMMENT ON FUNCTION academico_test.fn_informe_boletin_nota_texto(NUMERIC)
-    IS 'INTERNO: una nota ya homologada como se imprime en un boletin, con un decimal y coma decimal ("4,2"). NULL si la nota es NULL.';
+COMMENT ON FUNCTION academico_test.fn_informe_boletin_nota_texto(NUMERIC, INT)
+    IS 'INTERNO: una nota ya homologada y redondeada como se imprime en un boletin: P_DECIMALES decimales (NUMERO_DECIMALES del criterio, 1 por defecto), truncando el sobrante, y coma decimal ("4,2"). NULL si la nota es NULL.';
 
 -- Cambia el retorno (secciones, periodos, logros, comportamientos, firmas):
 -- hay que soltar las dos firmas antes de crearlas.
@@ -223,7 +230,8 @@ STABLE
 AS $function$
     WITH ctx AS (
         SELECT gd.PK_TGRADO AS grado, gd.FK_TPERIODO_ACADEMICO AS peraca,
-               f.es_numerico, f.nota_maxima, f.decimales,
+               f.es_numerico, f.nota_maxima, COALESCE(f.decimales, 1) AS decimales,
+               mr.NOMBRE AS modo,
                -- Por periodo o por nivel: el mismo respaldo que las notas.
                COALESCE(f.fk_tescala, academico_test.fn_grado_escala_aplicable(gd.PK_TGRADO)) AS fk_tescala,
                cra.VALOR AS criterio_area,
@@ -237,6 +245,7 @@ AS $function$
           LEFT JOIN academico_test.TCRITERIO_EVALUACION ce
                  ON ce.PK_TCRITERIO_EVALUACION = gd.FK_TPERIODO_ACADEMICO AND ce.ACTIVE = TRUE
           LEFT JOIN academico_test.TLISTA_VALOR cra ON cra.PK_LISTA_VALOR = ce.FK_TLV_CRITERIO_AREA
+          LEFT JOIN academico_test.TLISTA_VALOR mr  ON mr.PK_LISTA_VALOR  = ce.FK_TLV_MODO_REDONDEAR
          WHERE gr.PK_TGRUPO = p_fk_tgrupo
     ),
     -- Las columnas del consolidado: todos los periodos del año hasta el pedido.
@@ -277,7 +286,8 @@ AS $function$
                a.PK_TASIGNATURA AS asig, TRIM(a.NOMBRE)::VARCHAR AS asig_nombre,
                a.ORDEN_REPORTE AS asig_orden,
                COALESCE(ar.PK_TAREA, -a.PK_TASIGNATURA) AS area,
-               COALESCE(TRIM(ar.NOMBRE), TRIM(a.NOMBRE))::VARCHAR AS area_nombre,
+               -- El nombre del area sale de TAREA_ASIGNATURA, como en la pantalla.
+               COALESCE(NULLIF(TRIM(tas.NOMBRE), ''), TRIM(ar.NOMBRE), TRIM(a.NOMBRE))::VARCHAR AS area_nombre,
                ar.ORDEN_REPORTE AS area_orden,
                ap.NUMERO_HORA AS ih, ap.INFLUENCIA_AREA AS pia
           FROM ctx
@@ -285,27 +295,41 @@ AS $function$
           JOIN academico_test.TASIGNATURA_PLAN ap ON ap.FK_TPLAN = pl.PK_TPLAN AND ap.ACTIVE = TRUE
           JOIN academico_test.TASIGNATURA a ON a.PK_TASIGNATURA = ap.FK_TASIGNATURA AND a.ACTIVE = TRUE
           LEFT JOIN academico_test.TAREA ar ON ar.PK_TAREA = a.FK_TAREA AND ar.ACTIVE = TRUE
+          LEFT JOIN academico_test.TAREA_ASIGNATURA tas ON tas.PK_TAREA_ASIGNATURA = ar.FK_TAREA_ASIGNATURA
          WHERE NULLIF(TRIM(a.NOMBRE), '') IS NOT NULL
          ORDER BY a.PK_TASIGNATURA, ap.PK_TASIGNATURA_PLAN
     ),
-    -- Solo lo guardado: una proyectada no es una nota oficial.
+    -- Solo lo guardado: una proyectada no es una nota oficial. La nota se
+    -- lleva a la escala con los decimales y el modo del criterio (Regla 30),
+    -- los mismos del area, el promedio y el texto. Una celda con error de
+    -- configuracion y sin nota guardada se imprime "—".
     notas AS (
         SELECT l.fk_tmatricula AS mat, l.fk_tperiodo_evaluacion AS pe,
                (j.value->>'asignatura')::BIGINT AS asig,
-               (j.value->>'nota')::NUMERIC AS nota,
+               CASE WHEN j.value->>'estado' IN ('guardada', 'cambio_propuesto') THEN
+                   COALESCE(academico_test.fn_nota_redondear(
+                                (j.value->>'porcentaje')::NUMERIC * ctx.nota_maxima / 100,
+                                ctx.decimales, ctx.modo),
+                            (j.value->>'nota')::NUMERIC)
+               END AS nota,
                j.value->>'valoracion' AS valoracion,
                (j.value->>'aprobada')::BOOLEAN AS aprobada,
                COALESCE((j.value->>'con_recuperacion')::BOOLEAN, FALSE) AS con_rec,
-               COALESCE(academico_test.fn_informe_boletin_nota_texto((j.value->>'nota_original')::NUMERIC),
-                        j.value->>'valoracion_original') AS original
+               COALESCE(academico_test.fn_informe_boletin_nota_texto((j.value->>'nota_original')::NUMERIC,
+                                                                     ctx.decimales),
+                        j.value->>'valoracion_original') AS original,
+               (j.value->>'error_configuracion') IS NOT NULL AS err
           FROM listado l
+          CROSS JOIN ctx
           CROSS JOIN LATERAL JSONB_ARRAY_ELEMENTS(COALESCE(l.asignaturas, '[]'::JSONB)) j
          WHERE l.fk_tmatricula IN (SELECT e.fk_tmatricula FROM elegidos e)
-           AND j.value->>'estado' IN ('guardada', 'cambio_propuesto')
+           AND (j.value->>'estado' IN ('guardada', 'cambio_propuesto')
+                OR j.value->>'error_configuracion' IS NOT NULL)
     ),
     asig_pe AS (
         SELECT e.fk_tmatricula AS mat, pl.*, p.pk AS pe, p.n,
-               n.nota, n.valoracion, n.aprobada, n.con_rec, n.original
+               n.nota, n.valoracion, n.aprobada, n.con_rec, n.original,
+               COALESCE(n.err, FALSE) AND n.nota IS NULL AS err
           FROM elegidos e
           CROSS JOIN plan pl
           CROSS JOIN periodos p
@@ -315,16 +339,16 @@ AS $function$
     -- por el porcentaje de influencia, 2 por la intensidad horaria, 3 promedia.
     area_pe AS (
         SELECT x.mat, x.area, x.pe, x.n,
-               ROUND(CASE ctx.criterio_area
+               academico_test.fn_nota_redondear(CASE ctx.criterio_area
                          WHEN '1' THEN SUM(x.nota * x.pia) FILTER (WHERE x.nota IS NOT NULL)
                                        / NULLIF(SUM(x.pia) FILTER (WHERE x.nota IS NOT NULL), 0)
                          WHEN '2' THEN SUM(x.nota * x.ih) FILTER (WHERE x.nota IS NOT NULL)
                                        / NULLIF(SUM(x.ih) FILTER (WHERE x.nota IS NOT NULL), 0)
                          ELSE AVG(x.nota)
-                     END, COALESCE(ctx.decimales, 1)) AS nota
+                     END, ctx.decimales, ctx.modo) AS nota
           FROM asig_pe x
           CROSS JOIN ctx
-         GROUP BY x.mat, x.area, x.pe, x.n, ctx.criterio_area, ctx.decimales
+         GROUP BY x.mat, x.area, x.pe, x.n, ctx.criterio_area, ctx.decimales, ctx.modo
     ),
     area_actual AS (
         SELECT a.mat, a.area, a.nota, h.valoracion_nombre AS desempeno,
@@ -338,13 +362,11 @@ AS $function$
                         a.nota * 100 / NULLIF(ctx.nota_maxima, 0), ctx.peraca, ctx.grado) h ON TRUE
          WHERE a.pe = p_fk_tperiodo_evaluacion
     ),
+    -- Asignaturas aprobadas/reprobadas/sin definir: el mismo conteo de la
+    -- pantalla (TINFORME_PERIODO_MATRICULA); el resultado del area va en su fila.
     resumen AS (
-        SELECT aa.mat,
-               COUNT(*) FILTER (WHERE aa.aprobada IS TRUE)  AS aprobadas,
-               COUNT(*) FILTER (WHERE aa.aprobada IS FALSE) AS reprobadas,
-               COUNT(*) FILTER (WHERE aa.aprobada IS NULL)  AS sin_calificar
-          FROM area_actual aa
-         GROUP BY aa.mat
+        SELECT e.fk_tmatricula AS mat, e.aprobadas, e.reprobadas, e.sin_definir AS sin_calificar
+          FROM elegidos e
     ),
     docentes AS (
         SELECT da.FK_TASIGNATURA AS asig,
@@ -418,9 +440,14 @@ AS $function$
         SELECT ROW_NUMBER() OVER (ORDER BY sv.ORDEN, sv.LIMITE_INFERIOR)::INT AS n,
                v.NOMBRE::VARCHAR AS nombre,
                CASE WHEN ctx.es_numerico THEN
-                   academico_test.fn_informe_boletin_nota_texto(ROUND(sv.LIMITE_INFERIOR * ctx.nota_maxima / 100, ctx.decimales))
+                   -- La primera y la ultima nota imprimible de la banda.
+                   academico_test.fn_informe_boletin_nota_texto(
+                       academico_test.fn_nota_redondear(sv.LIMITE_INFERIOR * ctx.nota_maxima / 100,
+                                                        ctx.decimales, 'Hacia arriba'), ctx.decimales)
                    || ' - ' ||
-                   academico_test.fn_informe_boletin_nota_texto(TRUNC(sv.LIMITE_SUPERIOR * ctx.nota_maxima / 100, 1))
+                   academico_test.fn_informe_boletin_nota_texto(
+                       academico_test.fn_nota_redondear(sv.LIMITE_SUPERIOR * ctx.nota_maxima / 100,
+                                                        ctx.decimales, 'Hacia abajo'), ctx.decimales)
                END::VARCHAR AS rango
           FROM ctx
           JOIN academico_test.TESCALA_VALORACION sv ON sv.FK_TESCALA = ctx.fk_tescala AND sv.ACTIVE = TRUE
@@ -449,7 +476,7 @@ AS $function$
                NULL::VARCHAR AS desempeno, NULL::BOOLEAN AS aprobada,
                a.ih, NULL::NUMERIC AS pia, NULL::NUMERIC AS ii, NULL::NUMERIC AS ij, NULL::VARCHAR AS docentes,
                NULL::TEXT AS texto, NULL::DATE AS fecha, NULL::VARCHAR AS comp_tipo, NULL::VARCHAR AS funcionario,
-               p.n AS pe_n, p.abreviacion AS pe_abrev
+               p.n AS pe_n, p.abreviacion AS pe_abrev, FALSE AS err
           FROM areas a
           CROSS JOIN periodos p
           LEFT JOIN area_pe ap ON ap.mat = a.mat AND ap.area = a.area AND ap.pe = p.pk
@@ -461,7 +488,7 @@ AS $function$
                NULL, NULL,
                x.ih, NULL, NULL, NULL, NULL,
                NULL, NULL, NULL, NULL,
-               p.n, p.abreviacion
+               p.n, p.abreviacion, x.err
           FROM asig_pe x
           JOIN periodos p ON p.pk = x.pe
         UNION ALL
@@ -471,7 +498,7 @@ AS $function$
                aa.nota, NULL, FALSE, aa.desempeno::VARCHAR, aa.aprobada,
                a.ih, 100, NULL, NULL, NULL,
                NULL, NULL, NULL, NULL,
-               NULL, NULL
+               NULL, NULL, FALSE
           FROM areas a
           LEFT JOIN area_actual aa ON aa.mat = a.mat AND aa.area = a.area
         UNION ALL
@@ -482,7 +509,7 @@ AS $function$
                cur.valoracion::VARCHAR, cur.aprobada,
                x.ih, x.pia, TRIM_SCALE(sn.INASISTENCIA), TRIM_SCALE(sn.INASISTENCIA_JUSTIFICADA), d.nombres,
                NULL, NULL, NULL, NULL,
-               NULL, NULL
+               NULL, NULL, COALESCE(cur.err, FALSE)
           FROM asignaturas x
           LEFT JOIN asig_pe cur ON cur.mat = x.mat AND cur.asig = x.asig AND cur.pe = p_fk_tperiodo_evaluacion
           LEFT JOIN docentes d ON d.asig = x.asig
@@ -497,7 +524,7 @@ AS $function$
                lg.nota, NULL, FALSE, NULL, NULL,
                NULL, NULL, NULL, NULL, NULL,
                lg.texto, NULL, NULL, NULL,
-               NULL, NULL
+               NULL, NULL, FALSE
           FROM logros lg
           JOIN plan pl ON pl.asig = lg.asig
         UNION ALL
@@ -507,7 +534,7 @@ AS $function$
                NULL, NULL, FALSE, NULL, NULL,
                NULL, NULL, NULL, NULL, NULL,
                cp.observacion, cp.fecha, cp.tipo, cp.funcionario,
-               NULL, NULL
+               NULL, NULL, FALSE
           FROM comportamientos cp
         UNION ALL
         -- 4: la escala, un nivel por fila
@@ -516,7 +543,7 @@ AS $function$
                NULL, NULL, FALSE, NULL, NULL,
                NULL, NULL, NULL, NULL, NULL,
                es.rango, NULL, NULL, NULL,
-               NULL, NULL
+               NULL, NULL, FALSE
           FROM elegidos e
           CROSS JOIN escala es
     )
@@ -524,15 +551,18 @@ AS $function$
            c.grado_nombre, c.grupo_etiqueta, e.periodo_nombre, c.anio, c.fondo_archivo,
            e.fk_tmatricula, e.estudiante, e.documento,
            academico_test.fn_informe_boletin_foto_interno(e.fk_tmatricula),
-           COALESCE(academico_test.fn_informe_boletin_nota_texto(e.promedio_guardado),
+           COALESCE(academico_test.fn_informe_boletin_nota_texto(e.promedio_guardado, cx.decimales),
                     e.promedio_valoracion)::VARCHAR,
            e.puesto,
-           (SELECT COUNT(*) FROM actual),
+           -- "Puesto X de N": N son las matriculas activas del grupo, no las consolidadas.
+           (SELECT COUNT(*) FROM academico_test.TMATRICULA m
+             WHERE m.FK_TGRUPO = p_fk_tgrupo AND m.ACTIVE = TRUE),
            rs.aprobadas, rs.reprobadas,
-           -- Un boletin publica lo que alguien acepto.
-           CASE WHEN e.observacion_estado = 'APROBADA' THEN e.observacion END,
+           -- Un boletin publica lo que un humano acepto: nunca un BORRADOR de la IA.
+           CASE WHEN e.observacion_estado IN ('APROBADA', 'MODIFICADA') THEN e.observacion END,
            f.area_nombre, f.asig_nombre,
-           academico_test.fn_informe_boletin_nota_texto(f.nota_num),
+           CASE WHEN f.err THEN '—'
+                ELSE academico_test.fn_informe_boletin_nota_texto(f.nota_num, cx.decimales) END::VARCHAR,
            f.original, f.con_rec, f.desempeno, f.aprobada, f.ii,
            r.nombre, r.documento,
            c.escudo_archivo, c.departamento, c.jornada,
@@ -554,6 +584,7 @@ AS $function$
            f.pe_n,
            COALESCE(NULLIF(TRIM(f.pe_abrev), ''), 'P' || f.pe_n)::VARCHAR
       FROM elegidos e
+      CROSS JOIN ctx cx
       CROSS JOIN academico_test.fn_informe_boletin_cabecera_interno(p_fk_tgrupo) c
       -- LEFT: un estudiante sin plan conserva su pagina.
       LEFT JOIN filas f ON f.mat = e.fk_tmatricula
@@ -567,7 +598,7 @@ AS $function$
 $function$;
 
 COMMENT ON FUNCTION academico_test.fn_informe_boletin_notas_interno(BIGINT, BIGINT, BIGINT[])
-    IS 'INTERNO: los datos del boletin de notas de un periodo (primaria, secundaria y media): por estudiante, un flujo de filas que la plantilla pinta en orden. SECCION 1 = consolidado: una fila por (AREA o ASIGNATURA del plan del grado, periodo del año hasta el pedido) con PERIODO_ORDEN, PERIODO_ABREVIACION, NOTA y NOTA_ORIGINAL (antes de recuperar, Regla 68); la plantilla la pivota, asi que la cantidad de periodos no esta fija; SECCION 2 = detalle del periodo pedido (AREA y ASIGNATURA con nota, desempeño, PIA = INFLUENCIA, I.H. = INTENSIDAD, I.I./I.J. de TASIGNATURA_NOTA y DOCENTES de TDOCENTE_ASIGNATURA; debajo, filas LOGRO: por criterio de unidad con actividades calificadas en el periodo, la nota del estudiante y el INDICADOR del nivel de la escala en que cae, o la descripcion del criterio); SECCION 3 = COMPORTAMIENTO del periodo (TCOMPORTAMIENTO_CALIFICADO: fecha, tipo, codigo - nombre, observacion, funcionario); SECCION 4 = ESCALA, un nivel por fila (ASIGNATURA_NOMBRE el nombre, TEXTO el rango en la nota del colegio), tantos como tenga la escala. ORDEN es la posicion de la fila dentro de su seccion. La nota del area sigue CRITERIO_AREA (1 por influencia, 2 por intensidad, 3 promedio) y APROBADAS/REPROBADAS/SIN_CALIFICAR cuentan AREAS contra fn_grado_desempeno_minimo. Solo estudiantes no cualitativos con el periodo CONSOLIDADO (Regla 81); solo notas guardadas. Cabecera, foto y firmas (rector, secretaria en AUXILIAR_*, director de grupo) se repiten en cada fila. Sin gate: lo aplica fn_informe_boletin_notas.';
+    IS 'INTERNO: los datos del boletin de notas de un periodo (primaria, secundaria y media): por estudiante, un flujo de filas que la plantilla pinta en orden. SECCION 1 = consolidado: una fila por (AREA o ASIGNATURA del plan del grado, periodo del año hasta el pedido) con PERIODO_ORDEN, PERIODO_ABREVIACION, NOTA y NOTA_ORIGINAL (antes de recuperar, Regla 68); la plantilla la pivota, asi que la cantidad de periodos no esta fija; SECCION 2 = detalle del periodo pedido (AREA y ASIGNATURA con nota, desempeño, PIA = INFLUENCIA, I.H. = INTENSIDAD, I.I./I.J. de TASIGNATURA_NOTA y DOCENTES de TDOCENTE_ASIGNATURA; debajo, filas LOGRO: por criterio de unidad con actividades calificadas en el periodo, la nota del estudiante y el INDICADOR del nivel de la escala en que cae, o la descripcion del criterio); SECCION 3 = COMPORTAMIENTO del periodo (TCOMPORTAMIENTO_CALIFICADO: fecha, tipo, codigo - nombre, observacion, funcionario); SECCION 4 = ESCALA, un nivel por fila (ASIGNATURA_NOMBRE el nombre, TEXTO el rango en la nota del colegio), tantos como tenga la escala. ORDEN es la posicion de la fila dentro de su seccion. La nota del area sigue CRITERIO_AREA (1 por influencia, 2 por intensidad, 3 promedio); asignatura, area, promedio, escala y texto usan NUMERO_DECIMALES y FK_TLV_MODO_REDONDEAR del criterio. APROBADAS/REPROBADAS/SIN_CALIFICAR cuentan ASIGNATURAS, igual que la pantalla. TOTAL_ESTUDIANTES = matriculas activas del grupo. Una celda con error de configuracion sin nota guardada sale "—". Observacion solo APROBADA o MODIFICADA. Solo estudiantes no cualitativos con el periodo CONSOLIDADO (Regla 81); solo notas guardadas. Cabecera, foto y firmas (rector, secretaria en AUXILIAR_*, director de grupo) se repiten en cada fila. Sin gate: lo aplica fn_informe_boletin_notas.';
 
 -- ============================================================ wrapper
 CREATE FUNCTION academico_test.fn_informe_boletin_notas(
