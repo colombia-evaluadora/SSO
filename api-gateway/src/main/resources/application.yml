@@ -64,6 +64,15 @@ spring:
           # here.)
           globalcors:
             add-to-simple-url-handler-mapping: false
+          # Timeouts del cliente HTTP hacia los servicios. Sin ellos un
+          # backend colgado retiene la conexion indefinidamente. Los
+          # endpoints lentos (IA, reportes, subidas) los amplian por ruta
+          # con `metadata.response-timeout` (milisegundos).
+          httpclient:
+            connect-timeout: ${GATEWAY_CONNECT_TIMEOUT_MS:2000}
+            response-timeout: ${GATEWAY_RESPONSE_TIMEOUT:15s}
+            pool:
+              max-idle-time: ${GATEWAY_POOL_MAX_IDLE_TIME:30s}
           # Static routes. The dynamic discovery locator (see
           # DynamicRouteSupportConfig) auto-creates a route per service
           # registered with Eureka, lowercased service id as the path.
@@ -286,6 +295,8 @@ spring:
             # regla del propio endpoint.
             - id: api-file-service
               uri: lb://file-service
+              metadata:
+                response-timeout: ${GATEWAY_FILE_RESPONSE_TIMEOUT_MS:300000}
               predicates:
                 - Path=/api/files/**
               filters:
@@ -307,6 +318,8 @@ spring:
             # desde public.microservice.
             - id: api-reporting-service
               uri: lb://reporting-service
+              metadata:
+                response-timeout: ${GATEWAY_REPORTING_RESPONSE_TIMEOUT_MS:190000}
               predicates:
                 - Path=/api/reportes/**
               filters:
@@ -320,6 +333,8 @@ spring:
             # pantalla.
             - id: api-ai-control-service
               uri: lb://ai-control-service
+              metadata:
+                response-timeout: ${GATEWAY_AI_RESPONSE_TIMEOUT_MS:125000}
               predicates:
                 - Path=/api/ai/**
               filters:
