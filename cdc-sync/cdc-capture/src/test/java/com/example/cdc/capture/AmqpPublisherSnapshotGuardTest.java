@@ -6,6 +6,7 @@ import io.debezium.engine.DebeziumEngine;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.Test;
 import org.springframework.amqp.core.MessagePostProcessor;
+import org.springframework.amqp.rabbit.connection.CorrelationData;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 
 import java.lang.reflect.Field;
@@ -105,7 +106,8 @@ class AmqpPublisherSnapshotGuardTest {
 
         @Override
         public void convertAndSend(String exchange, String routingKey, Object message,
-                                   MessagePostProcessor processor) {
+                                   MessagePostProcessor processor, CorrelationData correlationData) {
+            correlationData.getFuture().complete(new CorrelationData.Confirm(true, null));
             published.incrementAndGet();
             this.lastRoutingKey = routingKey;
         }

@@ -53,6 +53,13 @@ docker:
   image: ${DOCKER_IMAGE:eurekatic/query-service:1.0.0-SNAPSHOT}
   network: ${DOCKER_NETWORK:sso_postgres_modernize_default}
   socket-path: ${DOCKER_SOCKET_PATH:/var/run/docker.sock}
+  # Recursos y logs de cada query-service spawneado (HostConfig).
+  # query-cpus vacío = sin límite de CPU.
+  query-mem-limit: ${PROVISIONER_QUERY_MEM_LIMIT:768m}
+  query-mem-reservation: ${PROVISIONER_QUERY_MEM_RESERVATION:256m}
+  query-cpus: ${PROVISIONER_QUERY_CPUS:}
+  log-max-size: ${DOCKER_LOG_MAX_SIZE:20m}
+  log-max-file: ${DOCKER_LOG_MAX_FILE:5}
   eureka-url: ${EUREKA_URL:http://eurekaserver:8761/eureka}
   # OTLP endpoint propagado a cada contenedor de query-service que
   # el provisioner spawnea. Misma env var que el resto del stack

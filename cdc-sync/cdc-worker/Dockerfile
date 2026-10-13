@@ -81,7 +81,7 @@ RUN set -eux ; \
 COPY --from=build --chown=app:app /workspace/cdc-worker/target/app.jar /app/app.jar
 
 USER app
-EXPOSE 8081
+EXPOSE 8080
 
 # Container-aware JVM: pick a sane heap from the cgroup limit instead
 # of the host's total RAM (we don't want every replica claiming
@@ -90,5 +90,6 @@ EXPOSE 8081
 ENTRYPOINT ["java", \
     "-XX:+UseContainerSupport", \
     "-XX:MaxRAMPercentage=75", \
+    "-XX:+ExitOnOutOfMemoryError", \
     "-Djava.security.egd=file:/dev/./urandom", \
     "-jar", "/app/app.jar"]

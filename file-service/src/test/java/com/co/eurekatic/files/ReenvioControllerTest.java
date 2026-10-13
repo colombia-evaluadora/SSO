@@ -54,6 +54,8 @@ class ReenvioControllerTest {
                 transformador,
                 mock(ArchivoRepository.class),
                 "http://catalogo-de-prueba/api",
+                java.time.Duration.ofSeconds(2),
+                java.time.Duration.ofSeconds(10),
                 jwt,
                 props,
                 acceso);

@@ -2,9 +2,16 @@ package com.co.eurekatic.reporting.data;
 
 import com.co.eurekatic.reporting.config.ReportingProperties;
 import org.slf4j.Logger;
+import tools.jackson.core.JacksonException;
+import tools.jackson.core.JsonParser;
+import tools.jackson.core.JsonToken;
+import tools.jackson.core.type.TypeReference;
+import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.json.JsonMapper;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.HttpStatusCode;
 import org.springframework.http.MediaType;
 import org.springframework.http.client.ClientHttpRequestFactory;
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
@@ -13,6 +20,10 @@ import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientException;
 import org.springframework.web.server.ResponseStatusException;
 
+import java.io.IOException;
+import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -37,6 +48,12 @@ import java.util.concurrent.ConcurrentHashMap;
 public class QueryServiceClient {
 
     private static final Logger log = LoggerFactory.getLogger(QueryServiceClient.class);
+
+    private static final String PERFIL_TIMEOUT_HEADER = "X-Query-Timeout-Profile";
+    private static final String PERFIL_TIMEOUT_REPORT = "report";
+
+    private static final ObjectMapper MAPPER = JsonMapper.builder().build();
+    private static final TypeReference<Map<String, Object>> FILA = new TypeReference<>() {};
 
     /** Base por defecto: la instancia del catalogo academico (eval-col). */
     private final String baseUrlPorDefecto;
@@ -75,6 +92,8 @@ public class QueryServiceClient {
                     .baseUrl(b)
                     .requestFactory((ClientHttpRequestFactory) factory)
                     .defaultHeader(HttpHeaders.ACCEPT, MediaType.APPLICATION_JSON_VALUE)
+                    // Pide a query-service el timeout largo de reportes (no el de listados).
+                    .defaultHeader(PERFIL_TIMEOUT_HEADER, PERFIL_TIMEOUT_REPORT)
                     .build();
         });
     }
@@ -109,12 +128,14 @@ public class QueryServiceClient {
      * @param filters    filtros elegidos en pantalla; puede venir vacio,
      *                   y vacio significa "sin filtrar" (o sea: todo)
      * @param sorting    orden elegido en pantalla; puede ser null
+     * @param maxRows    tope de filas; al leer la fila maxRows+1 se corta con 422
      */
     public List<Map<String, Object>> fetchRows(String baseUrl,
                                                String path,
                                                String bearer,
                                                Map<String, Object> filters,
-                                               Map<String, Object> sorting) {
+                                               Map<String, Object> sorting,
+                                               int maxRows) {
 
         // El cuerpo replica el del listado menos pageIndex/pageSize. Los
         // filtros ausentes NO se rellenan con nada: llegan como NULL al
@@ -126,50 +147,82 @@ public class QueryServiceClient {
             body.put("sorting", sorting);
         }
 
-        Map<String, Object> response;
         try {
-            response = clientePara(baseUrl).post()
+            return clientePara(baseUrl).post()
                     .uri(path)
                     .header(HttpHeaders.AUTHORIZATION, "Bearer " + bearer)
                     .contentType(MediaType.APPLICATION_JSON)
                     .body(body)
-                    .retrieve()
-                    .body(new org.springframework.core.ParameterizedTypeReference<>() {});
-        } catch (org.springframework.web.client.HttpStatusCodeException e) {
-            // Se propaga el codigo del query-service en vez de traducir
-            // todo a 500: un 403 por rol o un 400 por un filtro invalido
-            // son respuestas del usuario, no fallas del reporte.
-            String cuerpo = e.getResponseBodyAsString();
-            log.warn("query-service respondio {} para {}: {}", e.getStatusCode(), path, cuerpo);
-            // En un 4xx el problema es lo que mando el llamante, y el mensaje
-            // del query-service dice EXACTAMENTE cual es ("el elemento [0] es
-            // String, esperado Long"). Tragarselo obliga a entrar al servidor a
-            // leer logs para diagnosticar un error del front; propagarlo lo deja
-            // visible en la pestaña Network. Los 5xx si se generalizan: ahi el
-            // detalle es interno y no le sirve a nadie del otro lado.
-            String motivo = e.getStatusCode().is4xxClientError()
-                    ? mensajeDe(cuerpo)
-                    : "No se pudieron obtener los datos del reporte.";
-            throw new ResponseStatusException(e.getStatusCode(), motivo);
+                    .exchange((req, res) -> {
+                        if (res.getStatusCode().isError()) {
+                            throw errorHttp(res.getStatusCode(), path,
+                                    new String(res.getBody().readAllBytes(), StandardCharsets.UTF_8));
+                        }
+                        try (InputStream in = res.getBody()) {
+                            return leerFilas(in, path, maxRows);
+                        }
+                    });
         } catch (RestClientException e) {
             log.error("Fallo la llamada al query-service para {}", path, e);
             throw new ResponseStatusException(HttpStatus.BAD_GATEWAY,
                     "El servicio de datos no respondio.");
         }
+    }
 
-        if (response == null) {
-            return List.of();
-        }
+    /**
+     * Se propaga el codigo del query-service en vez de traducir todo a 500:
+     * un 403 por rol o un 400 por un filtro invalido son respuestas del
+     * usuario, no fallas del reporte. En un 4xx el mensaje del query-service
+     * dice exactamente cual es el problema; los 5xx se generalizan.
+     */
+    private ResponseStatusException errorHttp(HttpStatusCode status, String path, String cuerpo) {
+        log.warn("query-service respondio {} para {}: {}", status, path, cuerpo);
+        String motivo = status.is4xxClientError()
+                ? mensajeDe(cuerpo)
+                : "No se pudieron obtener los datos del reporte.";
+        return new ResponseStatusException(status, motivo);
+    }
 
-        // El controlador de rutas del query-service siempre responde con
-        // el sobre {rows, outParams?}.
-        Object rows = response.get("rows");
-        if (rows instanceof List<?> list) {
-            @SuppressWarnings("unchecked")
-            List<Map<String, Object>> typed = (List<Map<String, Object>>) list;
-            return typed;
+    /**
+     * Lee el sobre {@code {rows:[...], outParams?}} en streaming: materializa
+     * fila a fila y, al llegar a la fila maxRows+1, corta sin leer el resto.
+     */
+    List<Map<String, Object>> leerFilas(InputStream in, String path, int maxRows) {
+        List<Map<String, Object>> filas = new ArrayList<>();
+        try (JsonParser p = MAPPER.createParser(in)) {
+            if (p.nextToken() != JsonToken.START_OBJECT) {
+                log.warn("Respuesta inesperada (no es un objeto) desde {}", path);
+                return List.of();
+            }
+            boolean conRows = false;
+            while (p.nextToken() == JsonToken.PROPERTY_NAME) {
+                String campo = p.currentName();
+                JsonToken t = p.nextToken();
+                if ("rows".equals(campo) && t == JsonToken.START_ARRAY) {
+                    conRows = true;
+                    while (p.nextToken() != JsonToken.END_ARRAY) {
+                        if (filas.size() >= maxRows) {
+                            // Fila maxRows+1: se deja de leer; el try cierra el stream.
+                            throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY,
+                                    "El reporte devolvio mas de " + maxRows
+                                    + " registros y el maximo es " + maxRows
+                                    + ". Agrega filtros para acotarlo.");
+                        }
+                        filas.add(p.readValueAs(FILA));
+                    }
+                } else {
+                    p.skipChildren();
+                }
+            }
+            if (!conRows) {
+                log.warn("Respuesta sin 'rows' desde {}", path);
+                return List.of();
+            }
+            return filas;
+        } catch (JacksonException e) {
+            log.error("Respuesta ilegible del query-service para {}", path, e);
+            throw new ResponseStatusException(HttpStatus.BAD_GATEWAY,
+                    "El servicio de datos respondio algo ilegible.");
         }
-        log.warn("Respuesta sin 'rows' desde {}: claves={}", path, response.keySet());
-        return List.of();
     }
 }

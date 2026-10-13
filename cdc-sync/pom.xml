@@ -9,35 +9,16 @@
   <parent>
     <groupId>org.springframework.boot</groupId>
     <artifactId>spring-boot-starter-parent</artifactId>
-    <version>3.3.5</version>
+    <version>4.1.1</version>
     <relativePath/>
   </parent>
 
   <properties>
-    <!-- Spring Boot's <java.version> drives BOTH maven.compiler.source
-         AND maven.compiler.target (overriding any explicit setting below).
-         Pinning it to 21 keeps the produced class files at major version
-         65, which Spring Boot 3.3.5's bundled ASM 9.7 can read. The JRE
-         is Java 25 in the Dockerfile and is forward-compatible with
-         Java 21 bytecode, so the application still runs there. Bump
-         this (and the Dockerfile base image) alongside a Spring Boot
-         4.x upgrade. -->
-    <java.version>21</java.version>
-    <maven.compiler.source>21</maven.compiler.source>
-    <maven.compiler.target>21</maven.compiler.target>
-    <!-- El bytecode se emite como Java 21 (arriba), pero los tests
-         CORREN sobre la JVM de CI, que es Java 25. Mockito instrumenta
-         clases en tiempo de ejecución vía Byte Buddy, y el que trae
-         Boot 3.3.5 sólo llega a Java 23:
-
-           IllegalArgumentException: Java 25 (69) is not supported by
-           the current version of Byte Buddy
-
-         Subirlo a la serie 1.17 (que sí conoce Java 25) arregla la
-         instrumentación sin tocar el target de compilación. La
-         alternativa, -Dnet.bytebuddy.experimental=true, sólo silencia
-         la comprobación y deja a Mockito trabajando sobre un class
-         file format que no soporta oficialmente. -->
+    <!-- Spring Boot 4.1.x (Java 25): bytecode 69 lo lee el ASM de Boot 4 y el
+         Byte Buddy/Mockito gestionados ya conocen Java 25. -->
+    <java.version>25</java.version>
+    <maven.compiler.source>25</maven.compiler.source>
+    <maven.compiler.target>25</maven.compiler.target>
     <byte-buddy.version>1.17.8</byte-buddy.version>
     <debezium.version>3.1.0.Final</debezium.version>
     <ojdbc.version>23.3.0.23.09</ojdbc.version>

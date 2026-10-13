@@ -57,6 +57,15 @@ public class UserForwardingGlobalFilter implements GlobalFilter, Ordered {
     static final String HEADER_TOKEN_TYPE = "X-Authenticated-Token-Type";
     static final String HEADER_FAMILY_ID = "X-Authenticated-Family-Id";
 
+    /** Removes every identity header a client could have forged. */
+    private static void stripIdentityHeaders(org.springframework.http.HttpHeaders headers) {
+        headers.remove(HEADER_USER);
+        headers.remove(HEADER_USER_ID);
+        headers.remove(HEADER_ROLES);
+        headers.remove(HEADER_TOKEN_TYPE);
+        headers.remove(HEADER_FAMILY_ID);
+    }
+
     @Override
     public Mono<Void> filter(ServerWebExchange exchange, GatewayFilterChain chain) {
         // Compute the request to forward: original if no auth,
@@ -72,6 +81,7 @@ public class UserForwardingGlobalFilter implements GlobalFilter, Ordered {
                 .ofType(AuthPrincipal.class)
                 .map(principal -> {
                     var mutator = exchange.getRequest().mutate()
+                            .headers(UserForwardingGlobalFilter::stripIdentityHeaders)
                             // AuthPrincipal.email() — the JWT sub since V12
                             // carries the user's email (the legacy username
                             // column is gone). Header name is unchanged so
@@ -101,7 +111,11 @@ public class UserForwardingGlobalFilter implements GlobalFilter, Ordered {
                     }
                     return mutator.build();
                 })
-                .defaultIfEmpty(exchange.getRequest());
+                // Anonymous: nothing authenticated may reach downstream, so
+                // a client-supplied X-Authenticated-* header is dropped.
+                .defaultIfEmpty(exchange.getRequest().mutate()
+                        .headers(UserForwardingGlobalFilter::stripIdentityHeaders)
+                        .build());
 
         return requestToForward
                 .map(req -> exchange.mutate().request(req).build())

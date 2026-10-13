@@ -135,6 +135,13 @@
             <version>${resilience4j.version}</version>
         </dependency>
 
+        <!-- Per-principal limiter cache with idle expiry and a size cap
+             (version managed by the Boot BOM). -->
+        <dependency>
+            <groupId>com.github.ben-manes.caffeine</groupId>
+            <artifactId>caffeine</artifactId>
+        </dependency>
+
         <!-- ===== test scope ===== -->
         <dependency>
             <groupId>org.springframework.boot</groupId>

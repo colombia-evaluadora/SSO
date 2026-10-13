@@ -4,6 +4,8 @@ import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.AppenderBase;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
+import java.net.http.HttpClient;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -13,13 +15,19 @@ import java.util.concurrent.TimeUnit;
 
 public class ClickHouseLogAppender extends AppenderBase<ILoggingEvent> {
 
+    private static final Duration CONNECT_TIMEOUT = Duration.ofSeconds(2);
+    private static final Duration REQUEST_TIMEOUT = Duration.ofSeconds(5);
+
     private String clickhouseUrl;
     private String servicio;
     private final ObjectMapper mapper = new ObjectMapper();
+    private final HttpClient http = HttpClient.newBuilder().connectTimeout(CONNECT_TIMEOUT).build();
     private final ThreadPoolExecutor executor = new ThreadPoolExecutor(
             1, 2, 60, TimeUnit.SECONDS,
             new LinkedBlockingQueue<>(500),
-            r -> { Thread t = new Thread(r, "ch-log-appender"); t.setDaemon(true); return t; }
+            r -> { Thread t = new Thread(r, "ch-log-appender"); t.setDaemon(true); return t; },
+            // cola llena: descartar el log en vez de lanzar RejectedExecutionException al hilo que loguea
+            new ThreadPoolExecutor.DiscardPolicy()
     );
 
     public void setClickhouseUrl(String clickhouseUrl) { this.clickhouseUrl = clickhouseUrl; }
@@ -53,8 +61,9 @@ public class ClickHouseLogAppender extends AppenderBase<ILoggingEvent> {
                         .uri(java.net.URI.create(url))
                         .POST(java.net.http.HttpRequest.BodyPublishers.ofString(body))
                         .header("Content-Type", "application/json")
+                        .timeout(REQUEST_TIMEOUT)
                         .build();
-                java.net.http.HttpClient.newHttpClient().send(req,
+                http.send(req,
                         java.net.http.HttpResponse.BodyHandlers.discarding());
             } catch (Exception e) {
                 // No fallar el thread principal si ClickHouse no responde

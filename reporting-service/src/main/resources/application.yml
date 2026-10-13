@@ -63,7 +63,14 @@ reporting:
   # Tope duro. V66 quito el LIMIT de las funciones, asi que este es el
   # unico freno que queda entre un filtro mal puesto y un PDF de
   # cientos de miles de filas.
+  # Debe ser MENOR que QUERY_MAX_ROWS de query-service (default 50001): si no,
+  # query-service recorta antes y el tope de aqui nunca se detecta.
   max-rows: ${REPORTING_MAX_ROWS:50000}
+
+  # Exportaciones simultaneas por instancia (cada una retiene filas y archivo
+  # en memoria). Sin permiso tras la espera: 429 con Retry-After.
+  max-concurrent-exports: ${REPORTING_MAX_CONCURRENT_EXPORTS:4}
+  export-acquire-timeout: ${REPORTING_EXPORT_ACQUIRE_TIMEOUT_MS:2000}ms
 
   # Un reporte completo tarda mucho mas que una pagina de 10 filas.
   request-timeout: ${REPORTING_REQUEST_TIMEOUT:3m}

@@ -36,6 +36,15 @@ public class ReportingProperties {
      */
     private int maxRows = 50_000;
 
+    /**
+     * Exportaciones simultaneas por instancia. Cada una retiene todas las filas
+     * y el archivo en memoria, asi que sin tope unas pocas bastan para un OOM.
+     */
+    private int maxConcurrentExports = 4;
+
+    /** Cuanto espera una exportacion por un permiso antes de recibir 429. */
+    private java.time.Duration exportAcquireTimeout = java.time.Duration.ofMillis(2000);
+
     /** Timeout de la llamada al query-service. Un reporte sin paginar
      *  tarda mucho mas que un listado de 10 filas. */
     private java.time.Duration requestTimeout = java.time.Duration.ofMinutes(3);
@@ -72,6 +81,12 @@ public class ReportingProperties {
 
     public int getMaxRows() { return maxRows; }
     public void setMaxRows(int v) { this.maxRows = v; }
+
+    public int getMaxConcurrentExports() { return maxConcurrentExports; }
+    public void setMaxConcurrentExports(int v) { this.maxConcurrentExports = v; }
+
+    public java.time.Duration getExportAcquireTimeout() { return exportAcquireTimeout; }
+    public void setExportAcquireTimeout(java.time.Duration v) { this.exportAcquireTimeout = v; }
 
     public java.time.Duration getRequestTimeout() { return requestTimeout; }
     public void setRequestTimeout(java.time.Duration v) { this.requestTimeout = v; }

@@ -6,6 +6,10 @@ spring:
     port: ${CDC_AMQP_PORT:5672}
     username: ${CDC_AMQP_USER:cdc}
     password: ${CDC_AMQP_PASSWORD:demopass}
+    publisher-confirm-type: correlated
+    publisher-returns: true
+    template:
+      mandatory: true
   datasource:
     url: ${CDC_PG_URL:jdbc:postgresql://localhost:55432/academico}
     username: ${CDC_PG_USER:academico}
@@ -29,6 +33,7 @@ cdc:
     dir: ${CDC_OFFSETS_DIR:/tmp/cdc-capture/offsets}
   rabbitmq:
     exchange: cdc.events
+    confirm-timeout-ms: ${CDC_PUBLISH_CONFIRM_TIMEOUT_MS:10000}
 
 management:
   endpoints:
@@ -37,10 +42,10 @@ management:
         include: health,prometheus,info
   endpoint:
     health:
-      show-details: always
+      show-details: ${CDC_HEALTH_SHOW_DETAILS:never}
 
 logging:
   level:
     root: INFO
-    com.example.cdc: DEBUG
+    com.example.cdc: ${CDC_LOG_LEVEL:INFO}
     io.debezium: WARN

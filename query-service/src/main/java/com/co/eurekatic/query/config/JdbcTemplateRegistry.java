@@ -1,10 +1,13 @@
 package com.co.eurekatic.query.config;
 
+import com.zaxxer.hikari.HikariDataSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Component;
 import org.springframework.web.server.ResponseStatusException;
 
+import java.util.Locale;
 import java.util.Map;
+import java.util.OptionalInt;
 
 import static org.springframework.http.HttpStatus.BAD_GATEWAY;
 import static org.springframework.http.HttpStatus.NOT_FOUND;
@@ -30,12 +33,23 @@ import static org.springframework.http.HttpStatus.NOT_FOUND;
 @Component
 public class JdbcTemplateRegistry {
 
+    private static final String DEFAULT_DIALECT = "postgres";
+
     private final Map<String, NamedParameterJdbcTemplate> templates;
 
     public JdbcTemplateRegistry(
             @org.springframework.beans.factory.annotation.Qualifier("queryJdbcTemplates")
                     Map<String, NamedParameterJdbcTemplate> templates) {
         this.templates = templates;
+    }
+
+    /**
+     * Normalized dialect key for a catalog {@code TYPE} (lower-case,
+     * {@code null}/blank = the default dialect). Shared with the bulkhead
+     * so reads and writes against the same dialect use the same key.
+     */
+    public static String dialectKey(String type) {
+        return (type == null || type.isBlank()) ? DEFAULT_DIALECT : type.toLowerCase(Locale.ROOT);
     }
 
     /**
@@ -49,8 +63,22 @@ public class JdbcTemplateRegistry {
      *             compatibility with catalog rows created
      *             before the TYPE column was mandatory.
      */
+    /**
+     * Tamaño máximo del pool Hikari del dialecto, o vacío si no está
+     * configurado o no es Hikari. El bulkhead se acota a este valor: más
+     * permisos que conexiones solo convierten el 503 inmediato en una
+     * espera por conexión.
+     */
+    public OptionalInt maxPoolSize(String type) {
+        NamedParameterJdbcTemplate t = templates.get(dialectKey(type));
+        if (t != null && t.getJdbcTemplate().getDataSource() instanceof HikariDataSource h) {
+            return OptionalInt.of(h.getMaximumPoolSize());
+        }
+        return OptionalInt.empty();
+    }
+
     public NamedParameterJdbcTemplate resolve(String type) {
-        String key = (type == null || type.isBlank()) ? "postgres" : type.toLowerCase();
+        String key = dialectKey(type);
         NamedParameterJdbcTemplate t = templates.get(key);
         if (t == null) {
             throw new ResponseStatusException(BAD_GATEWAY,

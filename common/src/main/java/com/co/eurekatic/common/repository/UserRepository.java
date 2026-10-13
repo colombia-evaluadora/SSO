@@ -2,11 +2,13 @@ package com.co.eurekatic.common.repository;
 
 import com.co.eurekatic.common.entity.User;
 import jakarta.persistence.LockModeType;
+import org.springframework.data.jpa.repository.EntityGraph;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.stereotype.Repository;
 
+import java.util.List;
 import java.util.Optional;
 
 /**
@@ -20,6 +22,13 @@ import java.util.Optional;
 public interface UserRepository extends JpaRepository<User, Long> {
 
     Optional<User> findByEmail(String email);
+
+    /**
+     * Todos los usuarios con sus roles directos en una sola consulta
+     * (evita el N+1 de recorrer {@code roles} perezosos al listar).
+     */
+    @EntityGraph(attributePaths = "roles")
+    List<User> findAllWithRolesBy();
 
     /**
      * Igual que {@link #findByEmail} pero con {@code SELECT ... FOR UPDATE}

@@ -68,7 +68,7 @@ public class ReactiveJwtAuthenticationFilter implements WebFilter {
         }
 
         try {
-            AuthPrincipal principal = jwt.parse(token);
+            AuthPrincipal principal = jwt.parseAndValidateIssuer(token);
             List<GrantedAuthority> authorities = principal.roles().stream()
                     .<GrantedAuthority>map(SimpleGrantedAuthority::new)
                     .toList();
@@ -82,22 +82,22 @@ public class ReactiveJwtAuthenticationFilter implements WebFilter {
                     exchange.getRequest().getMethod().name(),
                     exchange.getRequest().getPath().value(),
                     e.getMessage());
-            return unauthorized(exchange, e.getMessage());
+            return unauthorized(exchange);
         }
     }
 
-    private Mono<Void> unauthorized(ServerWebExchange exchange, String reason) {
+    /**
+     * Fixed message: the jjwt exception text (signature, claims, parse
+     * details) is logged at debug but never reflected to the caller.
+     */
+    private Mono<Void> unauthorized(ServerWebExchange exchange) {
         exchange.getResponse().setStatusCode(HttpStatus.UNAUTHORIZED);
         exchange.getResponse().getHeaders().set(HttpHeaders.CONTENT_TYPE, MediaType.APPLICATION_JSON_VALUE);
         byte[] body = String.format(
-                "{\"timestamp\":\"%s\",\"status\":401,\"error\":\"invalid_token\",\"message\":\"%s\"}",
-                Instant.now(), reason == null ? "Invalid token" : escape(reason))
+                "{\"timestamp\":\"%s\",\"status\":401,\"error\":\"invalid_token\",\"message\":\"Invalid token\"}",
+                Instant.now())
                 .getBytes(StandardCharsets.UTF_8);
         return exchange.getResponse().writeWith(Mono.just(exchange.getResponse().bufferFactory().wrap(body)));
-    }
-
-    private static String escape(String s) {
-        return s.replace("\\", "\\\\").replace("\"", "\\\"");
     }
 
     /** Useful for tests that want a known request body shape. */

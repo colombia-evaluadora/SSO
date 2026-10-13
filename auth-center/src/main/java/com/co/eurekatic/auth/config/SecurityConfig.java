@@ -88,11 +88,16 @@ public class SecurityConfig {
             EffectiveRolesResolver effectiveRolesResolver,
             AuthCenterAccessManager authCenterAccessManager,
             SessionTrackingService sessionTracking,
-            EstablishmentResolver establishmentResolver) throws Exception {
+            EstablishmentResolver establishmentResolver,
+            jakarta.validation.Validator validator,
+            io.micrometer.core.instrument.MeterRegistry meterRegistry,
+            @org.springframework.beans.factory.annotation.Value("${sso.login.max-concurrent:${SSO_LOGIN_MAX_CONCURRENT:0}}") int loginMaxConcurrent,
+            @org.springframework.beans.factory.annotation.Value("${sso.login.acquire-timeout-ms:${SSO_LOGIN_ACQUIRE_TIMEOUT_MS:200}}") long loginAcquireTimeoutMs) throws Exception {
 
         JsonLoginFilter loginFilter = new JsonLoginFilter(
                 authenticationManager, jwt, objectMapper, jwtProperties, refreshTokenStore,
-                effectiveRolesResolver, sessionTracking, establishmentResolver);
+                effectiveRolesResolver, sessionTracking, establishmentResolver,
+                validator, meterRegistry, loginMaxConcurrent, loginAcquireTimeoutMs);
         JwtAuthenticationFilter jwtFilter = new JwtAuthenticationFilter(jwt, jwtProperties);
 
         return http

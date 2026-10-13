@@ -4,6 +4,7 @@ import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import java.io.BufferedReader;
@@ -11,6 +12,7 @@ import java.io.IOException;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
@@ -41,8 +43,81 @@ public class DockerSocket {
     private final ProvisionerProperties props;
     private final ObjectMapper mapper = new ObjectMapper();
 
+    /** Variables del entorno del provisioner que se reenvían tal cual
+     *  al query-service spawneado, solo si están definidas y no vacías.
+     *  No se inventan defaults aquí: lo no definido cae al
+     *  application.yml del query-service. */
+    static final List<String> PASSTHROUGH_ENV = List.of(
+            "QUERY_BULKHEAD_MAX_CONCURRENT", "QUERY_BULKHEAD_MAX_WAIT", "QUERY_RATE_LIMIT_RPS",
+            "QUERY_RATE_LIMIT_WINDOW", "QUERY_TIMEOUT_SECONDS",
+            "QUERY_REPORT_TIMEOUT_SECONDS", "QUERY_LONG_PATH_PATTERN", "QUERY_MAX_ROWS",
+            "QUERY_DS_CONNECTION_TIMEOUT_MS", "QUERY_DS_STATEMENT_TIMEOUT_MS",
+            "QUERY_CACHE_CATALOG_ENABLED", "QUERY_CACHE_METADATA_TTL_SECONDS",
+            "QUERY_CATALOG_CACHE_TTL_SECONDS", "OTEL_TRACING_SAMPLE_RATE",
+            "JAVA_TOOL_OPTIONS");
+
+    private final Map<String, String> processEnv;
+
+    @Autowired
     public DockerSocket(ProvisionerProperties props) {
+        this(props, System.getenv());
+    }
+
+    // Package-private: el test inyecta el entorno.
+    DockerSocket(ProvisionerProperties props, Map<String, String> processEnv) {
         this.props = props;
+        this.processEnv = processEnv;
+    }
+
+    /** "512m", "1g", "256mb", "1048576" → bytes. Vacío/ilegible → 0 (sin límite). */
+    static long parseBytes(String raw) {
+        if (raw == null || raw.isBlank()) return 0;
+        String s = raw.trim().toLowerCase();
+        if (s.endsWith("b") && s.length() > 1 && !Character.isDigit(s.charAt(s.length() - 2))) {
+            s = s.substring(0, s.length() - 1);
+        }
+        long mult = 1;
+        char last = s.charAt(s.length() - 1);
+        if (last == 'k') mult = 1024L;
+        else if (last == 'm') mult = 1024L * 1024;
+        else if (last == 'g') mult = 1024L * 1024 * 1024;
+        if (mult != 1) s = s.substring(0, s.length() - 1);
+        try {
+            return Long.parseLong(s.trim()) * mult;
+        } catch (NumberFormatException e) {
+            log.warn("Tamaño de memoria ilegible '{}': se ignora (sin límite)", raw);
+            return 0;
+        }
+    }
+
+    /** "1.5" cores → 1_500_000_000 NanoCpus. Vacío/ilegible → 0 (sin límite). */
+    static long parseNanoCpus(String raw) {
+        if (raw == null || raw.isBlank()) return 0;
+        try {
+            return Math.round(Double.parseDouble(raw.trim()) * 1_000_000_000d);
+        } catch (NumberFormatException e) {
+            log.warn("CPU ilegible '{}': se ignora (sin límite)", raw);
+            return 0;
+        }
+    }
+
+    // Package-private para que el test afirme el HostConfig sin Docker.
+    Map<String, Object> buildHostConfig() {
+        Map<String, Object> host = new LinkedHashMap<>();
+        host.put("NetworkMode", props.getNetwork());
+        host.put("RestartPolicy", Map.of("Name", "unless-stopped"));
+        long mem = parseBytes(props.getQueryMemLimit());
+        if (mem > 0) host.put("Memory", mem);
+        long reservation = parseBytes(props.getQueryMemReservation());
+        if (reservation > 0) host.put("MemoryReservation", reservation);
+        long nano = parseNanoCpus(props.getQueryCpus());
+        if (nano > 0) host.put("NanoCpus", nano);
+        host.put("LogConfig", Map.of(
+                "Type", "json-file",
+                "Config", Map.of(
+                        "max-size", props.getLogMaxSize(),
+                        "max-file", props.getLogMaxFile())));
+        return host;
     }
 
     /**
@@ -75,9 +150,7 @@ public class DockerSocket {
                 "Image", props.getImage(),
                 "Env", buildEnv(req),
                 "ExposedPorts", Map.of("8084/tcp", Map.of()),
-                "HostConfig", Map.of(
-                        "NetworkMode", props.getNetwork(),
-                        "RestartPolicy", Map.of("Name", "unless-stopped"))));
+                "HostConfig", buildHostConfig()));
 
         JsonNode createResp = exec(List.of(
                 "curl", "-sS", "-X", "POST",
@@ -395,6 +468,14 @@ public class DockerSocket {
         env.add("MANAGEMENT_TRACING_EXPORT_ENABLED=" + telemetry);
         env.add("MANAGEMENT_OTLP_METRICS_EXPORT_ENABLED=" + telemetry);
         env.add("MANAGEMENT_LOGGING_EXPORT_OTLP_ENABLED=" + telemetry);
+        // Límites/tuning del query-service: se reenvían solo si el
+        // provisioner los tiene definidos (sin defaults inventados).
+        for (String name : PASSTHROUGH_ENV) {
+            String value = processEnv.get(name);
+            if (value != null && !value.isBlank()) {
+                env.add(name + "=" + value);
+            }
+        }
         return env;
     }
 

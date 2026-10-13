@@ -40,4 +40,4 @@ COPY --from=build --chown=app:app /workspace/ai-control-service/target/ai-contro
 USER app
 EXPOSE 8088
 
-ENTRYPOINT ["java",     "-XX:+UseContainerSupport",     "-XX:MaxRAMPercentage=75",     "-Djava.security.egd=file:/dev/./urandom",     "-jar", "/app/app.jar"]
+ENTRYPOINT ["java",     "-XX:+UseContainerSupport",     "-XX:MaxRAMPercentage=75",     "-XX:+ExitOnOutOfMemoryError",     "-Djava.security.egd=file:/dev/./urandom",     "-jar", "/app/app.jar"]

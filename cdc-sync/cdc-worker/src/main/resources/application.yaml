@@ -8,7 +8,8 @@ spring:
     password: ${CDC_AMQP_PASSWORD:demopass}
     listener:
       simple:
-        prefetch: 100
+        # Prefetch bajo: el backoff de PipelineExecutor (Thread.sleep) bloquea al consumidor y retiene los mensajes ya entregados sin ack.
+        prefetch: ${CDC_WORKER_PREFETCH:10}
         acknowledge-mode: manual
         # Number of concurrent consumer threads processing the cdc.worker queue.
         # Both default to 1 to preserve the historical behavior; bump them on busy
@@ -57,7 +58,7 @@ management:
         include: health,prometheus,info
   endpoint:
     health:
-      show-details: always
+      show-details: ${CDC_HEALTH_SHOW_DETAILS:never}
   health:
     rabbit:
       enabled: true
@@ -67,4 +68,4 @@ management:
 logging:
   level:
     root: INFO
-    com.example.cdc: DEBUG
+    com.example.cdc: ${CDC_LOG_LEVEL:INFO}

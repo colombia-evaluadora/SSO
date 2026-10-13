@@ -37,21 +37,24 @@ public final class PasswordEncoderFactory {
     public static final String BCRYPT_ID = "bcrypt";
 
     /*
-     * Parámetros de OWASP Password Storage Cheat Sheet (2024) para
-     * Argon2id: 19 MiB de memoria, 2 iteraciones, paralelismo 1.
+     * Argon2id con m=7 MiB, t=5, p=1: una de las configuraciones que el
+     * OWASP Password Storage Cheat Sheet da como de igual defensa que
+     * m=19 MiB, t=2 ("the only difference is a trade off between CPU
+     * and RAM usage"). Se eligió la de menos memoria porque cada login
+     * concurrente reserva su bloque entero: medido con BouncyCastle,
+     * 7,3 MiB y ~24 ms por hash frente a 19,8 MiB y ~34 ms.
      *
-     * saltLength/hashLength 16/32 son los del propio estándar. El
-     * coste está calibrado para ~50 ms por verificación en el
-     * hardware del servidor: suficiente para que un ataque offline
-     * sea caro, y bajo como para no convertir el endpoint de login
-     * en un vector de agotamiento de memoria — cada verificación
-     * concurrente reserva sus 19 MiB.
+     * Los hashes guardados con t=2 se re-hashean solos en el siguiente
+     * login (Argon2PasswordEncoder.upgradeEncoding compara iteraciones;
+     * ver PasswordUpgradeService). saltLength/hashLength 16/32 son los
+     * del propio estándar.
      */
     private static final int SALT_LENGTH = 16;
     private static final int HASH_LENGTH = 32;
     private static final int PARALLELISM = 1;
-    private static final int MEMORY_KB = 19 * 1024;
-    private static final int ITERATIONS = 2;
+    /** Memoria por hash en KiB; auth-center dimensiona con ella su límite de logins. */
+    public static final int ARGON2_MEMORY_KB = 7 * 1024;
+    private static final int ITERATIONS = 5;
 
     private PasswordEncoderFactory() {
     }
@@ -79,10 +82,6 @@ public final class PasswordEncoderFactory {
         // el fallback. Los hashes BCrypt siguen ruteando por su delegate
         // dedicado.
         enc.setDefaultPasswordEncoderForMatches(argon);
-        // DEBUG
-        System.out.println("PasswordEncoderFactory.create(): delegates.size=" + delegates.size()
-                + " keys=" + delegates.keySet()
-                + " defaultMatchesClass=" + argon.getClass().getName());
         return enc;
     }
 
@@ -93,6 +92,6 @@ public final class PasswordEncoderFactory {
      */
     public static Argon2PasswordEncoder argon2id() {
         return new Argon2PasswordEncoder(
-                SALT_LENGTH, HASH_LENGTH, PARALLELISM, MEMORY_KB, ITERATIONS);
+                SALT_LENGTH, HASH_LENGTH, PARALLELISM, ARGON2_MEMORY_KB, ITERATIONS);
     }
 }

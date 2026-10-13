@@ -10,6 +10,8 @@ import org.springframework.dao.DataAccessException;
 import org.springframework.data.redis.core.RedisOperations;
 import org.springframework.data.redis.core.SessionCallback;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.script.DefaultRedisScript;
+import org.springframework.data.redis.core.script.RedisScript;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -38,17 +40,40 @@ import java.util.UUID;
  * user's browser.
  *
  * <h2>Concurrency</h2>
- * <p>{@link #rotate(String)} uses {@link SessionCallback} with MULTI/EXEC
- * so the read-then-delete is atomic from the caller's perspective: two
- * concurrent requests with the same cookie see exactly one
- * {@code Rotated} and one {@code ReuseDetected} (the second caller
- * reads the post-GETDEL key, sees {@code null}, and the family is
- * already wiped by the first caller's EXEC). RFC 9700 §4.14.2
- * prescribes this behaviour.
+ * <p>{@link #rotate(String)} runs a single Lua script (atomic in Redis):
+ * GETDEL of the live hash, deletion of every sibling hash and the family
+ * set, and the replay tombstone. Only the caller whose GETDEL returned
+ * the record gets {@code Rotated}; a concurrent caller with the same
+ * cookie gets nil, finds the tombstone and receives {@code ReuseDetected}
+ * (which also wipes the family). RFC 9700 §4.14.2 prescribes this
+ * behaviour.
  */
 public class RedisRefreshTokenStore implements RefreshTokenStore {
 
     private static final Logger log = LoggerFactory.getLogger(RedisRefreshTokenStore.class);
+
+    /**
+     * Rotacion atomica. KEYS[1] = hash vivo; ARGV = prefijo, hash, TTL del
+     * tombstone. Devuelve el JSON del registro (si este llamador lo borro) o
+     * nil (no existia: lo decide el tombstone). Si el JSON no se puede
+     * decodificar, devuelve el JSON sin tocar la familia (el llamador lo trata
+     * como NotFound).
+     */
+    private static final RedisScript<String> ROTATE_SCRIPT = new DefaultRedisScript<>("""
+            local json = redis.call('GETDEL', KEYS[1])
+            if not json then return nil end
+            local ok, rec = pcall(cjson.decode, json)
+            if not ok or type(rec) ~= 'table' or not rec.familyId then return json end
+            local famKey = ARGV[1] .. ':family:' .. rec.familyId
+            local members = redis.call('SMEMBERS', famKey)
+            for _, m in ipairs(members) do
+                redis.call('DEL', ARGV[1] .. ':hash:' .. m)
+            end
+            redis.call('DEL', famKey)
+            redis.call('SET', ARGV[1] .. ':replay:' .. ARGV[2],
+                       (rec.email or '?') .. '|' .. rec.familyId, 'EX', ARGV[3])
+            return json
+            """, String.class);
 
     private final StringRedisTemplate redis;
     private final ObjectMapper mapper;
@@ -125,15 +150,16 @@ public class RedisRefreshTokenStore implements RefreshTokenStore {
         String hash = sha256Hex(rawToken);
         String hashKey = hashKey(hash);
 
-        // Step 1: read the existing record BEFORE the MULTI. If it's
-        // missing we go straight to NotFound without touching Redis
-        // further. If we read it inside MULTI/EXEC we'd race with the
-        // GETDEL itself.
+        // Step 1: un unico script Lua (atomico en Redis) hace GETDEL del
+        // hash, borra los hermanos de la familia y escribe el tombstone.
+        // Solo el llamador que de verdad borro el hash recibe el JSON; un
+        // segundo llamador concurrente recibe nil y cae al tombstone.
         String json;
         try {
-            json = redis.opsForValue().get(hashKey);
+            json = redis.execute(ROTATE_SCRIPT, List.of(hashKey),
+                    props.keyPrefix(), hash, String.valueOf(TOMBSTONE_TTL_SECONDS));
         } catch (DataAccessException e) {
-            log.error("Redis unavailable on rotate (read) hash_prefix={}", hashPrefix(hash), e);
+            log.error("Redis unavailable on rotate hash_prefix={}", hashPrefix(hash), e);
             return new RefreshOutcome.Unavailable();
         }
 
@@ -180,48 +206,9 @@ public class RedisRefreshTokenStore implements RefreshTokenStore {
             existing = mapper.readValue(json, TokenRecord.class);
         } catch (JsonProcessingException e) {
             log.error("Corrupt refresh-token record in Redis hash_prefix={}", hashPrefix(hash), e);
-            // Treat as not-found rather than wiping the family on a
-            // parse failure we can't reason about.
+            // El hash ya fue borrado por el script; sin familia legible
+            // no se puede razonar mas: not-found, no se revoca a ciegas.
             return new RefreshOutcome.NotFound();
-        }
-
-        // Step 2: atomically GETDEL the hash + wipe the family +
-        // write the tombstone for reuse-detection on replay.
-        try {
-            List<Object> results = redis.execute(new SessionCallback<List<Object>>() {
-                @SuppressWarnings({"rawtypes", "unchecked"})
-                @Override
-                public List<Object> execute(RedisOperations operations) throws DataAccessException {
-                    operations.multi();
-                    operations.opsForValue().getAndDelete(hashKey);
-                    Set<String> members = operations.opsForSet().members(familyKey(existing.familyId()));
-                    if (members != null) {
-                        for (String member : members) {
-                            operations.opsForValue().getAndDelete(hashKey(member));
-                        }
-                    }
-                    operations.opsForSet().remove(familyKey(existing.familyId()), hash);
-                    operations.delete(familyKey(existing.familyId()));
-                    // Tombstone: "email|familyId" with the
-                    // configured TTL. A subsequent rotate() call
-                    // against this same hash will see the tombstone,
-                    // NOT find the live record, and return
-                    // ReuseDetected.
-                    operations.opsForValue().set(replayKey(hash),
-                            existing.email() + "|" + existing.familyId(),
-                            Duration.ofSeconds(TOMBSTONE_TTL_SECONDS));
-                    return operations.exec();
-                }
-            });
-            if (results == null) {
-                // MULTI/EXEC was discarded (e.g. WATCH conflict). Treat
-                // as a reuse event — the token was live enough that we
-                // got past step 1, and the EXEC was aborted.
-                return new RefreshOutcome.ReuseDetected(existing.email(), existing.familyId());
-            }
-        } catch (DataAccessException e) {
-            log.error("Redis unavailable on rotate (write) family={}", shortFamily(existing.familyId()), e);
-            return new RefreshOutcome.Unavailable();
         }
 
         // Step 3: mint the replacement in the SAME family.

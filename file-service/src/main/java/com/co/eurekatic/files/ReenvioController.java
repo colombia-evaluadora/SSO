@@ -15,11 +15,14 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.http.client.JdkClientHttpRequestFactory;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.multipart.MultipartHttpServletRequest;
 import org.springframework.web.server.ResponseStatusException;
 
+import java.net.http.HttpClient;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -60,13 +63,20 @@ public class ReenvioController {
     public ReenvioController(TransformadorMultipart transformador,
                              ArchivoRepository archivos,
                              @Value("${files.catalog-base-url}") String catalogoBaseUrl,
+                             @Value("${files.http.connect-timeout:${FILES_HTTP_CONNECT_TIMEOUT:2s}}") Duration connectTimeout,
+                             @Value("${files.http.read-timeout:${FILES_HTTP_READ_TIMEOUT:10s}}") Duration readTimeout,
                              JwtTokenService jwt,
                              JwtProperties jwtProps,
                              FileDestinationAccessService acceso) {
         this.transformador = transformador;
         this.archivos = archivos;
         this.catalogoBaseUrl = catalogoBaseUrl.replaceAll("/+$", "");
-        this.http = RestClient.builder().build();
+        // Sin timeouts el cliente por defecto espera indefinidamente al
+        // catalogo y deja el hilo de la subida colgado.
+        var fabrica = new JdkClientHttpRequestFactory(
+                HttpClient.newBuilder().connectTimeout(connectTimeout).build());
+        fabrica.setReadTimeout(readTimeout);
+        this.http = RestClient.builder().requestFactory(fabrica).build();
         this.jwt = jwt;
         this.jwtProps = jwtProps;
         this.acceso = acceso;

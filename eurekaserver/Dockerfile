@@ -8,7 +8,7 @@
 # transitively. We restrict the reactor to the eurekaserver module
 # (and its required deps) to keep the build graph small.
 #
-# Stage 2 — runtime: a slim JRE 21 base. The fat-jar from the build
+# Stage 2 — runtime: a slim JRE 25 base. The fat-jar from the build
 # stage is the only artifact we keep.
 
 FROM maven:3.9-eclipse-temurin-25 AS build
@@ -45,9 +45,8 @@ RUN mvn -B -ntp -Dmaven.wagon.http.retryHandler.count=5 -Daether.connector.http.
 FROM eclipse-temurin:25-jre
 WORKDIR /app
 
-# Non-root user. UID 1000 matches the typical "developer" user in
-# most Linux distros, and gives the container something to bind
-# mounted volumes as without root.
+# Non-root user with a fixed system UID/GID (10001), so file ownership
+# on any mounted volume is predictable and the process never runs as root.
 RUN groupadd --system --gid 10001 app && \
     useradd  --system --uid 10001 --gid app --home /app app
 
@@ -61,5 +60,6 @@ EXPOSE 8761
 ENTRYPOINT ["java", \
     "-XX:+UseContainerSupport", \
     "-XX:MaxRAMPercentage=75", \
+    "-XX:+ExitOnOutOfMemoryError", \
     "-Djava.security.egd=file:/dev/./urandom", \
     "-jar", "/app/app.jar"]

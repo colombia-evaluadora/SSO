@@ -5,9 +5,12 @@ import com.co.eurekatic.notificationservice.provider.email.ResendEmailProvider;
 import com.co.eurekatic.notificationservice.provider.push.FcmPushProvider;
 import com.co.eurekatic.notificationservice.provider.sms.TwilioSmsProvider;
 import com.co.eurekatic.notificationservice.provider.sms.VonageSmsProvider;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Lazy;
+
+import java.time.Duration;
 
 /**
  * Wires every non-SMTP {@link ChannelProvider} as a Spring
@@ -43,12 +46,16 @@ public class ProviderBeansConfig {
     }
 
     @Bean(name = "resend")
-    public ChannelProvider resendEmailProvider(@Lazy ProviderRegistry registry) {
-        return new ResendEmailProvider(registry);
+    public ChannelProvider resendEmailProvider(@Lazy ProviderRegistry registry,
+            @Value("${NOTIFICATION_HTTP_CONNECT_TIMEOUT:3s}") Duration connectTimeout,
+            @Value("${NOTIFICATION_HTTP_READ_TIMEOUT:10s}") Duration readTimeout) {
+        return new ResendEmailProvider(registry, connectTimeout, readTimeout);
     }
 
     @Bean(name = "emailjs")
-    public ChannelProvider emailJsProvider(@Lazy ProviderRegistry registry) {
-        return new EmailJsProvider(registry);
+    public ChannelProvider emailJsProvider(@Lazy ProviderRegistry registry,
+            @Value("${NOTIFICATION_HTTP_CONNECT_TIMEOUT:3s}") Duration connectTimeout,
+            @Value("${NOTIFICATION_HTTP_READ_TIMEOUT:10s}") Duration readTimeout) {
+        return new EmailJsProvider(registry, connectTimeout, readTimeout);
     }
 }

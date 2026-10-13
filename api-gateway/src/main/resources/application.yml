@@ -64,6 +64,18 @@ spring:
           # here.)
           globalcors:
             add-to-simple-url-handler-mapping: false
+          # Timeouts del cliente HTTP hacia los servicios. Sin ellos un
+          # backend colgado retiene la conexion indefinidamente. El global
+          # es holgado (180s) porque las rutas de query-service salen del
+          # catalogo sin metadata y sus exportaciones/importaciones en lote
+          # tardan hasta 170s; el tope fino lo pone query-service por
+          # sentencia. Reportes y subidas lo amplian por ruta con
+          # `metadata.response-timeout` (milisegundos).
+          httpclient:
+            connect-timeout: ${GATEWAY_CONNECT_TIMEOUT_MS:2000}
+            response-timeout: ${GATEWAY_RESPONSE_TIMEOUT:180s}
+            pool:
+              max-idle-time: ${GATEWAY_POOL_MAX_IDLE_TIME:30s}
           # Static routes. The dynamic discovery locator (see
           # DynamicRouteSupportConfig) auto-creates a route per service
           # registered with Eureka, lowercased service id as the path.
@@ -286,6 +298,8 @@ spring:
             # regla del propio endpoint.
             - id: api-file-service
               uri: lb://file-service
+              metadata:
+                response-timeout: ${GATEWAY_FILE_RESPONSE_TIMEOUT_MS:300000}
               predicates:
                 - Path=/api/files/**
               filters:
@@ -307,6 +321,9 @@ spring:
             # desde public.microservice.
             - id: api-reporting-service
               uri: lb://reporting-service
+              metadata:
+                # consulta (hasta 170s) + render del PDF/Excel de 50k filas
+                response-timeout: ${GATEWAY_REPORTING_RESPONSE_TIMEOUT_MS:300000}
               predicates:
                 - Path=/api/reportes/**
               filters:
@@ -320,6 +337,8 @@ spring:
             # pantalla.
             - id: api-ai-control-service
               uri: lb://ai-control-service
+              metadata:
+                response-timeout: ${GATEWAY_AI_RESPONSE_TIMEOUT_MS:125000}
               predicates:
                 - Path=/api/ai/**
               filters:
@@ -363,6 +382,14 @@ spring:
           # 404 for unmatched paths (deny-by-default). The reactive
           # filter will translate this to a 401 for paths that need auth.
           default-filters:
+            # Cabeceras de identidad que solo el gateway puede escribir
+            # (UserForwardingGlobalFilter, orden posterior). Se descartan las
+            # que traiga el cliente para que no se puedan falsificar.
+            - RemoveRequestHeader=X-Authenticated-User
+            - RemoveRequestHeader=X-Authenticated-User-Id
+            - RemoveRequestHeader=X-Authenticated-Roles
+            - RemoveRequestHeader=X-Authenticated-Token-Type
+            - RemoveRequestHeader=X-Authenticated-Family-Id
             - DedupeResponseHeader=Access-Control-Allow-Origin Access-Control-Allow-Credentials, RETAIN_UNIQUE
           discovery:
             locator:
@@ -485,7 +512,7 @@ springdoc:
     ttl: 60s
   aggregator:
     catalog-url: http://sso-admin:8083/internal/openapi/catalog
-    catalog-internal-token: ${SSO_INTERNAL_TOKEN:dev-internal-token}
+    catalog-internal-token: ${SSO_INTERNAL_TOKEN:}
     services:
       - service-id: auth-center
         source: springdoc
@@ -538,7 +565,9 @@ management:
     endpoints:
       web:
         exposure:
-          include: health,info,gateway,prometheus
+          # Solo health/info en el puerto publico. `gateway` (rutas y filtros)
+          # y `prometheus` quedan fuera: la telemetria se empuja por OTLP.
+          include: ${GATEWAY_ACTUATOR_EXPOSURE:health,info}
     endpoint:
       health:
         probes:

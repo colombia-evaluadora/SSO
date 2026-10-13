@@ -2,6 +2,7 @@ package com.co.eurekatic.gateway.routing;
 
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Tags;
+import io.netty.channel.ChannelOption;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -12,12 +13,15 @@ import org.springframework.cloud.gateway.route.RouteDefinition;
 import org.springframework.cloud.gateway.route.RouteDefinitionWriter;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.core.ParameterizedTypeReference;
+import org.springframework.http.client.reactive.ReactorClientHttpConnector;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.function.client.WebClient;
 import reactor.core.publisher.Mono;
+import reactor.netty.http.client.HttpClient;
 
 import java.net.URI;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -85,6 +89,10 @@ public class CatalogRoutesRefresher {
     private final RouteDefinitionWriter routeWriter;
     private final MeterRegistry meters;
     private final String internalToken;
+    private static final Duration CONNECT_TIMEOUT = Duration.ofSeconds(5);
+    private static final Duration RESPONSE_TIMEOUT = Duration.ofSeconds(10);
+    /** Upper bound for each blocking call of a poll (HTTP call + route writes). */
+    private static final Duration BLOCK_TIMEOUT = Duration.ofSeconds(15);
     private final AtomicInteger lastPublishedCount = new AtomicInteger(0);
     /**
      * Ids we wrote on the previous successful poll, so a row
@@ -97,7 +105,7 @@ public class CatalogRoutesRefresher {
             ApplicationEventPublisher publisher,
             RouteDefinitionWriter routeWriter,
             MeterRegistry meters,
-            @Value("${gateway.catalog-url:http://sso-admin:8080}") String catalogBaseUrl,
+            @Value("${gateway.catalog-url:http://sso-admin:8083}") String catalogBaseUrl,
             @Value("${gateway.internal-token:}") String internalToken) {
         // V27 fix — Spring Boot 4's spring-cloud-starter-gateway-
         // server-webflux does NOT auto-register a WebClient.Builder
@@ -112,8 +120,14 @@ public class CatalogRoutesRefresher {
         // client that's already on the classpath. The exchange
         // functions (codecs, timeouts) match what the autoconfig
         // would have produced; we just skip the autoconfig.
+        // Timeouts: without them a hung sso-admin would block the
+        // scheduler thread forever on the .block() calls below.
+        HttpClient httpClient = HttpClient.create()
+                .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, (int) CONNECT_TIMEOUT.toMillis())
+                .responseTimeout(RESPONSE_TIMEOUT);
         this.client = WebClient.builder()
                 .baseUrl(catalogBaseUrl)
+                .clientConnector(new ReactorClientHttpConnector(httpClient))
                 .build();
         this.publisher = publisher;
         this.routeWriter = routeWriter;
@@ -161,7 +175,7 @@ public class CatalogRoutesRefresher {
             List<GatewayRouteDto> routes = request
                     .retrieve()
                     .bodyToMono(new ParameterizedTypeReference<List<GatewayRouteDto>>() {})
-                    .block();
+                    .block(BLOCK_TIMEOUT);
             if (routes == null || routes.isEmpty()) {
                 log.debug("Catalog returned no routes; keeping previous {} routes",
                         lastPublishedCount.get());
@@ -187,7 +201,7 @@ public class CatalogRoutesRefresher {
             List<RouteDefinition> defs = toRouteDefinitions(routes);
             Set<String> nextIds = new LinkedHashSet<>();
             for (RouteDefinition def : defs) {
-                routeWriter.save(Mono.just(def)).block();
+                routeWriter.save(Mono.just(def)).block(BLOCK_TIMEOUT);
                 nextIds.add(def.getId());
             }
             // Drop routes we published on an earlier poll whose
@@ -198,7 +212,7 @@ public class CatalogRoutesRefresher {
                 if (!nextIds.contains(stale)) {
                     routeWriter.delete(Mono.just(stale))
                             .onErrorResume(e -> Mono.empty())
-                            .block();
+                            .block(BLOCK_TIMEOUT);
                     log.info("Catalog refresh: removed stale route {}", stale);
                 }
             }
@@ -206,7 +220,7 @@ public class CatalogRoutesRefresher {
             publishedIds.addAll(nextIds);
             publisher.publishEvent(new RefreshRoutesEvent(this));
             lastPublishedCount.set(defs.size());
-            log.info("Catalog refresh: published {} catalog routes", defs.size());
+            log.debug("Catalog refresh: published {} catalog routes", defs.size());
             meters.counter("gateway.catalog.refresh",
                     Tags.of("outcome", "success")).increment();
             meters.counter("gateway.catalog.routes_published").increment(defs.size());

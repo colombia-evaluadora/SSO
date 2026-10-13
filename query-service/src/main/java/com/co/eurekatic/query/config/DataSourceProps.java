@@ -111,10 +111,14 @@ public class DataSourceProps {
      * works (records don't nest cleanly with relaxed binding).
      */
     public static class HikariProps {
-        private long connectionTimeout = 30_000;
+        private long connectionTimeout = 2_000;
         private long idleTimeout = 600_000;
-        private long maxLifetime = 1_800_000;
-        private int minimumIdle = 2;
+        private long maxLifetime = 1_500_000;
+        private int minimumIdle = 4;
+        private long keepaliveTime = 120_000;
+        private long leakDetectionThreshold = 20_000;
+        /** Server-side statement_timeout (postgres only), ms. */
+        private long statementTimeoutMs = 185_000;
 
         public long getConnectionTimeout() { return connectionTimeout; }
         public void setConnectionTimeout(long connectionTimeout) { this.connectionTimeout = connectionTimeout; }
@@ -124,5 +128,11 @@ public class DataSourceProps {
         public void setMaxLifetime(long maxLifetime) { this.maxLifetime = maxLifetime; }
         public int getMinimumIdle() { return minimumIdle; }
         public void setMinimumIdle(int minimumIdle) { this.minimumIdle = minimumIdle; }
+        public long getKeepaliveTime() { return keepaliveTime; }
+        public void setKeepaliveTime(long keepaliveTime) { this.keepaliveTime = keepaliveTime; }
+        public long getLeakDetectionThreshold() { return leakDetectionThreshold; }
+        public void setLeakDetectionThreshold(long v) { this.leakDetectionThreshold = v; }
+        public long getStatementTimeoutMs() { return statementTimeoutMs; }
+        public void setStatementTimeoutMs(long v) { this.statementTimeoutMs = v; }
     }
 }

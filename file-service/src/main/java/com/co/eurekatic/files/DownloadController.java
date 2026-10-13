@@ -398,8 +398,9 @@ public class DownloadController {
         // tope configurado. Un tamaño desconocido (tamano == null) se
         // trata igual que "demasiado grande": mejor streamear sin
         // cachear que arriesgarse a cargar en heap un archivo del que
-        // no sabemos el tamaño de antemano.
-        if (tamano != null && tamano <= cacheProps.getMaxCacheableBytes()) {
+        // no sabemos el tamaño de antemano. Con la caché apagada nunca se
+        // materializa: no hay nada que guardar, así que siempre streaming.
+        if (cacheProps.isEnabled() && tamano != null && tamano <= cacheProps.getMaxCacheableBytes()) {
             byte[] bytes;
             try (InputStream in = objeto) {
                 bytes = in.readAllBytes();

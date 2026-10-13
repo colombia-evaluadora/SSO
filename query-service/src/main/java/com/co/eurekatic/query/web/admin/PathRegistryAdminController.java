@@ -1,5 +1,6 @@
 package com.co.eurekatic.query.web.admin;
 
+import com.co.eurekatic.query.catalog.CatalogDefinitionCache;
 import com.co.eurekatic.query.routing.QueryPathRegistry;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
@@ -42,12 +43,15 @@ import java.util.Map;
 public class PathRegistryAdminController {
 
     private final QueryPathRegistry registry;
+    private final CatalogDefinitionCache definitions;
     private final byte[] expectedToken;
 
     public PathRegistryAdminController(
             QueryPathRegistry registry,
+            CatalogDefinitionCache definitions,
             @Value("${query.catalog.internal-token:}") String internalToken) {
         this.registry = registry;
+        this.definitions = definitions;
         this.expectedToken = (internalToken == null ? "" : internalToken)
                 .getBytes(StandardCharsets.UTF_8);
     }
@@ -61,6 +65,8 @@ public class PathRegistryAdminController {
     public Map<String, Object> invalidate(
             @RequestHeader(value = "X-Internal-Token", required = false) String token) {
         requireInternalToken(token);
+        // El catálogo cambió: las definiciones cacheadas por usuario también.
+        definitions.invalidateAll();
         return Map.of("size", registry.invalidate());
     }
 

@@ -246,7 +246,7 @@ public class GatewaySecurityConfig {
                         // es pública?", no "¿quién sos?".
                         .pathMatchers("/api/files/public/**").permitAll()
                         .pathMatchers("/actuator/health", "/actuator/health/**",
-                                "/actuator/info", "/actuator/prometheus").permitAll()
+                                "/actuator/info").permitAll()
                         // OpenAPI aggregator — Swagger UI + merged doc + webjars.
                         // Public because the rendered UI helps devs poke the
                         // gateway without a token; the actual API endpoints
