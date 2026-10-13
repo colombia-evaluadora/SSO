@@ -1315,7 +1315,7 @@ services:
   # ===========================================================================
   alloy:
     profiles: ["observability"]
-    image: grafana/alloy:latest
+    image: grafana/alloy:v1.8.0
     container_name: sso-alloy
     restart: unless-stopped
     logging: *default-logging
@@ -1375,7 +1375,7 @@ services:
 
   mimir:
     profiles: ["observability"]
-    image: grafana/mimir:latest
+    image: grafana/mimir:2.16.0
     container_name: sso-mimir
     restart: unless-stopped
     logging: *default-logging
@@ -1388,7 +1388,7 @@ services:
 
   loki:
     profiles: ["observability"]
-    image: grafana/loki:latest
+    image: grafana/loki:3.5.0
     container_name: sso-loki
     restart: unless-stopped
     logging: *default-logging
@@ -1401,21 +1401,21 @@ services:
 
   grafana:
     profiles: ["observability"]
-    image: grafana/grafana:latest
+    image: grafana/grafana:11.6.0
     container_name: sso-grafana
     restart: unless-stopped
     logging: *default-logging
     mem_limit: 300m
     mem_reservation: 192m
     ports:
-      # Grafana corre con auth anónima en rol Admin (dev): en el
+      # Grafana: auth anónima apagada por defecto (GRAFANA_ANONYMOUS_ENABLED); en el
       # servidor SIEMPRE detrás de BIND_IP=127.0.0.1 + túnel SSH.
       - "${BIND_IP:-0.0.0.0}:${GRAFANA_PORT:-3000}:3000"
     environment:
-      # Dev convenience: no login wall, land straight on dashboards.
+      # Dev: GRAFANA_ANONYMOUS_ENABLED=true quita el login (rol GRAFANA_ANONYMOUS_ROLE).
       # PRODUCTION: remove anonymous auth and set a real admin password.
-      GF_AUTH_ANONYMOUS_ENABLED: "true"
-      GF_AUTH_ANONYMOUS_ORG_ROLE: "Admin"
+      GF_AUTH_ANONYMOUS_ENABLED: "${GRAFANA_ANONYMOUS_ENABLED:-false}"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: "${GRAFANA_ANONYMOUS_ROLE:-Viewer}"
       GF_AUTH_BASIC_ENABLED: "false"
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
       # Enable the built-in Explore + trace/log correlation UX.
