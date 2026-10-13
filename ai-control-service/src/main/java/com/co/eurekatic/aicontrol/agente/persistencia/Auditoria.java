@@ -6,9 +6,9 @@ package com.co.eurekatic.aicontrol.agente.persistencia;
  * columna solo dice que fue el servicio, asi que es la misma en todas las
  * tablas.
  */
-final class Auditoria {
+public final class Auditoria {
 
-    static final String ACTOR = "ai-control-service";
+    public static final String ACTOR = "ai-control-service";
 
     private Auditoria() {
     }

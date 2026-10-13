@@ -1,7 +1,7 @@
 package com.co.eurekatic.aicontrol;
 
-import com.co.eurekatic.aicontrol.config.AgenteProperties;
-import com.co.eurekatic.aicontrol.config.AiProperties;
+import com.co.eurekatic.aicontrol.config.agente.AgenteProperties;
+import com.co.eurekatic.aicontrol.config.ia.AiProperties;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;

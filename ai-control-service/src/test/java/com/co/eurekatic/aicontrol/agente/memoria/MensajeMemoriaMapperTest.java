@@ -6,8 +6,8 @@ import com.co.eurekatic.aicontrol.agente.memoria.MensajeMemoria.RespuestaHerrami
 import com.co.eurekatic.aicontrol.agente.memoria.MensajeMemoria.ResultadoHerramienta;
 import com.co.eurekatic.aicontrol.agente.memoria.MensajeMemoria.Sistema;
 import com.co.eurekatic.aicontrol.agente.memoria.MensajeMemoria.Usuario;
-import com.co.eurekatic.aicontrol.agente.persistencia.MensajeStore;
-import com.co.eurekatic.aicontrol.agente.persistencia.RolMensaje;
+import com.co.eurekatic.aicontrol.agente.persistencia.mensaje.MensajeStore;
+import com.co.eurekatic.aicontrol.agente.persistencia.mensaje.RolMensaje;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;

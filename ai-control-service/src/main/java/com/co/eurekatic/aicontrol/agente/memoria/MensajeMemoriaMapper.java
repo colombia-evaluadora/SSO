@@ -6,7 +6,7 @@ import com.co.eurekatic.aicontrol.agente.memoria.MensajeMemoria.ResultadoHerrami
 import com.co.eurekatic.aicontrol.agente.memoria.MensajeMemoria.RespuestaHerramienta;
 import com.co.eurekatic.aicontrol.agente.memoria.MensajeMemoria.Sistema;
 import com.co.eurekatic.aicontrol.agente.memoria.MensajeMemoria.Usuario;
-import com.co.eurekatic.aicontrol.agente.persistencia.MensajeStore;
+import com.co.eurekatic.aicontrol.agente.persistencia.mensaje.MensajeStore;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.SystemMessage;
