@@ -30,6 +30,9 @@ from base.sqlscan import (dollar_bodies, match_paren, normalize_type, parse_para
                      split_statements, split_top_level)
 
 FN_NAME = r'((?:"?\w+"?\.)?"?\w+"?)'
+# `to_regprocedure('fn(bigint,text)') IS NULL`: la firma lleva sus propios
+# parentesis dentro del literal (V332), asi que no basta con [^)]*.
+RE_SI_FALTA = re.compile(r"to_regprocedure\(\s*(?:'[^']*'|[^)]*)\s*\)\s*\)?\s*IS\s+NULL", re.I)
 CTX_EJECUTA = ("migracion", "sql-body")  # contextos en los que la funcion tiene que existir
 
 
@@ -164,7 +167,7 @@ def _scan_stmt(repo: Repo, v: str, s) -> None:
     for m in re.finditer(r"CREATE\s+(?:OR\s+REPLACE\s+)?(?:FUNCTION|PROCEDURE)\s+" + FN_NAME + r"\s*\(", t, re.I):
         sch, nm = split_name(m.group(1))
         sig, lang, _ = _create_header(t, m)
-        guarded = h.startswith("DO ") and re.search(r"to_regprocedure\([^)]*\)\s*\)?\s*IS\s+NULL", t, re.I)
+        guarded = h.startswith("DO ") and RE_SI_FALTA.search(t)
         repo.events.append(Event(v, s.line, "guarded-create" if guarded else "create", sch, nm, sig, lang))
         if not h.startswith("DO "):
             break  # un CREATE por sentencia fuera de DO
@@ -347,8 +350,63 @@ def stmt_span(s: Stmt) -> range:
 
 
 def _guarded_wrapper(text: str) -> bool:
-    return bool(re.search(r"to_regprocedure\([^)]*\)\s*\)?\s*IS\s+NULL", text, re.I)
-                and re.search(r"EXECUTE\s+\$", text, re.I))
+    return bool(RE_SI_FALTA.search(text) and re.search(r"EXECUTE\s+\$", text, re.I))
+
+
+_DOLLAR = re.compile(r"(\$\w*\$)(.*?)\1", re.S)
+_CREA_RUTINA = re.compile(r"\s*CREATE\s+(?:OR\s+REPLACE\s+)?(?:FUNCTION|PROCEDURE)\b", re.I)
+
+
+def _sin_rutinas_anidadas(do_text: str) -> str:
+    """El cuerpo de un DO sin las cadenas `$x$CREATE FUNCTION ...$x$` que
+    ejecuta: lo que hay dentro es el cuerpo de una funcion, no DML que corra al
+    migrar (V332 crea `_guardar` por EXECUTE y su INSERT no es un backfill)."""
+    m = re.match(r"\s*DO\s+(\$\w*\$)(.*)\1", do_text, re.S | re.I)
+    if not m:
+        return do_text
+    body = m.group(2)
+    return _DOLLAR.sub(lambda x: "" if _CREA_RUTINA.match(x.group(2)) else x.group(0), body)
+
+
+def _tabla_insert(text: str) -> str:
+    m = re.search(r"\bINSERT\s+INTO\s+([\w.\"]+)", text, re.I)
+    return m.group(1).strip('"').lower().rsplit(".", 1)[-1] if m else ""
+
+
+def _insert_solo_si_falta(text: str) -> bool:
+    """INSERT que no toca una fila existente: `ON CONFLICT ... DO NOTHING` o
+    `WHERE NOT EXISTS`. Re-aplicarlo no puede revertir un UPDATE posterior."""
+    t = " ".join(text.split())
+    return bool(re.search(r"\bINSERT\s+INTO\b", t, re.I)
+                and not re.search(r"DO\s+UPDATE", t, re.I)
+                and re.search(r"ON\s+CONFLICT\b[^;]*?\bDO\s+NOTHING|\bNOT\s+EXISTS\b", t, re.I))
+
+
+def _borrada_antes(repo: "Repo", version: str, s: "Stmt") -> bool:
+    """Un DELETE anterior del mismo fichero sobre la misma tabla y la misma
+    clave (un literal del INSERT): el par DELETE + INSERT es idempotente."""
+    tabla = _tabla_insert(s.text)
+    lits = {l for l in re.findall(r"'([^']{4,})'", s.text)}
+    for d in repo.stmts.get(version, []):
+        if d.line >= s.line:
+            return False
+        if re.match(rf"DELETE\s+FROM\s+(?:\w+\.)?\"?{re.escape(tabla)}\b", d.head, re.I) and \
+                any(f"'{l}'" in d.text for l in lits):
+            return True
+    return False
+
+
+def _guarda_de_resultado(repo: "Repo", version: str, s: "Stmt") -> bool:
+    """DO que solo comprueba que existe lo que el propio fichero acaba de
+    insertar (V404): es la guarda de resultado que piden las reglas, y
+    re-aplicada vale lo mismo que la primera vez."""
+    t = re.sub(r"RAISE\s+EXCEPTION\s+'(?:[^']|'')*'", "", s.text, flags=re.I)
+    if re.search(r"\bcount\s*\(|<>|!=", t, re.I):
+        return False
+    lits = {l for l in re.findall(r"'([^']{4,})'", t)}
+    previos = "\n".join(x.text for x in repo.stmts.get(version, [])
+                        if x.line < s.line and re.match(r"(?:WITH\b.*)?INSERT\s+INTO", x.head, re.I | re.S))
+    return bool(lits) and all(f"'{l}'" in previos for l in lits)
 
 
 def version_findings(repo: Repo, model: dict, version: str) -> list[Finding]:
@@ -409,6 +467,7 @@ def version_findings(repo: Repo, model: dict, version: str) -> list[Finding]:
         if h.startswith("DO "):
             if _guarded_wrapper(t):
                 continue
+            t = _sin_rutinas_anidadas(t)
             if re.search(r"\b(UPDATE|INSERT\s+INTO|DELETE\s+FROM)\b", t, re.I):
                 out.append(Finding("BACKFILL", s.line, "el DO escribe datos; re-aplicarlo lo recalcula con las "
                                    "reglas de HOY (revisar antes de editar el fichero)"))
@@ -423,10 +482,12 @@ def version_findings(repo: Repo, model: dict, version: str) -> list[Finding]:
                 if pisa:
                     out.append(Finding("REVIERTE", s.line, f"COMMENT por OID sobre {', '.join(nombres)}: "
                                        f"re-aplicarlo pisa los COMMENT de {', '.join(pisa)}"))
-            if re.search(r"RAISE\s+EXCEPTION", t, re.I) and re.search(r"count\s*\(|NOT\s+EXISTS|<>|!=", t, re.I):
+            if (re.search(r"RAISE\s+EXCEPTION", t, re.I) and re.search(r"count\s*\(|NOT\s+EXISTS|<>|!=", t, re.I)
+                    and not _guarda_de_resultado(repo, version, s)):
                 out.append(Finding("VERIFICACION", s.line, "DO con RAISE EXCEPTION sobre conteos/existencia; si ya "
                                    "no se cumple, re-aplicarlo tumba el deploy"))
-        elif re.match(r"INSERT\s+INTO", h) and not re.search(r"ON\s+CONFLICT|NOT\s+EXISTS", t, re.I):
+        elif (re.match(r"INSERT\s+INTO", h) and not re.search(r"ON\s+CONFLICT|NOT\s+EXISTS", t, re.I)
+              and not _borrada_antes(repo, version, s)):
             out.append(Finding("NO_IDEMPOTENTE", s.line, "INSERT sin ON CONFLICT ni NOT EXISTS"))
         elif re.match(r"CREATE\s+TABLE\s+(?!IF\s+NOT\s+EXISTS)", h):
             out.append(Finding("NO_IDEMPOTENTE", s.line, "CREATE TABLE sin IF NOT EXISTS"))
@@ -461,14 +522,23 @@ def version_findings(repo: Repo, model: dict, version: str) -> list[Finding]:
             quien = sorted({v for v, sts in repo.stmts.items() if lo < vkey(v) < hi
                             and any(pat.search(x.text) for x in sts)}, key=vkey)
             if quien or w["obj_type"] == "extension":
+                repite = f"V{w['killed_by']}" if w.get("killed_by") else "este mismo fichero"
                 out.append(Finding("SEMILLA", w["line"], f"{w['obj_key']} (el modelo la da por muerta, "
-                                   f"V{w['killed_by']} la repite): la usan antes "
+                                   f"{repite} la repite): la usan antes "
                                    f"{', '.join('V' + q for q in quien[:8]) or 'este mismo fichero'} -> no quitarla"))
         if (w.get("status") in ("live", "patch-live") and w["obj_type"] in REVIERTE_TIPOS
                 and w.get("effect") != "drop"):
-            later = sorted({x["version"] for x in chains.get(w["obj_key"], [])
-                            if vkey(x["version"]) > vkey(version)}, key=vkey)
-            if later:
+            posteriores = [x for x in chains.get(w["obj_key"], []) if vkey(x["version"]) > vkey(version)]
+            later = sorted({x["version"] for x in posteriores}, key=vkey)
+            s = stmt_at(repo, version, w["line"])
+            if later and s and _insert_solo_si_falta(s.text):
+                # No pisa la fila si ya existe: solo la resucita si una posterior
+                # la borro y nada la volvio a crear.
+                ult = posteriores[-1]
+                if ult.get("effect") in ("delete", "drop"):
+                    out.append(Finding("REVIERTE", w["line"], f"{w['obj_key']}: V{ult['version']} la borra "
+                                       "despues; re-aplicar este INSERT la vuelve a crear"))
+            elif later:
                 out.append(Finding("REVIERTE", w["line"], f"{w['obj_key']}: V{', V'.join(later[:5])} la modifica "
                                    "despues; re-aplicar esta escritura puede revertirlo (revisar la guarda o "
                                    "re-aplicar tambien las posteriores)"))
