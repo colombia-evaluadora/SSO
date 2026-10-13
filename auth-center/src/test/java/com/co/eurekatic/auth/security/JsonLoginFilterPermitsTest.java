@@ -16,8 +16,8 @@ class JsonLoginFilterPermitsTest {
 
     @Test
     void conMuchosNucleosYPocoHeapMandaLaMemoria() {
-        // heap de auth-center en compose: 896m x 75% = 672 MiB → 336/19 = 17
-        assertThat(JsonLoginFilter.defaultLoginPermits(16, 672 * MIB)).isEqualTo(17);
+        // 128 MiB de heap → la mitad entre el bloque Argon2 (7 MiB) = 9 < 2x16
+        assertThat(JsonLoginFilter.defaultLoginPermits(16, 128 * MIB)).isEqualTo(9);
     }
 
     @Test

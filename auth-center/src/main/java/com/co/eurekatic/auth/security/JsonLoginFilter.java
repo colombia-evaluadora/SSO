@@ -73,14 +73,15 @@ public class JsonLoginFilter extends AbstractAuthenticationProcessingFilter {
     /** Tope del cuerpo de /login: un LoginRequest legitimo pesa unos cientos de bytes. */
     static final int MAX_BODY_BYTES = 8 * 1024;
 
-    /** Memoria transitoria de un hash Argon2id (m=19 MiB, ver PasswordEncoderFactory). */
-    static final long ARGON2_BYTES_PER_HASH = 19L * 1024 * 1024;
+    /** Memoria transitoria de un hash Argon2id (el m de PasswordEncoderFactory). */
+    static final long ARGON2_BYTES_PER_HASH =
+            com.co.eurekatic.common.security.PasswordEncoderFactory.ARGON2_MEMORY_KB * 1024L;
 
     /**
      * Permisos por defecto: 2 por núcleo, pero sin que los hashes en vuelo
-     * pasen de la mitad del heap. Con muchos núcleos y un contenedor pequeño
-     * el límite por CPU solo no protege: 32 hashes de 19 MiB no caben en un
-     * heap de ~670 MiB junto al resto de la aplicación.
+     * pasen de la mitad del heap. Con muchos núcleos y un heap pequeño el
+     * límite por CPU solo no protege: cada hash en vuelo retiene su bloque
+     * de memoria Argon2 entero.
      */
     static int defaultLoginPermits(int cores, long maxHeapBytes) {
         long byMemory = Math.max(1, (maxHeapBytes / 2) / ARGON2_BYTES_PER_HASH);

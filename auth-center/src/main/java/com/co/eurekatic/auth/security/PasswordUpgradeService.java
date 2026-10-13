@@ -10,8 +10,10 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
- * Reescribe a Argon2id los hashes BCrypt heredados, en el momento en
- * que su dueño hace login correctamente.
+ * Reescribe con el encoder vigente los hashes que ya no lo cumplen —
+ * BCrypt heredado, o Argon2id con parámetros anteriores (p. ej. el
+ * m=19 MiB, t=2 previo) — en el momento en que su dueño hace login
+ * correctamente.
  *
  * <p><b>Cómo se dispara.</b> No lo llamamos nosotros:
  * {@code DaoAuthenticationProvider} invoca
@@ -19,9 +21,11 @@ import org.springframework.transaction.annotation.Transactional;
  * contraseña y sólo si
  * {@code PasswordEncoder.upgradeEncoding(hashGuardado)} devuelve
  * {@code true}. Con el {@code DelegatingPasswordEncoder} de
- * {@code PasswordEncoderFactory} eso ocurre exactamente cuando el
- * prefijo almacenado no es el algoritmo por defecto — es decir,
- * cuando la fila sigue en {@code {bcrypt}}.
+ * {@code PasswordEncoderFactory} eso ocurre cuando el prefijo
+ * almacenado no es el algoritmo por defecto (la fila sigue en
+ * {@code {bcrypt}}) o cuando es {@code {argon2}} con menos memoria o
+ * menos iteraciones que las configuradas
+ * ({@code Argon2PasswordEncoder.upgradeEncoding}).
  *
  * <p>Que sea el framework quien lo llame es lo que hace segura la
  * operación: en ese punto la contraseña en claro ya se verificó, y
@@ -59,7 +63,7 @@ public class PasswordUpgradeService implements UserDetailsPasswordService {
                     // tumbar un login ya validado: se devuelve el
                     // UserDetails original y el hash se migrará en el
                     // siguiente intento, si es que la cuenta existe.
-                    log.warn("No se pudo migrar el hash a Argon2id: el usuario ya no existe");
+                    log.warn("No se pudo re-hashear la contrasena: el usuario ya no existe");
                     return user;
                 });
     }
@@ -67,7 +71,7 @@ public class PasswordUpgradeService implements UserDetailsPasswordService {
     private UserDetails persist(User entity, String newPassword) {
         entity.setPassword(newPassword);
         User saved = userRepository.save(entity);
-        log.info("Hash de contraseña migrado a Argon2id para el usuario id={}", saved.getId());
+        log.info("Hash de contraseña re-hasheado con el encoder vigente para el usuario id={}", saved.getId());
         return saved;
     }
 }
