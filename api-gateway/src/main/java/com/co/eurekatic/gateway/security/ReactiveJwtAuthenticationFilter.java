@@ -68,7 +68,7 @@ public class ReactiveJwtAuthenticationFilter implements WebFilter {
         }
 
         try {
-            AuthPrincipal principal = jwt.parse(token);
+            AuthPrincipal principal = jwt.parseAndValidateIssuer(token);
             List<GrantedAuthority> authorities = principal.roles().stream()
                     .<GrantedAuthority>map(SimpleGrantedAuthority::new)
                     .toList();
