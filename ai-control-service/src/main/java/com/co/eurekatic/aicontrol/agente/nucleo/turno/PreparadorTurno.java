@@ -56,7 +56,7 @@ public class PreparadorTurno {
         Intencion intencion = router.clasificar(evaluacion.textoNormalizado(), evaluacion.riesgo());
         SelectorHerramientas.Seleccion seleccion = selector.para(usuario, intencion);
         return new Preparacion.Listo(evaluacion.textoNormalizado(), intencion,
-                seleccion.herramientas(), seleccion.callbacks());
+                seleccion.herramientas(), seleccion.callbacks(), seleccion.menus());
     }
 
     private void registrarBloqueo(UUID conversacionId, UsuarioAgente usuario, Evaluacion evaluacion) {

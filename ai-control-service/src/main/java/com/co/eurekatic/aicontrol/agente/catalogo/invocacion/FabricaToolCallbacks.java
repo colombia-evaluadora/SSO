@@ -59,11 +59,9 @@ public class FabricaToolCallbacks {
                 .orElse(Map.of());
         String esquema = JsonSchemaBuilder.construir(herramienta.parametros(), restricciones);
         return FunctionToolCallback.builder(herramienta.codigo(),
-                        (Map<String, Object> argumentos, ToolContext contexto) -> formateador.paraModelo(
-                                herramienta,
-                                invocador.invocar(herramienta,
-                                        argumentos == null ? Map.of() : argumentos,
-                                        ContextoInvocacion.de(contexto))))
+                        (Map<String, Object> argumentos, ToolContext contexto) ->
+                                ejecutar(herramienta, argumentos == null ? Map.<String, Object>of() : argumentos,
+                                        contexto))
                 .description(herramienta.descripcion())
                 .inputSchema(esquema)
                 // El texto va al modelo tal cual: el conversor por defecto lo envolveria en comillas JSON.
@@ -71,5 +69,12 @@ public class FabricaToolCallbacks {
                 .inputType(new ParameterizedTypeReference<Map<String, Object>>() {})
                 .toolMetadata(ToolMetadata.builder().returnDirect(herramienta.tipo().devuelveDirecto()).build())
                 .build();
+    }
+
+    /** Invoca, avisa al observador del turno si lo hay y formatea para el modelo. */
+    private String ejecutar(HerramientaDef herramienta, Map<String, Object> argumentos, ToolContext contexto) {
+        ResultadoHerramienta resultado = invocador.invocar(herramienta, argumentos, ContextoInvocacion.de(contexto));
+        ObservadorResultados.de(contexto).ifPresent(o -> o.alObtener(herramienta, resultado));
+        return formateador.paraModelo(herramienta, resultado);
     }
 }

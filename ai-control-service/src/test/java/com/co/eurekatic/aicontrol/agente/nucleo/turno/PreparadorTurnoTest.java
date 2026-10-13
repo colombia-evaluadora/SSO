@@ -17,6 +17,7 @@ import com.co.eurekatic.aicontrol.agente.seguridad.limite.LimitadorPorUsuario;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
@@ -73,7 +74,7 @@ class PreparadorTurnoTest {
         when(limitador.permitir(anyLong())).thenReturn(true);
         when(evaluador.evaluar(anyString())).thenReturn(new Evaluacion(true, "lista sedes", Optional.empty()));
         when(router.clasificar("lista sedes", Riesgo.BAJO)).thenReturn(intencion);
-        when(selector.para(USUARIO, intencion)).thenReturn(new SelectorHerramientas.Seleccion(List.of(), List.of()));
+        when(selector.para(USUARIO, intencion)).thenReturn(new SelectorHerramientas.Seleccion(List.of(), List.of(), Map.of()));
 
         Preparacion resultado = preparador.preparar(CONVERSACION, USUARIO, "lista sedes");
 

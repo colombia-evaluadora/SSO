@@ -4,6 +4,7 @@ import com.co.eurekatic.aicontrol.agente.catalogo.carga.CatalogoHerramientasLoad
 import com.co.eurekatic.aicontrol.agente.catalogo.dominio.HerramientaDef;
 import com.co.eurekatic.aicontrol.agente.catalogo.dominio.TipoHerramienta;
 import com.co.eurekatic.aicontrol.agente.catalogo.invocacion.FabricaToolCallbacks;
+import com.co.eurekatic.aicontrol.agente.catalogo.turno.AccesoMenu;
 import com.co.eurekatic.aicontrol.agente.catalogo.turno.HerramientasDelTurno;
 import com.co.eurekatic.aicontrol.agente.catalogo.turno.MenusUsuario;
 import com.co.eurekatic.aicontrol.agente.comun.UsuarioAgente;
@@ -14,6 +15,7 @@ import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 /**
@@ -41,24 +43,28 @@ public class SelectorHerramientas {
     /** Herramientas de datos del turno y los callbacks de todas las que el modelo ve. */
     public Seleccion para(UsuarioAgente usuario, Intencion intencion) {
         Set<TipoHerramienta> tipos = intencion.tipo().herramientasPermitidas();
+        Map<String, AccesoMenu> menusUsuario = menus.de(usuario.userId());
         List<HerramientaDef> herramientas = filtro.calcular(catalogo.catalogo(), usuario.roles(),
-                menus.de(usuario.userId()), intencion.riesgo(), tipos);
+                menusUsuario, intencion.riesgo(), tipos);
         List<ToolCallback> callbacks = new ArrayList<>(fabrica.crearTodas(herramientas));
         if (tipos.contains(TipoHerramienta.CONTROL)) {
             controles.forEach(proveedor -> callbacks.addAll(proveedor.callbacks()));
         }
-        return new Seleccion(herramientas, List.copyOf(callbacks));
+        return new Seleccion(herramientas, List.copyOf(callbacks), menusUsuario);
     }
 
     /**
      * @param herramientas herramientas de datos que el modelo puede usar en el turno
      * @param callbacks    todos los callbacks que se ofrecen al modelo
+     * @param menus        menus que el usuario ve, para la UI asistida
      */
-    public record Seleccion(List<HerramientaDef> herramientas, List<ToolCallback> callbacks) {
+    public record Seleccion(List<HerramientaDef> herramientas, List<ToolCallback> callbacks,
+                            Map<String, AccesoMenu> menus) {
 
         public Seleccion {
             herramientas = List.copyOf(herramientas);
             callbacks = List.copyOf(callbacks);
+            menus = Map.copyOf(menus);
         }
     }
 }

@@ -13,12 +13,12 @@ import java.util.function.BiFunction;
  * Construye los {@link ToolCallback} de control con un esquema propio. El resultado va al modelo como
  * texto plano, no como JSON entrecomillado.
  */
-final class CallbacksControl {
+public final class CallbacksControl {
 
     private CallbacksControl() {
     }
 
-    static ToolCallback crear(String nombre, String descripcion, String esquema, boolean devuelveDirecto,
+    public static ToolCallback crear(String nombre, String descripcion, String esquema, boolean devuelveDirecto,
                               BiFunction<Map<String, Object>, ToolContext, String> funcion) {
         return FunctionToolCallback.builder(nombre, funcion)
                 .description(descripcion)

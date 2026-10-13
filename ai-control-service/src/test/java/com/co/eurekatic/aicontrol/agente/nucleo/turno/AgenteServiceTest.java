@@ -16,6 +16,8 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.time.LocalDateTime;
+import com.co.eurekatic.aicontrol.agente.persistencia.analitica.ConsultaAnaliticaStore;
+
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -62,7 +64,8 @@ class AgenteServiceTest {
         servicio = new AgenteService(conversaciones, preparador, registrador,
                 new PromptTurno(new org.springframework.core.io.ClassPathResource("prompts/agente-sistema.st"),
                         PropiedadesAgenteFixture.propiedades().limites().textoMaxCaracteres()),
-                bucle, acciones, salida);
+                bucle, acciones, salida,
+                new PresentadorAnalitica(mock(ConsultaAnaliticaStore.class)));
     }
 
     @Test
@@ -121,6 +124,6 @@ class AgenteServiceTest {
     }
 
     private static Preparacion.Listo listo(TipoIntencion tipo, List<HerramientaDef> herramientas) {
-        return new Preparacion.Listo("texto", new Intencion(tipo, "", 0.9, Riesgo.BAJO), herramientas, List.of());
+        return new Preparacion.Listo("texto", new Intencion(tipo, "", 0.9, Riesgo.BAJO), herramientas, List.of(), Map.of());
     }
 }

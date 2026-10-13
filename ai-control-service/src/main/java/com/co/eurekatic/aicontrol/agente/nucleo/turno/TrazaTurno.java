@@ -17,15 +17,22 @@ public final class TrazaTurno {
     private static final Logger log = LoggerFactory.getLogger(TrazaTurno.class);
 
     private final UUID conversacionId;
+    private final ObservadorTurno observador;
     private final List<EstadoTurno> pasos = new ArrayList<>();
 
-    private TrazaTurno(UUID conversacionId) {
+    private TrazaTurno(UUID conversacionId, ObservadorTurno observador) {
         this.conversacionId = Objects.requireNonNull(conversacionId, "conversacionId");
+        this.observador = Objects.requireNonNull(observador, "observador");
         this.pasos.add(EstadoTurno.RECIBIDO);
     }
 
     public static TrazaTurno iniciar(UUID conversacionId) {
-        return new TrazaTurno(conversacionId);
+        return new TrazaTurno(conversacionId, ObservadorTurno.NINGUNO);
+    }
+
+    /** Traza que ademas avisa de cada paso, p. ej. al streaming. */
+    public static TrazaTurno iniciar(UUID conversacionId, ObservadorTurno observador) {
+        return new TrazaTurno(conversacionId, observador);
     }
 
     /**
@@ -37,6 +44,15 @@ public final class TrazaTurno {
             throw new IllegalStateException("Transicion de turno no permitida: " + actual + " -> " + nuevo);
         }
         pasos.add(nuevo);
+        avisar(nuevo);
+    }
+
+    private void avisar(EstadoTurno nuevo) {
+        try {
+            observador.alPasar(nuevo);
+        } catch (RuntimeException e) {
+            log.warn("El observador del turno fallo: {}", e.getClass().getSimpleName());
+        }
     }
 
     public EstadoTurno estado() {

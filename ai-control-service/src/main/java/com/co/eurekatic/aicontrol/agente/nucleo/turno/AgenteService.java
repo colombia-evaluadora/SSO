@@ -7,6 +7,7 @@ import com.co.eurekatic.aicontrol.agente.nucleo.acciones.AccionesService;
 import com.co.eurekatic.aicontrol.agente.nucleo.intencion.Intencion;
 import com.co.eurekatic.aicontrol.agente.nucleo.intencion.TipoIntencion;
 import com.co.eurekatic.aicontrol.agente.nucleo.respuesta.RespuestaAgente;
+import com.co.eurekatic.aicontrol.agente.ui.contexto.LectorContextoUi;
 import org.springframework.stereotype.Service;
 
 import java.util.UUID;
@@ -30,9 +31,11 @@ public class AgenteService {
     private final BucleAgente bucle;
     private final AccionesService acciones;
     private final SalidaTurno salida;
+    private final PresentadorAnalitica analitica;
 
     public AgenteService(ConversacionesService conversaciones, PreparadorTurno preparador, RegistradorTurno registrador,
-                         PromptTurno prompts, BucleAgente bucle, AccionesService acciones, SalidaTurno salida) {
+                         PromptTurno prompts, BucleAgente bucle, AccionesService acciones, SalidaTurno salida,
+                         PresentadorAnalitica analitica) {
         this.conversaciones = conversaciones;
         this.preparador = preparador;
         this.registrador = registrador;
@@ -40,6 +43,7 @@ public class AgenteService {
         this.bucle = bucle;
         this.acciones = acciones;
         this.salida = salida;
+        this.analitica = analitica;
     }
 
     /**
@@ -47,8 +51,14 @@ public class AgenteService {
      * @throws com.co.eurekatic.aicontrol.agente.comun.ErrorAgente si la conversacion no es propia o no admite mensajes
      */
     public RespuestaAgente procesar(UUID conversacionId, UsuarioAgente usuario, String texto, String contextoUiJson) {
+        return procesar(conversacionId, usuario, texto, contextoUiJson, ObservadorTurno.NINGUNO);
+    }
+
+    /** Igual, avisando de cada paso al observador (streaming). */
+    public RespuestaAgente procesar(UUID conversacionId, UsuarioAgente usuario, String texto, String contextoUiJson,
+                                    ObservadorTurno observador) {
         long inicio = System.nanoTime();
-        TrazaTurno traza = TrazaTurno.iniciar(conversacionId);
+        TrazaTurno traza = TrazaTurno.iniciar(conversacionId, observador);
         conversaciones.activa(conversacionId, usuario);
         traza.pasar(EstadoTurno.VALIDADO);
         Preparacion preparacion = preparador.preparar(conversacionId, usuario, texto);
@@ -72,6 +82,8 @@ public class AgenteService {
         }
         traza.pasar(EstadoTurno.PERMISO_OK);
         traza.pasar(EstadoTurno.RECOLECTANDO);
+        TurnoContexto contexto = new TurnoContexto(listo.herramientas(), LectorContextoUi.leer(contextoUiJson),
+                listo.menus());
         ResultadoBucle resultado = bucle.ejecutar(new BucleAgente.Entrada(
                 usuario,
                 conversacionId,
@@ -79,10 +91,10 @@ public class AgenteService {
                 listo.textoNormalizado(),
                 prompts.mensajes(arranque.historial(), listo.textoNormalizado(), contextoUiJson),
                 listo.callbacks(),
-                new TurnoContexto(listo.herramientas())));
+                contexto));
         Consumo consumo = new Consumo(resultado.uso(), resultado.modelo(), milisegundosDesde(inicio));
         RespuestaAgente respuesta = switch (resultado) {
-            case ResultadoBucle.Final fin -> fin.respuesta();
+            case ResultadoBucle.Final fin -> analitica.presentar(fin.respuesta(), contexto, arranque.mensajeId());
             case ResultadoBucle.Propuesta propuesta -> confirmacion(conversacionId, usuario, propuesta);
         };
         return cerrar(conversacionId, usuario, respuesta, consumo, traza);
