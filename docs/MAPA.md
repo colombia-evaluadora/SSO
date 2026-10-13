@@ -1,7 +1,7 @@
 # Mapa del dominio
 
 **Generado** por `python scripts/migration-analysis mapa` — no editar a mano.
-Estado: 490 migraciones (V1–V555.1), 1321 funciones vivas, 49 endpoints vivos. Ultima generacion: 2026-10-13.
+Estado: 495 migraciones (V1–V556.3), 1322 funciones vivas, 49 endpoints vivos. Ultima generacion: 2026-10-13.
 
 Para una **funcion**, la migracion dueña es la que hay que editar: es su ultima escritura viva, no la que la creo.
 
@@ -31,7 +31,7 @@ Las secciones son las categorias funcionales de `scripts/migration-analysis/anal
 - [Menús](#menus) — 27 funcion(es), 1 endpoint(s)
 - [Permisos](#permisos) — 23 funcion(es), 0 endpoint(s)
 - [Estructura académica](#academico) — 171 funcion(es), 0 endpoint(s)
-- [Plataforma SSO](#plataforma) — 53 funcion(es), 0 endpoint(s)
+- [Plataforma SSO](#plataforma) — 54 funcion(es), 0 endpoint(s)
 
 <a id="pigse"></a>
 
@@ -718,8 +718,8 @@ Las secciones son las categorias funcionales de `scripts/migration-analysis/anal
 | `academico_test.fn_actividad_assert_resultados` | 3 | V496.7 | V461, V463 |
 | `academico_test.fn_actividad_auditar` | 3 | V496.3 | V461, V463, V496.7, V531.3 |
 | `academico_test.fn_actividad_buscar_por_pk` | 3 | V452 | V246, V272, V450 |
-| `academico_test.fn_actividad_calendario` | 11 | V528 | V528 |
-| `academico_test.fn_actividad_calendario_docente` | 11 | V528 | V529, V553 |
+| `academico_test.fn_actividad_calendario` | 14 | V528 | V528 |
+| `academico_test.fn_actividad_calendario_docente` | 14 | V528 | V529, V553 |
 | `academico_test.fn_actividad_campos_disponibles` | 2 | V479 | V246, V452 |
 | `academico_test.fn_actividad_configuracion_contexto` | 7 | V496 | V496.4 |
 | `academico_test.fn_actividad_configuracion_contexto_interno` | 7 | V496 | — |
@@ -767,7 +767,7 @@ Las secciones son las categorias funcionales de `scripts/migration-analysis/anal
 | `academico_test.fn_actividad_huerfanas_listar` | 8 | V244 | V246 |
 | `academico_test.fn_actividad_importar` | 9 | V340 | V129, V275 |
 | `academico_test.fn_actividad_listar` | 19 | V526 | V246 |
-| `academico_test.fn_actividad_listar_docente` | 16 | V526 | V250, V404, V527, V553 |
+| `academico_test.fn_actividad_listar_docente` | 17 | V526 | V250, V404, V527, V553 |
 | `academico_test.fn_actividad_listar_interno` | 25 | V526 | V526 |
 | `academico_test.fn_actividad_lv_assert` | 3 | V496.1 | — |
 | `academico_test.fn_actividad_material_archivo_registrar` | 3 | V496.3 | V496.4 |
@@ -799,8 +799,8 @@ Las secciones son las categorias funcionales de `scripts/migration-analysis/anal
 | `academico_test.fn_actividad_resultado_estado_set_interno` | 3 | V496.6 | V496.7 |
 | `academico_test.fn_actividad_resultado_registrado` | 1 | V496.5 | V496.6 |
 | `academico_test.fn_actividad_resultados_completos` | 1 | V496.5 | V496.6 |
-| `academico_test.fn_actividad_resumen_estados` | 11 | V530 | V530 |
-| `academico_test.fn_actividad_resumen_estados_docente` | 11 | V530 | V250, V252, V531, V553 |
+| `academico_test.fn_actividad_resumen_estados` | 13 | V530 | V530 |
+| `academico_test.fn_actividad_resumen_estados_docente` | 13 | V530 | V250, V252, V531, V553 |
 | `academico_test.fn_actividad_rotulo` | 3 | V496.1 | V223, V272, V277, V479, V482, V492.1 |
 | `academico_test.fn_actividad_sede` | 2 | V479 | V496.3, V531.3 |
 | `academico_test.fn_actividad_unidad_configuracion` | 2 | V214.2 | V246, V452 |
@@ -1552,6 +1552,7 @@ Las secciones son las categorias funcionales de `scripts/migration-analysis/anal
 | `academico_test.fn_usuario_otros_usos` | 3 | V162 | V160, V161 |
 | `academico_test.fn_usuario_peso_categoria` | 1 | V298 | — |
 | `academico_test.fn_usuario_rango_en_ee` | 4 | V298 | V297 |
+| `ai.fn_herramienta_catalogo_interno` | 0 | V556.1 | — |
 | `public.fn_get_academico_usuario_id` | 1 | V299 | V64, V67, V69, V75, V76, V77… |
 | `public.fn_microservice_validar_file_storage` | 0 | V147 | — |
 | `public.fn_sync_app_users` | 1 | V151 | V302 |
