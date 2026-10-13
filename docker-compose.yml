@@ -1648,7 +1648,10 @@ services:
     ports:
       - "${BIND_IP:-127.0.0.1}:${CDC_WORKER_PORT:-58082}:8080"
     healthcheck:
-      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/localhost/8080; printf 'GET /actuator/health HTTP/1.0\r\n\r\n' >&3; grep -q UP <&3"]
+      # liveness, no /actuator/health: el agregado incluye el DataSource de
+      # Oracle, que existe aunque CDC_DEST_ORACLE=false y sin listener deja
+      # todo en DOWN (y el deploy con --wait esperaria a un worker sano).
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/localhost/8080; printf 'GET /actuator/health/liveness HTTP/1.0\r\n\r\n' >&3; grep -q UP <&3"]
       interval: 15s
       timeout: 5s
       retries: 10
