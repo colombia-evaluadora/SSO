@@ -5,12 +5,15 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.MediaType;
+import org.springframework.http.client.JdkClientHttpRequestFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientResponseException;
 
 import com.co.eurekatic.auth.web.dto.EstadoCuentaFuncionarioResponse;
 
+import java.net.http.HttpClient;
+import java.time.Duration;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -41,8 +44,18 @@ public class SsoAdminInternalClient {
     @Autowired
     public SsoAdminInternalClient(
             @Value("${sso.admin.base-url:http://sso-admin:8083}") String baseUrl,
-            @Value("${sso.internal.token:}") String token) {
-        this(RestClient.builder().baseUrl(baseUrl).build(), token);
+            @Value("${sso.internal.token:}") String token,
+            @Value("${sso.admin.client.connect-timeout:${SSO_ADMIN_CLIENT_CONNECT_TIMEOUT:2s}}") Duration connectTimeout,
+            @Value("${sso.admin.client.read-timeout:${SSO_ADMIN_CLIENT_READ_TIMEOUT:5s}}") Duration readTimeout) {
+        this(RestClient.builder().baseUrl(baseUrl)
+                .requestFactory(requestFactory(connectTimeout, readTimeout)).build(), token);
+    }
+
+    private static JdkClientHttpRequestFactory requestFactory(Duration connectTimeout, Duration readTimeout) {
+        HttpClient jdk = HttpClient.newBuilder().connectTimeout(connectTimeout).build();
+        JdkClientHttpRequestFactory factory = new JdkClientHttpRequestFactory(jdk);
+        factory.setReadTimeout(readTimeout);
+        return factory;
     }
 
     SsoAdminInternalClient(RestClient http, String token) {
