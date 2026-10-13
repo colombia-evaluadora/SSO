@@ -57,7 +57,7 @@ management:
         include: health,prometheus,info
   endpoint:
     health:
-      show-details: always
+      show-details: ${CDC_HEALTH_SHOW_DETAILS:never}
   health:
     rabbit:
       enabled: true
@@ -67,4 +67,4 @@ management:
 logging:
   level:
     root: INFO
-    com.example.cdc: DEBUG
+    com.example.cdc: ${CDC_LOG_LEVEL:INFO}
