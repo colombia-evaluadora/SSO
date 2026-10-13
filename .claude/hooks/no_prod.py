@@ -23,7 +23,6 @@ Exit 2 => la llamada no se ejecuta y el motivo vuelve al agente.
 """
 from __future__ import annotations
 
-import json
 import re
 import sys
 from pathlib import Path
@@ -79,22 +78,15 @@ def destino_remoto(estructura: str) -> str | None:
     return None
 
 
-def main() -> int:
-    try:
-        data = json.load(sys.stdin)
-    except ValueError:
-        return 0
-    cmd = (data.get("tool_input") or {}).get("command") or ""
-    if not cmd:
-        return 0
-
+def revisar(cmd: str) -> str | None:
+    """El motivo del bloqueo, o None si el comando no escribe en un servidor."""
     estructura = sin_cuerpos(cmd)
     if not (PSQL.search(estructura) or FLYWAY_ESCRIBE.search(estructura)):
-        return 0
+        return None
 
     remoto = destino_remoto(estructura)
     if not remoto:
-        return 0  # la base local: adelante
+        return None  # la base local: adelante
 
     sql = "\n".join(heredocs(cmd) + herestrings(cmd) + list(segments(estructura)))
     if FLYWAY_ESCRIBE.search(estructura):
@@ -104,9 +96,9 @@ def main() -> int:
     elif MUTA.search(sql):
         motivo = "manda SQL que escribe (DDL/DML)"
     else:
-        return 0  # leer de un servidor es justo para lo que sirve
+        return None  # leer de un servidor es justo para lo que sirve
 
-    sys.stderr.write(
+    return (
         f"BLOQUEADO: el comando {motivo} contra un destino que no es la base "
         f"local ({remoto}).\n\n"
         'CLAUDE.md: "Validar siempre contra el Postgres local (sso-postgres),\n'
@@ -114,7 +106,15 @@ def main() -> int:
         "probar, y lo que se aplica ahi no tiene deshacer.\n\n"
         "Valida contra `sso-postgres`. Leer del servidor -- SELECT, meta-comandos,\n"
         "pg_dump, docker ps/logs -- sigue permitido: eso no se bloquea.\n")
-    return 2
+
+
+def main() -> int:
+    from comando import comando_de_stdin
+    motivo = revisar(comando_de_stdin())
+    if motivo:
+        sys.stderr.write(motivo)
+        return 2
+    return 0
 
 
 if __name__ == "__main__":

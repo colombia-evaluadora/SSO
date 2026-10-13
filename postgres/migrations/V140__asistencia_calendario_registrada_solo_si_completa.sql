@@ -334,11 +334,8 @@ BEGIN
                    p_fk_tgrupo, p_fk_tfuncionario) ap
          WHERE p_fk_tasignatura IS NULL OR ap.fk_tasignatura = p_fk_tasignatura
     ),
-    registradas AS (
-        SELECT r.fecha, r.fk_tgrupo, r.grupo, r.fk_tgrado, r.grado, r.grado_valor,
-               r.fk_tlv_jornada, r.jornada, r.jornada_valor, r.fk_tasignatura, r.asignatura,
-               r.fk_tactividad, r.actividad, r.bloque, r.hora_inicio, r.hora_fin, r.horas,
-               r.n_total, r.n_a_tiempo, r.n_tarde, r.n_ausentes
+    reg AS MATERIALIZED (
+        SELECT r.*
           FROM academico_test.fn_asistencia_sesiones_registradas_interno(
                    p_fk_tsede, v_ini, v_fin - 1, p_fk_tgrupo, p_fk_tasignatura) r
          WHERE (p_fk_tfuncionario IS NULL OR EXISTS (
@@ -347,7 +344,25 @@ BEGIN
                       AND da.FK_TGRUPO       = r.fk_tgrupo
                       AND da.FK_TASIGNATURA  = r.fk_tasignatura
                       AND da.ACTIVE = TRUE))
-           AND academico_test.fn_asistencia_puede_ver_asignatura(p_pk_usuario, r.fk_tgrupo, r.fk_tasignatura)
+    ),
+    -- Alcance una vez por (grupo, asignatura), no por sesion. MATERIALIZED:
+    -- si no, el planner empuja el filtro bajo el DISTINCT.
+    pares AS MATERIALIZED (
+        SELECT DISTINCT r.fk_tgrupo, r.fk_tasignatura FROM reg r
+    ),
+    visibles AS MATERIALIZED (
+        SELECT x.fk_tgrupo, COALESCE(x.fk_tasignatura, 0) AS fk_tasignatura
+          FROM pares x
+         WHERE academico_test.fn_asistencia_puede_ver_asignatura(p_pk_usuario, x.fk_tgrupo, x.fk_tasignatura)
+    ),
+    registradas AS (
+        SELECT r.fecha, r.fk_tgrupo, r.grupo, r.fk_tgrado, r.grado, r.grado_valor,
+               r.fk_tlv_jornada, r.jornada, r.jornada_valor, r.fk_tasignatura, r.asignatura,
+               r.fk_tactividad, r.actividad, r.bloque, r.hora_inicio, r.hora_fin, r.horas,
+               r.n_total, r.n_a_tiempo, r.n_tarde, r.n_ausentes
+          FROM reg r
+         WHERE (r.fk_tgrupo, COALESCE(r.fk_tasignatura, 0)) IN (
+                   SELECT v.fk_tgrupo, v.fk_tasignatura FROM visibles v)
     ),
     padron AS (
         SELECT m.FK_TGRUPO AS fk_tgrupo, COUNT(*)::BIGINT AS matriculas
@@ -445,14 +460,8 @@ DECLARE
     v_sem_fin  DATE := (date_trunc('week',  p_fecha_ref::timestamp) + INTERVAL '1 week')::date;
 BEGIN
     RETURN QUERY
-    WITH sesion AS (
-        SELECT r.fecha,
-               MIN(r.horas)              AS horas_sesion,
-               SUM(r.n_total)            AS n_total,
-               SUM(r.n_presentes)        AS n_presentes,
-               SUM(r.n_a_tiempo)         AS n_a_tiempo,
-               SUM(r.n_tarde)            AS n_tarde,
-               SUM(r.n_ausentes)         AS n_ausentes
+    WITH reg AS MATERIALIZED (
+        SELECT r.*
           FROM academico_test.fn_asistencia_sesiones_registradas_interno(
                    p_fk_tsede, v_anio_ini, v_anio_fin - 1, p_fk_tgrupo, p_fk_tasignatura) r
          WHERE (p_fk_tfuncionario IS NULL OR EXISTS (
@@ -461,7 +470,28 @@ BEGIN
                       AND da.FK_TGRUPO       = r.fk_tgrupo
                       AND da.FK_TASIGNATURA  = r.fk_tasignatura
                       AND da.ACTIVE = TRUE))
-           AND academico_test.fn_asistencia_puede_ver_asignatura(p_pk_usuario, r.fk_tgrupo, r.fk_tasignatura)
+    ),
+    -- Alcance una vez por (grupo, asignatura), no por sesion. MATERIALIZED:
+    -- si no, el planner empuja el filtro bajo el DISTINCT.
+    pares AS MATERIALIZED (
+        SELECT DISTINCT r.fk_tgrupo, r.fk_tasignatura FROM reg r
+    ),
+    visibles AS MATERIALIZED (
+        SELECT x.fk_tgrupo, COALESCE(x.fk_tasignatura, 0) AS fk_tasignatura
+          FROM pares x
+         WHERE academico_test.fn_asistencia_puede_ver_asignatura(p_pk_usuario, x.fk_tgrupo, x.fk_tasignatura)
+    ),
+    sesion AS (
+        SELECT r.fecha,
+               MIN(r.horas)              AS horas_sesion,
+               SUM(r.n_total)            AS n_total,
+               SUM(r.n_presentes)        AS n_presentes,
+               SUM(r.n_a_tiempo)         AS n_a_tiempo,
+               SUM(r.n_tarde)            AS n_tarde,
+               SUM(r.n_ausentes)         AS n_ausentes
+          FROM reg r
+         WHERE (r.fk_tgrupo, COALESCE(r.fk_tasignatura, 0)) IN (
+                   SELECT v.fk_tgrupo, v.fk_tasignatura FROM visibles v)
          GROUP BY r.fecha, r.fk_tgrupo, r.fk_tasignatura, r.bloque
     ),
     programadas AS (

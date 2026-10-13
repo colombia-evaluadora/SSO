@@ -167,7 +167,8 @@ COMMENT ON FUNCTION academico_test.fn_docente_grupos_listar_interno(BIGINT, BIGI
 CREATE OR REPLACE FUNCTION academico_test.fn_docente_grupos_listar(
     p_pk_usuario_solicitante BIGINT,
     p_fk_periodo             BIGINT DEFAULT NULL,
-    p_fk_tfuncionario        BIGINT DEFAULT NULL
+    p_fk_tfuncionario        BIGINT DEFAULT NULL,
+    p_fk_sede                BIGINT DEFAULT NULL
 )
 RETURNS TABLE (
     grupo_id                BIGINT,
@@ -204,7 +205,7 @@ BEGIN
     );
 
     SELECT * INTO v_alc
-      FROM academico_test.fn_planeador_alcance_docente(p_pk_usuario_solicitante, p_fk_tfuncionario);
+      FROM academico_test.fn_planeador_alcance_docente(p_pk_usuario_solicitante, p_fk_tfuncionario, p_fk_sede);
 
     -- Alcance total sin docente elegido: el propio, como antes; sin
     -- funcionario, nada (no se listan los grupos de todo el país).
@@ -223,7 +224,7 @@ BEGIN
 END;
 $$;
 
-COMMENT ON FUNCTION academico_test.fn_docente_grupos_listar(BIGINT, BIGINT, BIGINT) IS
+COMMENT ON FUNCTION academico_test.fn_docente_grupos_listar(BIGINT, BIGINT, BIGINT, BIGINT) IS
 'GET /planeador/docentes/grupos: grupos (con grado y nivel de ensenanza) donde un docente dicta al menos una asignatura en el periodo (por defecto el vigente, fn_planeador_docente_periodos). Gate VER sobre PLANEADOR; docente y alcance con fn_planeador_alcance_docente. Docente puro: el suyo (ignora p_fk_tfuncionario). Otros con p_fk_tfuncionario (?funcionario=): ese docente, 42501 si no dicta nada en su alcance. Otros sin él: los grupos de todos los docentes de su alcance (nivel 3: pares sede+jornada), en el periodo vigente de cada sede+jornada. Alcance total sin docente: el propio funcionario o nada. Lógica en fn_docente_grupos_listar_interno. V242/V250.';
 
 -- fn_docente_grado_asignatura_listar vive en V497 (wrapper + _interno, mismo

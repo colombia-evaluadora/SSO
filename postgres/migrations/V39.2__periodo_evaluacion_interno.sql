@@ -9,6 +9,20 @@
 
 SET search_path TO academico_test, public;
 
+-- Solo existen Calificable (VALOR 1) y NO Calificable (VALOR 2); lo deciden las fechas.
+CREATE OR REPLACE FUNCTION academico_test.fn_periodo_eval_estado_por_fechas(p_fecha_inicio DATE, p_fecha_fin DATE)
+RETURNS BIGINT LANGUAGE sql STABLE AS $$
+    SELECT PK_LISTA_VALOR
+      FROM academico_test.TLISTA_VALOR
+     WHERE CATEGORIA = 'ESTADOPERIODOEVALUACION'
+       AND VALOR = CASE WHEN CURRENT_DATE BETWEEN p_fecha_inicio AND p_fecha_fin THEN '1' ELSE '2' END
+     ORDER BY PK_LISTA_VALOR
+     LIMIT 1;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_periodo_eval_estado_por_fechas(DATE, DATE)
+    IS 'INTERNO: pk de Calificable si hoy cae entre las fechas, NO Calificable si no. Lo usa fn_periodo_eval_crear_interno.';
+
 CREATE OR REPLACE FUNCTION academico_test.fn_periodo_eval_crear_interno(
     p_fk_periodo   BIGINT,
     p_codigo       VARCHAR,
@@ -21,10 +35,13 @@ CREATE OR REPLACE FUNCTION academico_test.fn_periodo_eval_crear_interno(
     p_audit        VARCHAR
 )
 RETURNS BIGINT LANGUAGE plpgsql AS $$
-DECLARE v_id BIGINT;
+DECLARE
+    v_id     BIGINT;
+    -- p_fk_estado se ignora: el estado no es editable.
+    v_estado BIGINT := academico_test.fn_periodo_eval_estado_por_fechas(p_fecha_inicio, p_fecha_fin);
 BEGIN
     PERFORM academico_test.fn_periodo_eval_validar_campos(p_fk_periodo, p_codigo, p_nombre, p_abreviacion,
-        p_fecha_inicio, p_fecha_fin, p_fk_estado);
+        p_fecha_inicio, p_fecha_fin, v_estado);
     PERFORM academico_test.fn_periodo_eval_validar_fechas(p_fecha_inicio, p_fecha_fin);
     PERFORM academico_test.fn_periodo_eval_validar(p_fk_periodo, p_fecha_inicio, p_fecha_fin, p_porcentaje,
         p_codigo, p_nombre, p_abreviacion, NULL);
@@ -32,7 +49,7 @@ BEGIN
     INSERT INTO academico_test.TPERIODO_EVALUACION
         (CODIGO, NOMBRE, ABREVIACION, FECHA_INICIO, FECHA_FIN, FK_TLV_ESTADO,
          FK_TPERIODO_ACADEMICO, PORCENTAJE, CREATED_BY)
-    VALUES (p_codigo, p_nombre, p_abreviacion, p_fecha_inicio, p_fecha_fin, p_fk_estado,
+    VALUES (p_codigo, p_nombre, p_abreviacion, p_fecha_inicio, p_fecha_fin, v_estado,
             p_fk_periodo, p_porcentaje, p_audit)
     RETURNING PK_TPERIODO_EVALUACION INTO v_id;
     RETURN v_id;
@@ -40,7 +57,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_periodo_eval_crear_interno(BIGINT, VARCHAR, VARCHAR, VARCHAR, DATE, DATE, BIGINT, NUMERIC, VARCHAR)
-    IS 'INTERNO: valida e inserta un periodo de evaluacion. Lo usa fn_periodo_eval_crear.';
+    IS 'INTERNO: valida e inserta un periodo de evaluacion con el estado segun sus fechas. Lo usa fn_periodo_eval_crear.';
 
 -- Los NULL conservan el valor actual.
 CREATE OR REPLACE FUNCTION academico_test.fn_periodo_eval_actualizar_interno(
@@ -73,7 +90,7 @@ BEGIN
         CODIGO = COALESCE(p_codigo, CODIGO), NOMBRE = COALESCE(p_nombre, NOMBRE),
         ABREVIACION = COALESCE(p_abreviacion, ABREVIACION),
         FECHA_INICIO = v_ini, FECHA_FIN = v_fin,
-        FK_TLV_ESTADO = COALESCE(p_fk_estado, FK_TLV_ESTADO), PORCENTAJE = v_pct,
+        PORCENTAJE = v_pct,
         MODIFIED_BY = p_audit, MODIFIED_AT = CURRENT_TIMESTAMP
      WHERE PK_TPERIODO_EVALUACION = p_pk;
     RETURN p_pk;

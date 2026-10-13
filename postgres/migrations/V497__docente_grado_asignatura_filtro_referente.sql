@@ -55,11 +55,13 @@ COMMENT ON FUNCTION academico_test.fn_docente_grado_asignatura_listar_interno(BI
 
 
 DROP FUNCTION IF EXISTS academico_test.fn_docente_grado_asignatura_listar(BIGINT, BIGINT, BIGINT);
+DROP FUNCTION IF EXISTS academico_test.fn_docente_grado_asignatura_listar(BIGINT, BIGINT, BIGINT, BIGINT);
 CREATE OR REPLACE FUNCTION academico_test.fn_docente_grado_asignatura_listar(
     p_pk_usuario_solicitante BIGINT,
     p_fk_periodo             BIGINT DEFAULT NULL,
     p_fk_tfuncionario        BIGINT DEFAULT NULL,
-    p_fk_referente           BIGINT DEFAULT NULL
+    p_fk_referente           BIGINT DEFAULT NULL,
+    p_fk_sede                BIGINT DEFAULT NULL
 )
 RETURNS TABLE (
     grado_id          BIGINT,
@@ -81,7 +83,7 @@ BEGIN
     );
 
     SELECT * INTO v_alc
-      FROM academico_test.fn_planeador_alcance_docente(p_pk_usuario_solicitante, p_fk_tfuncionario);
+      FROM academico_test.fn_planeador_alcance_docente(p_pk_usuario_solicitante, p_fk_tfuncionario, p_fk_sede);
 
     -- Mismo criterio que fn_docente_grupos_listar: alcance total sin docente
     -- elegido usa el propio funcionario; sin ninguno, lista vacia (no error).
@@ -101,7 +103,7 @@ BEGIN
 END;
 $$;
 
-COMMENT ON FUNCTION academico_test.fn_docente_grado_asignatura_listar(BIGINT, BIGINT, BIGINT, BIGINT)
+COMMENT ON FUNCTION academico_test.fn_docente_grado_asignatura_listar(BIGINT, BIGINT, BIGINT, BIGINT, BIGINT)
     IS 'GET /planeador/docentes/grado-asignatura: pares (grado, asignatura) distintos que dicta el docente en el periodo (por defecto el vigente, fn_planeador_docente_periodos). Docente y alcance con fn_planeador_alcance_docente: docente puro, el suyo (ignora p_fk_tfuncionario); otros con p_fk_tfuncionario (?funcionario=), ese docente (42501 si no dicta nada en su alcance); otros sin el, los pares de todos los docentes de su alcance (nivel 3: pares sede+jornada); alcance total sin docente, el propio funcionario o nada. p_fk_referente (?referente=, opcional) es el referente curricular de la pestana de unidad desde la que se abre el combo: deja solo los pares de esa pestana. Gate VER sobre PLANEADOR. La consulta la hace fn_docente_grado_asignatura_listar_interno.';
 
 

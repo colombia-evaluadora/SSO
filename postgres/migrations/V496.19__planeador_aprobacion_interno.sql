@@ -144,6 +144,27 @@ $$;
 COMMENT ON FUNCTION academico_test.fn_actividad_resultado_correccion_diferir_interno(BIGINT, BIGINT, NUMERIC, JSONB)
     IS 'INTERNO: tras revertir una captura que exige aprobación (PA055 de fn_actividad_nota_guardar_interno), abre la solicitud con la captura propuesta y devuelve la nota vigente. La usan fn_actividad_nota_calificar_interno y los calificar en bloque.';
 
+CREATE OR REPLACE FUNCTION academico_test.fn_actividad_resultado_correccion_cancelar_interno(
+    p_pk_usuario_solicitante   BIGINT,
+    p_pk_tactividad_estudiante BIGINT
+)
+RETURNS VOID
+LANGUAGE sql
+AS $$
+    UPDATE academico_test.TSOLICITUD_APROBACION
+       SET FK_TLV_ESTADO = academico_test.fn_tlv_solicitud_estado_pk('CANCELADA'),
+           FECHA_RESOLUCION = CURRENT_TIMESTAMP,
+           MOTIVO_RESOLUCION = 'Se volvió a capturar la nota vigente',
+           MODIFIED_BY = p_pk_usuario_solicitante::VARCHAR, MODIFIED_AT = CURRENT_TIMESTAMP
+     WHERE TABLA_OBJETO = 'TACTIVIDAD_ESTUDIANTE' AND FK_OBJETO = p_pk_tactividad_estudiante
+       AND FK_TLV_TIPO = academico_test.fn_tlv_solicitud_tipo_pk('CORRECCION_RESULTADO')
+       AND FK_TLV_ESTADO = academico_test.fn_tlv_solicitud_estado_pk('PENDIENTE')
+       AND ACTIVE = TRUE;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_actividad_resultado_correccion_cancelar_interno(BIGINT, BIGINT)
+    IS 'INTERNO: cancela la solicitud CORRECCION_RESULTADO pendiente del estudiante cuando la captura vuelve a la nota vigente (Regla 55). La usan fn_actividad_nota_calificar_interno y el calificar en bloque de escala, que guardan la nota completa.';
+
 CREATE OR REPLACE FUNCTION academico_test.fn_actividad_resultado_correccion_reaplicar_interno(
     p_pk_usuario_solicitante   BIGINT,
     p_pk_tactividad_estudiante BIGINT,

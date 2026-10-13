@@ -129,6 +129,36 @@ def load(mig_dir: Path = MIG, extra_names: set[str] | frozenset = frozenset()) -
     return repo
 
 
+def load_cached(huella: str | None = None) -> Repo:
+    """`load()` del arbol de migraciones, cacheado con la misma huella que el
+    modelo (migraciones + codigo del analizador + este fichero). Releer los 486
+    ficheros costaba ~1,2 s en cada `deps.py` de una funcion; con la cache, ~0,1 s.
+    Cualquier fallo de la cache cae a `load()`: es una optimizacion, no un dato."""
+    import pickle
+    import tempfile
+
+    from base import modelo
+
+    destino = Path(tempfile.gettempdir()) / "sso-precision-repo.pickle"
+    huella = huella or modelo.huella()  # el que ya cargo el modelo la tiene calculada
+    try:
+        with open(destino, "rb") as f:
+            guardada, repo = pickle.load(f)
+        if guardada == huella:
+            return repo
+    except Exception:  # noqa: BLE001 -- cache ausente, vieja o de otra version de clases
+        pass
+    repo = load()
+    try:
+        tmp = destino.with_suffix(".tmp")
+        with open(tmp, "wb") as f:
+            pickle.dump((huella, repo), f, protocol=pickle.HIGHEST_PROTOCOL)
+        tmp.replace(destino)
+    except OSError:
+        pass
+    return repo
+
+
 def _scan_stmt(repo: Repo, v: str, s) -> None:
     t, h = s.text, s.head
     for m in re.finditer(r"CREATE\s+(?:OR\s+REPLACE\s+)?(?:FUNCTION|PROCEDURE)\s+" + FN_NAME + r"\s*\(", t, re.I):

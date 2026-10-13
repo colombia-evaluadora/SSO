@@ -47,7 +47,7 @@ python scripts/migration-analysis informe --json modelo.json
 - Solo stdlib, Python 3.10+.
 
 Si el script avisa de que no pudo usar `git`/`origin`, **dilo**: el techo de
-versión no es fiable y hay que resolverlo con `scan.sh`.
+versión no es fiable y hay que resolverlo con `python scripts/migration-analysis hueco`.
 
 ## Para una pregunta concreta, no corras el informe entero
 
@@ -77,6 +77,17 @@ Regla práctica: **`deps.py` para una pregunta, el informe para una revisión.**
    migración posterior ya había reescrito, la estás revirtiendo: ver la skill
    `reaplicando-migraciones`.
 4. **Siguiente `V<n>` libre y huecos** — un hueco casi nunca es un número libre.
+5. **Calidad** (`model["calidad"]`, pestaña del mismo nombre) — antes de tocar
+   una función, su **radio de impacto** dice cuántos endpoints la ejecutan
+   (lo que hay que volver a probar); además, endpoints sin gate en su cadena,
+   violaciones de capa, cadenas profundas y dependencias por `EXECUTE` que el
+   grafo no ve. El HTML se regenera solo tras cada edición de una migración
+   (`.claude/hooks/informe_fondo.py`); para leerlo desde un script, el JSON:
+   `informe --json` y la clave `calidad`.
+6. **Categoría y relaciones** — la tabla *Calidad por categoría* (pestaña
+   Categorías, `calidad.por_categoria`) dice qué regla incumple el dominio que
+   vas a tocar, con ejemplos; la pestaña Dependencias (`model["relaciones"]`)
+   muestra qué migraciones llaman, redefinen o parchean lo que define la tuya.
 
 ## Dónde vive cada pieza
 

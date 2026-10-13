@@ -5,7 +5,7 @@ Dos cosas, ambas solo si el working tree tiene migraciones tocadas:
   1. el linter de invariantes, que BLOQUEA (exit 2) si hay errores;
   2. si `docs/MAPA.md` quedo desfasado, que solo AVISA.
 
-`migration_lint.py` ya corre el linter, pero solo sobre `Write`/`Edit`. Una
+`post_edit.py` ya corre el linter, pero solo sobre `Write`/`Edit`. Una
 migracion editada desde Bash -- un `sed -i`, un heredoc, un script de Python --
 no dispara ese hook y se va sin revisar. Este cierra el hueco por el otro lado:
 al terminar el turno, mira las migraciones que el working tree tiene tocadas y
@@ -153,6 +153,12 @@ def main() -> int:
     rutas = migraciones_tocadas()
     if not rutas:
         return 0
+
+    # Lo editado desde Bash no pasa por post_edit.py: aqui se pide tambien el
+    # informe de fondo (no hace nada si ya esta al dia).
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import informe_fondo
+    informe_fondo.lanzar()
 
     cli = REPO / "scripts" / "migration-analysis"
     if not (cli / "__main__.py").exists():

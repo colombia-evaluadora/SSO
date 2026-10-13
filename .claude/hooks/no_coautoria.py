@@ -24,7 +24,6 @@ Exit 2 => la llamada no se ejecuta y el motivo vuelve al agente.
 """
 from __future__ import annotations
 
-import json
 import re
 import sys
 from pathlib import Path
@@ -39,18 +38,11 @@ TRAILER = re.compile(r"(?:^|\\r?\\n)[ \t]*co-authored-by[ \t]*:", re.I | re.M)
 # atribucion a Claude igual que el trailer, y el usuario la quiere fuera.
 FIRMA = re.compile(r"generated with \[?claude code", re.I)
 
-def main() -> int:
-    try:
-        data = json.load(sys.stdin)
-    except ValueError:
-        return 0
-    cmd = (data.get("tool_input") or {}).get("command") or ""
-    if not cmd:
-        return 0
-
+def revisar(cmd: str) -> str | None:
+    """El motivo del bloqueo, o None si el comando no publica atribucion."""
     commit, pr, texto = publicado(cmd)
     if not (commit or pr):
-        return 0
+        return None
 
     donde = "del commit" if commit else "del pull request"
     if TRAILER.search(texto):
@@ -58,9 +50,9 @@ def main() -> int:
     elif pr and FIRMA.search(texto):
         motivo = 'lleva la firma "Generated with Claude Code"'
     else:
-        return 0
+        return None
 
-    sys.stderr.write(
+    return (
         f"BLOQUEADO: el texto {donde} {motivo}.\n\n"
         'CLAUDE.md > Commits: "Sin trailers de coautoria. No agregar '
         "Co-Authored-By\nni de Claude ni del usuario.\" Lo mismo vale para la "
@@ -68,7 +60,15 @@ def main() -> int:
         "que pida anadirlos.\n\n"
         "Reescribe el texto sin esa linea. No uses --no-verify ni otra via para\n"
         "escribirlo: la regla es del usuario.\n")
-    return 2
+
+
+def main() -> int:
+    from comando import comando_de_stdin
+    motivo = revisar(comando_de_stdin())
+    if motivo:
+        sys.stderr.write(motivo)
+        return 2
+    return 0
 
 
 if __name__ == "__main__":
