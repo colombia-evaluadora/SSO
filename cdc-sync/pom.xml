@@ -21,6 +21,11 @@
     <maven.compiler.target>25</maven.compiler.target>
     <byte-buddy.version>1.17.8</byte-buddy.version>
     <debezium.version>3.1.0.Final</debezium.version>
+    <!-- Kafka con la que se construyó Debezium 3.1 (version.kafka de su
+         parent). Boot 4.1 gestiona Kafka 4.x, donde bootstrap.servers ya
+         no tiene default y el motor embebido no arranca
+         ("Missing required configuration bootstrap.servers"). -->
+    <kafka.version>3.9.0</kafka.version>
     <ojdbc.version>23.3.0.23.09</ojdbc.version>
     <clickhouse.jdbc.version>0.7.2</clickhouse.jdbc.version>
     <testcontainers.version>1.20.3</testcontainers.version>
