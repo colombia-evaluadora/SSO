@@ -16,6 +16,8 @@ import com.co.eurekatic.aicontrol.agente.ui.registro.FormularioRegistrado;
 import com.co.eurekatic.aicontrol.agente.ui.registro.Pantalla;
 import com.co.eurekatic.aicontrol.agente.ui.registro.RegistroUi;
 import com.co.eurekatic.aicontrol.agente.ui.registro.RegistroUiLoader;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.model.ToolContext;
 import org.springframework.ai.tool.ToolCallback;
 import org.springframework.stereotype.Component;
@@ -38,6 +40,7 @@ import java.util.stream.Stream;
 public class AccionUiHerramienta implements ProveedorHerramientasControl {
 
     static final String NOMBRE = "accion_ui";
+    private static final Logger log = LoggerFactory.getLogger(AccionUiHerramienta.class);
     static final String TEXTO_POR_DEFECTO = "Listo, revisa la pantalla.";
     static final Motivo MOTIVO_INVALIDA = new Motivo("ACCION_UI_INVALIDA");
     static final String ACUSE = "Acciones enviadas a la pantalla. No hagas mas llamadas en este turno.";
@@ -98,6 +101,8 @@ public class AccionUiHerramienta implements ProveedorHerramientasControl {
                         vigente, configuracionesDb(lectura.acciones(), vigente, turno, invocacion.bearer())));
         List<String> rechazos = concatenar(lectura.errores(), resultado.rechazos());
         if (!rechazos.isEmpty()) {
+            // Los motivos nombran campos y codigos del formulario, nunca valores.
+            log.info("Acciones de UI descartadas: conversacion={} motivos={}", invocacion.conversationId(), rechazos);
             registrarRechazo(invocacion);
         }
         if (resultado.aceptadas().isEmpty()) {
