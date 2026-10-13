@@ -124,13 +124,13 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: ${POSTGRES_DB}
     ports:
-      # BIND_IP (default 0.0.0.0 = todo interface) gobierna qué tan
+      # BIND_IP (default 127.0.0.1 = solo loopback) gobierna qué tan
       # expuestos quedan los puertos que NO son el ingress público.
-      # En el servidor de pruebas .env fija BIND_IP=127.0.0.1: Docker
+      # Con 127.0.0.1 (default) o en el servidor: Docker
       # publica puertos saltándose ufw/firewalld, así que el bind a
       # loopback es la única barrera real. Solo el api-gateway (8080)
       # queda deliberadamente fuera de este patrón.
-      - "${BIND_IP:-0.0.0.0}:${POSTGRES_PORT:-5432}:5432"
+      - "${BIND_IP:-127.0.0.1}:${POSTGRES_PORT:-5432}:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
     healthcheck:
@@ -244,7 +244,7 @@ services:
     mem_limit: 384m
     mem_reservation: 256m
     ports:
-      - "${BIND_IP:-0.0.0.0}:${EUREKA_PORT:-8761}:8761"
+      - "${BIND_IP:-127.0.0.1}:${EUREKA_PORT:-8761}:8761"
     environment:
       # Standalone Eureka — does not register with itself.
       EUREKA_CLIENT_REGISTER_WITH_EUREKA: "false"
@@ -347,7 +347,7 @@ services:
       eurekaserver:
         condition: service_started
     ports:
-      - "${BIND_IP:-0.0.0.0}:${AUTH_CENTER_PORT:-8081}:8081"
+      - "${BIND_IP:-127.0.0.1}:${AUTH_CENTER_PORT:-8081}:8081"
     environment:
       SPRING_DATASOURCE_URL: "jdbc:postgresql://${DB_URL}/${DB_NAME}?sslmode=${DB_SSLMODE:-require}&channel_binding=${DB_CHANNEL_BINDING:-prefer}"
       DB_USER: ${DB_USER}
@@ -600,7 +600,7 @@ services:
       eurekaserver:
         condition: service_started
     ports:
-      - "${BIND_IP:-0.0.0.0}:${HELLO_SERVICE_PORT:-8082}:8082"
+      - "${BIND_IP:-127.0.0.1}:${HELLO_SERVICE_PORT:-8082}:8082"
     environment:
       EUREKA_URL: "http://eurekaserver:8761/eureka"
       # Observability: push OTLP to Alloy
@@ -680,7 +680,7 @@ services:
         # refresh tokens, distinct key namespace.
         condition: service_healthy
     ports:
-      - "${BIND_IP:-0.0.0.0}:${SSO_ADMIN_PORT:-8083}:8083"
+      - "${BIND_IP:-127.0.0.1}:${SSO_ADMIN_PORT:-8083}:8083"
     environment:
       # Neon cloud DB. compose composes the JDBC URL inline from
       # DB_URL (host:port) + DB_NAME + DB_SSLMODE + DB_CHANNEL_BINDING
@@ -785,8 +785,8 @@ services:
     restart: unless-stopped
     logging: *default-logging
     ports:
-      - "${BIND_IP:-0.0.0.0}:${MAILHOG_SMTP_PORT:-1025}:1025"
-      - "${BIND_IP:-0.0.0.0}:${MAILHOG_WEB_PORT:-8025}:8025"
+      - "${BIND_IP:-127.0.0.1}:${MAILHOG_SMTP_PORT:-1025}:1025"
+      - "${BIND_IP:-127.0.0.1}:${MAILHOG_WEB_PORT:-8025}:8025"
 
   # ===========================================================================
   # rabbitmq — message broker for notification-service.
@@ -1410,7 +1410,7 @@ services:
     ports:
       # Grafana: auth anónima apagada por defecto (GRAFANA_ANONYMOUS_ENABLED); en el
       # servidor SIEMPRE detrás de BIND_IP=127.0.0.1 + túnel SSH.
-      - "${BIND_IP:-0.0.0.0}:${GRAFANA_PORT:-3000}:3000"
+      - "${BIND_IP:-127.0.0.1}:${GRAFANA_PORT:-3000}:3000"
     environment:
       # Dev: GRAFANA_ANONYMOUS_ENABLED=true quita el login (rol GRAFANA_ANONYMOUS_ROLE).
       # PRODUCTION: remove anonymous auth and set a real admin password.
@@ -1468,8 +1468,8 @@ services:
       - ./docker/clickhouse/clickhouse-init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
       - cdc-clickhouse-data:/var/lib/clickhouse
     ports:
-      - "${BIND_IP:-0.0.0.0}:${CDC_CLICKHOUSE_HTTP_PORT:-58123}:8123"
-      - "${BIND_IP:-0.0.0.0}:${CDC_CLICKHOUSE_NATIVE_PORT:-59000}:9000"
+      - "${BIND_IP:-127.0.0.1}:${CDC_CLICKHOUSE_HTTP_PORT:-58123}:8123"
+      - "${BIND_IP:-127.0.0.1}:${CDC_CLICKHOUSE_NATIVE_PORT:-59000}:9000"
     ulimits:
       nofile:
         soft: 262144
@@ -1530,7 +1530,7 @@ services:
     volumes:
       - cdc-capture-offsets:${CDC_OFFSETS_DIR:-/var/cdc-capture/offsets}
     ports:
-      - "${BIND_IP:-0.0.0.0}:${CDC_CAPTURE_PORT:-58081}:8081"
+      - "${BIND_IP:-127.0.0.1}:${CDC_CAPTURE_PORT:-58081}:8081"
 
   # One-shot init: create the `cdc_slot` logical replication slot after
   # Flyway has built the publication in V24. Runs as the postgres image
@@ -1602,7 +1602,7 @@ services:
       CDC_WORKER_CONCURRENCY_MIN: ${CDC_WORKER_CONCURRENCY_MIN:-1}
       CDC_WORKER_CONCURRENCY_MAX: ${CDC_WORKER_CONCURRENCY_MAX:-1}
     ports:
-      - "${BIND_IP:-0.0.0.0}:${CDC_WORKER_PORT:-58082}:8081"
+      - "${BIND_IP:-127.0.0.1}:${CDC_WORKER_PORT:-58082}:8081"
 
   # ===========================================================================
   # Almacenamiento de objetos (perfil `storage`) — APAGADO POR DEFECTO
