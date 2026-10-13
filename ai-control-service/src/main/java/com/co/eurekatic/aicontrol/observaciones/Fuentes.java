@@ -10,7 +10,7 @@ import java.util.Map;
  *
  * @param piezas         una por observacion (periodo) o por periodo (ano)
  * @param estudiante     primer nombre; nunca viaja al modelo
- * @param estadoGuardado APROBADA, MODIFICADA o null si todavia no hay texto
+ * @param estadoGuardado BORRADOR, APROBADA, MODIFICADA o null si todavia no hay texto
  */
 public record Fuentes(List<Pieza> piezas, String estudiante, String estadoGuardado) {
 
