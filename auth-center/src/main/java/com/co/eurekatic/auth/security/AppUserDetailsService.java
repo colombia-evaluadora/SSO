@@ -1,5 +1,7 @@
 package com.co.eurekatic.auth.security;
 
+import com.co.eurekatic.common.util.EmailNormalizer;
+
 import com.co.eurekatic.common.entity.User;
 import com.co.eurekatic.common.repository.UserRepository;
 import org.springframework.security.core.userdetails.UserDetails;
@@ -42,7 +44,7 @@ public class AppUserDetailsService implements UserDetailsService {
         // Sigue ocurriendo ANTES de comprobar la contraseña, así que
         // una cuenta deshabilitada no puede autenticarse aunque la
         // contraseña sea válida.
-        return userRepository.findByEmail(email)
+        return userRepository.findByEmail(EmailNormalizer.normalize(email))
                 .orElseThrow(() -> new UsernameNotFoundException("No se encontró el usuario: " + email));
     }
 }

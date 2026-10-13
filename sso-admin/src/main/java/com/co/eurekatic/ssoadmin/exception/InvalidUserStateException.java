@@ -15,6 +15,11 @@ public class InvalidUserStateException extends RuntimeException {
                 + ", pero está en estado " + label(actual));
     }
 
+    /** Mensaje ya redactado para la persona usuaria (sigue siendo 409). */
+    public InvalidUserStateException(String message) {
+        super(message);
+    }
+
     /**
      * Etiqueta legible del estado. El nombre del enum viaja en
      * otros campos del API (contrato), así que aquí sólo se

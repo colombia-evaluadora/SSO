@@ -240,6 +240,55 @@ reporting:
         direccion: Direccion
         telefono: Telefono
 
+    # -----------------------------------------------------------------
+    # PIGSE (V549). Mismas pantallas que arriba pero en OTRO catalogo:
+    # las filas viven en el microservicio pigse, asi que cada clave fija
+    # la instancia query-service-pigse con `base-url`. Sin eso caian en
+    # las filas de eval-col y los roles PIGSE recibian 403.
+    # -----------------------------------------------------------------
+    pigse-establecimientos:
+      path: /establecimientos/reporte
+      base-url: ${REPORTING_PIGSE_URL:http://query-service-pigse:8084}
+      title: Establecimientos educativos
+      file-name: establecimientos
+      columns:
+        codigo: Codigo DANE
+        nombre: Nombre
+        nit: NIT
+        departamento_nombre: Departamento
+        municipio_nombre: Municipio
+        ente_nombre: Ente territorial
+        estado_nombre: Estado
+
+    pigse-sedes:
+      path: /sedes/reporte
+      base-url: ${REPORTING_PIGSE_URL:http://query-service-pigse:8084}
+      title: Sedes educativas
+      file-name: sedes
+      columns:
+        codigo: Codigo
+        nombre: Nombre
+        consecutivo: Consecutivo
+        establecimiento_nombre: Establecimiento
+        zona_nombre: Zona
+        direccion: Direccion
+        telefono: Telefono
+
+    pigse-funcionarios:
+      path: /funcionarios/reporte
+      base-url: ${REPORTING_PIGSE_URL:http://query-service-pigse:8084}
+      title: Funcionarios
+      file-name: funcionarios
+      columns:
+        numero_documento: Documento
+        nombre_completo: Nombre completo
+        correo_electronico: Correo electronico
+        telefono: Telefono
+        establecimiento_nombre: Establecimiento
+        roles: Roles
+        sedes: Sedes
+        jornadas: Jornadas
+
     # Reporte de Matricula. `columns` es el CATALOGO completo exportable --
     # el front manda `columns` en el body con las que tenga visibles en su
     # tabla en ese momento (ver ColumnLayout.resolver), y esta lista es el

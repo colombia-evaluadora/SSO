@@ -22,7 +22,8 @@ SELECT v.categoria, v.nombre, v.valor, 'V496.18_seed'
     ('TIPO_SOLICITUD_APROBACION', 'Corrección de asistencia', 'CORRECCION_ASISTENCIA'),
     ('ESTADO_SOLICITUD_APROBACION', 'Pendiente', 'PENDIENTE'),
     ('ESTADO_SOLICITUD_APROBACION', 'Aprobada', 'APROBADA'),
-    ('ESTADO_SOLICITUD_APROBACION', 'Rechazada', 'RECHAZADA')
+    ('ESTADO_SOLICITUD_APROBACION', 'Rechazada', 'RECHAZADA'),
+    ('ESTADO_SOLICITUD_APROBACION', 'Cancelada', 'CANCELADA')
   ) AS v(categoria, nombre, valor)
  WHERE NOT EXISTS (SELECT 1 FROM academico_test.TLISTA_VALOR lv
                     WHERE lv.CATEGORIA = v.categoria AND lv.VALOR = v.valor);

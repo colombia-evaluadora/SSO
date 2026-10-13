@@ -30,26 +30,18 @@
 #     3. deploy     : rsync de docker-compose.yml + postgres/migrations
 #                     + observability/ + docker/ + scripts/ al servidor,
 #                     escribe /opt/sso/.env desde el secreto TEST_ENV_FILE,
-#                     y luego levanta el stack por SSH en dos modos:
+#                     y luego, por SSH: infra sin dependencia de flyway,
+#                     la fase de migraciones (scripts/flyway-deploy.sh:
+#                     re-aplica las migraciones ya aplicadas que se
+#                     editaron, ANTES de las pendientes; repair; migrate;
+#                     validate) y SOLO SI PASA, los servicios:
 #                       - arranque en frío (nada del tier gateado por
-#                         flyway está corriendo): infra sin dependencia de
-#                         flyway primero, luego flyway migra, y recién
-#                         entonces `up -d` trae auth-center/sso-admin/
-#                         api-gateway/etc. (compose los gatea vía
-#                         depends_on: service_completed_successfully).
+#                         flyway está corriendo): `up -d` completo.
 #                       - redeploy en caliente (esos servicios ya están
-#                         arriba): infra primero igual, y luego se
-#                         recrean con `--no-deps` sólo los contenedores
-#                         cuya imagen cambió — sin esperar a flyway.
-#                     En ambos casos, al final (todo el stack arriba, antes
-#                     del smoke check de api-gateway) corre `flyway migrate`
-#                     + `flyway validate`; si algo falla, repara y reaplica.
-#                     El repair además RE-EJECUTA el SQL de las migraciones
-#                     cuyo checksum cambió (repair solo realinea el historial,
-#                     no re-corre la migración): sin esto, editar un V<n> ya
-#                     aplicado —p.ej. reescribir el cuerpo de una función—
-#                     nunca llegaba al server. Todas las migraciones del repo
-#                     son idempotentes, así que re-aplicarlas es seguro.
+#                         arriba): se recrean con `--no-deps` sólo los
+#                         contenedores cuya imagen cambió.
+#                     Si las migraciones fallan, ningún servicio se recrea:
+#                     nunca queda código nuevo contra un esquema a medias.
 #
 # El gate es `workflow_run` sobre CI (no un push directo) para que
 # nunca se despliegue un commit cuyos tests fallaron. `workflow_dispatch`
@@ -208,7 +200,7 @@ jobs:
       # documentaba lo contrario.
       deploy:   ${{ steps.pick.outputs.deploy }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.workflow_run.head_sha || github.sha }}
           fetch-depth: 2
@@ -443,7 +435,7 @@ jobs:
       matrix:
         include: ${{ fromJSON(needs.changes.outputs.matrix) }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # En workflow_run, github.sha es el HEAD del default branch —
           # hay que apuntar explícitamente al commit que CI validó.
@@ -453,16 +445,15 @@ jobs:
         id: sha
         run: echo "short=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
 
-      - uses: docker/setup-buildx-action@v3
-
-      - uses: docker/login-action@v3
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build & push
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: ${{ matrix.context }}
           file: ${{ matrix.dockerfile }}

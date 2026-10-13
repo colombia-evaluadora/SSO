@@ -15,9 +15,9 @@ Complementa el `CLAUDE.md` raíz.
 | Trabajo | Usar |
 |---|---|
 | Crear o cambiar un endpoint | `/new-query-endpoint` + agente `query-service-endpoint-builder` |
-| El SQL de la fila | skills `postgresql` / `plpgsql` |
+| El SQL de la fila | skills `optimizando-consultas` / `plpgsql` |
 | Código Java del servicio | skills `java-spring-boot` / `spring-cloud-basics` |
-| Documentar el endpoint al cerrar | skill `postman-collection-generator` |
+| Documentar el endpoint al cerrar | skill `documentando-con-postman` |
 
 Antes de crear un endpoint hay que **preguntar**: alcance de roles, restricciones
 por campo y cualquier regla de negocio que cambie el diseño del SQL. No se

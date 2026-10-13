@@ -1,5 +1,7 @@
 package com.co.eurekatic.ssoadmin.service;
 
+import com.co.eurekatic.common.util.EmailNormalizer;
+
 import com.co.eurekatic.common.entity.App;
 import com.co.eurekatic.common.entity.Role;
 import com.co.eurekatic.common.entity.User;
@@ -10,7 +12,9 @@ import com.co.eurekatic.common.repository.UserRepository;
 import com.co.eurekatic.common.security.PasswordPolicy;
 import com.co.eurekatic.ssoadmin.client.SessionInvalidationClient;
 import com.co.eurekatic.ssoadmin.config.EmailProperties;
+import com.co.eurekatic.ssoadmin.dto.AccountStatusResponse;
 import com.co.eurekatic.ssoadmin.dto.CreateAccountRequest;
+import com.co.eurekatic.ssoadmin.dto.EmailChangeReactivationRequest;
 import com.co.eurekatic.ssoadmin.dto.ForgotPasswordResponse;
 import com.co.eurekatic.ssoadmin.dto.ResetTokenStatusResponse;
 import com.co.eurekatic.ssoadmin.dto.UpdateAccountRequest;
@@ -121,6 +125,7 @@ public class UserAdminService {
      * académica) nunca aparecía en el roster de su app.
      */
     private final JdbcTemplate jdbc;
+    private final FuncionarioAccountProvisioner funcionarioProvisioner;
 
     public UserAdminService(UserRepository userRepository,
                             RoleRepository roleRepository,
@@ -132,7 +137,8 @@ public class UserAdminService {
                             NotificationEventPublisher events,
                             SessionInvalidationClient sessionInvalidationClient,
                             CacheManager cacheManager,
-                            JdbcTemplate jdbc) {
+                            JdbcTemplate jdbc,
+                            FuncionarioAccountProvisioner funcionarioProvisioner) {
         this.userRepository = userRepository;
         this.roleRepository = roleRepository;
         this.appRepository = appRepository;
@@ -144,6 +150,7 @@ public class UserAdminService {
         this.sessionInvalidationClient = sessionInvalidationClient;
         this.cacheManager = cacheManager;
         this.jdbc = jdbc;
+        this.funcionarioProvisioner = funcionarioProvisioner;
     }
 
     /**
@@ -176,7 +183,7 @@ public class UserAdminService {
 
         User user = new User();
         user.setEmail(req.email());
-        user.setFullName(req.fullName());
+        user.setFullName(normalizeFullName(req.fullName()));
         // No passwordEncoder here — the password column is left
         // null until /activateAccount BCrypts and stamps it.
         user.setActive(true);
@@ -228,10 +235,195 @@ public class UserAdminService {
         log.info("Resent activation email for user '{}'", saved.getEmail());
     }
 
+    /**
+     * Cambio de correo de un funcionario (Colombia Evaluadora / PIGSE).
+     *
+     * <p>La edicion del funcionario corre por query-service y el correo se
+     * sincroniza a {@code public.users} en SQL (V215), que no puede mandar
+     * correos. El front llama a este metodo DESPUES de guardar: la cuenta
+     * vuelve a PENDING_ACTIVATION ({@code enabled=false}, no puede iniciar
+     * sesion), se rota el token de activacion, se invalidan las sesiones y se
+     * manda {@code account-activation} al correo NUEVO con el enlace de la
+     * app indicada. Al activar, el usuario fija su contrasena (flujo
+     * existente de {@link #activateAccount}).
+     *
+     * <p>Guardas contra el abuso (reactivar una cuenta ajena sin cambio real):
+     * los correos deben diferir sin distinguir mayusculas, la cuenta con el
+     * correo nuevo debe existir (la sincronizacion ya ocurrio) y NO debe
+     * quedar ninguna cuenta con el correo anterior. Una cuenta INACTIVE no se
+     * toca (la baja la decide un admin, no un cambio de correo).
+     */
+    @Transactional
+    public void reactivateAfterEmailChange(EmailChangeReactivationRequest req, String appName) {
+        // Normalizado aca tambien (ademas del record): los correos pegados
+        // con U+2060 & co. hacian que ninguna busqueda coincidiera.
+        String anterior = req.correoAnterior() == null ? "" : EmailNormalizer.normalize(req.correoAnterior());
+        String nuevo = req.correoNuevo() == null ? "" : EmailNormalizer.normalize(req.correoNuevo());
+        // Cada guarda deja un WARN: antes el rechazo solo viajaba como 4xx y
+        // el caller lo perdia, sin rastro en los logs de por que no se envio.
+        if (!EMAIL_REGEX.matcher(nuevo).matches()) {
+            log.warn("Reactivacion por cambio de correo rechazada: correo nuevo invalido '{}'", nuevo);
+            throw new EmailInvalidException(nuevo);
+        }
+        if (anterior.equalsIgnoreCase(nuevo)) {
+            log.warn("Reactivacion por cambio de correo rechazada: el correo no cambio ('{}')", nuevo);
+            throw new IllegalArgumentException("El correo no cambió: no hay nada que reactivar.");
+        }
+        if (findByEmailIgnoreCase(anterior).isPresent()) {
+            log.warn("Reactivacion por cambio de correo rechazada: todavia existe una cuenta con el correo anterior '{}'",
+                    anterior);
+            throw new IllegalArgumentException(
+                    "La cuenta todavía tiene el correo anterior: guarda primero el cambio de correo.");
+        }
+        Optional<User> cuentaNueva = findByEmailIgnoreCase(nuevo);
+        if (cuentaNueva.isEmpty()) {
+            // Ni el correo anterior ni el nuevo tienen cuenta: funcionario
+            // migrado sin cuenta SSO. Se le crea con el correo NUEVO y se invita.
+            if (inviteFuncionarioWithoutAccount(nuevo, appName)) {
+                return;
+            }
+            log.warn("Reactivacion por cambio de correo rechazada: no hay cuenta con el correo nuevo '{}'", nuevo);
+            throw new NotFoundException("User", nuevo);
+        }
+        User user = cuentaNueva.get();
+        if (user.getStatus() == UserStatus.INACTIVE) {
+            log.warn("Reactivacion por cambio de correo rechazada: la cuenta '{}' esta INACTIVE", nuevo);
+            throw new InvalidUserStateException("Reenviar la activación", user.getStatus(), UserStatus.ACTIVE);
+        }
+
+        user.setEnabled(false);
+        tokenService.issueActivationToken(user);
+        User saved = userRepository.save(user);
+        sessionInvalidationClient.invalidate(anterior);
+        sessionInvalidationClient.invalidate(saved.getEmail());
+        evictUserByEmailCache(anterior);
+        evictUserByEmailCache(saved.getEmail());
+        publishActivationEmail(saved, appName != null ? appName : resolveAppName(saved));
+        log.info("Cuenta '{}' vuelve a PENDING_ACTIVATION por cambio de correo; activación enviada",
+                saved.getEmail());
+    }
+
+    /** Tope de correos por consulta de estado (la tabla de funcionarios pagina). */
+    public static final int MAX_CORREOS_ESTADO = 200;
+
+    /**
+     * Quita los invisibles que suelen colarse al copiar/pegar correos
+     * (U+200B-U+200D, U+2060, U+FEFF, U+00A0) y recorta. Mismo criterio
+     * para la consulta de estado y el reenvio.
+     */
+    static String normalizeEmail(String email) {
+        if (email == null) return "";
+        return email.replaceAll("[\\u200B-\\u200D\\u2060\\uFEFF\\u00A0]", "").trim();
+    }
+
+    /**
+     * Estado de cuenta por correo para la tabla de funcionarios (CE / PIGSE):
+     * {@code ACTIVE}, {@code PENDING_ACTIVATION}, {@code INACTIVE} (derivados
+     * de {@link User#getStatus()}) o {@code NOT_FOUND}. Devuelve una entrada
+     * por correo recibido, en el mismo orden y con el correo tal como llego,
+     * para que el front lo cruce con sus filas sin normalizar.
+     */
+    @Transactional(readOnly = true)
+    public List<AccountStatusResponse> accountStatusByEmails(List<String> correos) {
+        if (correos == null) return List.of();
+        if (correos.size() > MAX_CORREOS_ESTADO) {
+            throw new IllegalArgumentException(
+                    "Se pueden consultar como máximo " + MAX_CORREOS_ESTADO + " correos por solicitud.");
+        }
+        return correos.stream()
+                .map(c -> new AccountStatusResponse(c, findByEmailIgnoreCase(normalizeEmail(c))
+                        .map(u -> u.getStatus().name())
+                        .orElse(AccountStatusResponse.NOT_FOUND)))
+                .toList();
+    }
+
+    /**
+     * Reenvio de la activacion de un funcionario por correo (los fronts de
+     * CE/PIGSE no conocen el id de public.users). Solo procede si la cuenta
+     * sigue en PENDING_ACTIVATION; misma emision que {@link #resendActivation}
+     * (token nuevo, account-activation con el enlace de la app).
+     */
+    @Transactional
+    public void resendActivationByEmail(String correo, String appName) {
+        String email = normalizeEmail(correo);
+        Optional<User> cuenta = findByEmailIgnoreCase(email);
+        if (cuenta.isEmpty()) {
+            if (inviteFuncionarioWithoutAccount(email, appName)) {
+                return;
+            }
+            throw new NotFoundException("User", email);
+        }
+        User user = cuenta.get();
+        switch (user.getStatus()) {
+            case ACTIVE -> throw new InvalidUserStateException(
+                    "La cuenta ya está activa; usa restablecer contraseña.");
+            case INACTIVE -> throw new InvalidUserStateException(
+                    "La cuenta está inactiva; un administrador debe reactivarla antes de reenviar la activación.");
+            case PENDING_ACTIVATION -> { }
+        }
+        tokenService.issueActivationToken(user);
+        User saved = userRepository.save(user);
+        publishActivationEmail(saved, appName != null ? appName : resolveAppName(saved));
+        log.info("Reenviada la activación del funcionario '{}'", saved.getEmail());
+    }
+
+    /**
+     * Funcionario sin cuenta SSO (sin fila en {@code public.users}; en test
+     * la gran mayoria, migrados sin login): si el correo es de un funcionario
+     * ACTIVO de la app, se le crea la cuenta en PENDING_ACTIVATION con la
+     * misma forma que {@link #createAccount} (sin contrasena,
+     * {@code active=true, enabled=false}), se enlaza a su TUSUARIO con sus
+     * roles (ver {@link FuncionarioAccountProvisioner}) y se manda
+     * {@code account-activation} con el enlace de la app.
+     *
+     * @return {@code false} si el correo no es de un funcionario activo de la
+     *         app (el caller mantiene el 404).
+     */
+    private boolean inviteFuncionarioWithoutAccount(String email, String appName) {
+        Optional<FuncionarioAccountProvisioner.Funcionario> encontrado =
+                funcionarioProvisioner.findActiveFuncionario(email, appName);
+        if (encontrado.isEmpty()) {
+            log.warn("Sin cuenta SSO y sin funcionario activo de '{}' para '{}': no se invita", appName, email);
+            return false;
+        }
+        FuncionarioAccountProvisioner.Funcionario f = encontrado.get();
+        String loginEmail = f.email() == null || f.email().isBlank() ? email : EmailNormalizer.normalize(f.email());
+        // Distinta capitalizacion que la buscada: si ya existe, no se duplica.
+        if (!loginEmail.equals(email) && findByEmailIgnoreCase(loginEmail).isPresent()) {
+            throw new UserDuplicateException(loginEmail);
+        }
+
+        User user = new User();
+        user.setEmail(loginEmail);
+        user.setFullName(normalizeFullName(f.fullName()));
+        user.setActive(true);
+        user.setEnabled(false);
+        user.setLdap(false);
+        tokenService.issueActivationToken(user);
+        // Flush: lo que sigue es SQL plano (JdbcTemplate) que lee esta fila.
+        User saved = userRepository.saveAndFlush(user);
+        funcionarioProvisioner.linkAndSyncRoles(f, saved.getId(), appName);
+
+        sessionInvalidationClient.invalidate(saved.getEmail());
+        evictUserByEmailCache(saved.getEmail());
+        publishActivationEmail(saved, appName);
+        log.info("Creada la cuenta PENDING_ACTIVATION del funcionario '{}' ({}) e invitado",
+                saved.getEmail(), appName);
+        return true;
+    }
+
+    private Optional<User> findByEmailIgnoreCase(String email) {
+        if (email == null || email.isBlank()) return Optional.empty();
+        Optional<User> exacto = userRepository.findByEmail(email);
+        if (exacto.isPresent()) return exacto;
+        String lower = email.toLowerCase(java.util.Locale.ROOT);
+        return lower.equals(email) ? Optional.empty() : userRepository.findByEmail(lower);
+    }
+
     private void publishActivationEmail(User user, String appName) {
         String token = user.getTokenActivation();
         Map<String, Object> payload = new LinkedHashMap<>();
-        payload.put("displayName", user.getFullName() == null ? user.getEmail() : user.getFullName());
+        payload.put("displayName", displayNameOf(user));
         payload.put("email", user.getEmail());
         payload.put("activationLink", resolveActivationUrl(token, appName));
         payload.put("ttlMinutes", TokenService.ACTIVATION_TTL_MINUTES);
@@ -316,10 +508,27 @@ public class UserAdminService {
      */
     @Transactional
     public UserResponse updateAccount(UpdateAccountRequest req) {
+        return updateAccount(req, null);
+    }
+
+    /**
+     * Igual que {@link #updateAccount(UpdateAccountRequest)}, con la app de
+     * origen ({@code ?app=}) para armar el enlace de la invitacion.
+     *
+     * <p>Si la cuenta sigue en {@link UserStatus#PENDING_ACTIVATION} y el
+     * correo cambia, la invitacion original quedo en un buzon que ya no es el
+     * de la cuenta: se emite un token NUEVO ({@link TokenService#issueActivationToken}
+     * sobrescribe el anterior, asi que el enlace viejo deja de servir) y se
+     * reenvia la invitacion al correo nuevo. Cuentas activas o inactivas no
+     * reciben invitacion.
+     */
+    @Transactional
+    public UserResponse updateAccount(UpdateAccountRequest req, String appName) {
         User user = userRepository.findById(req.id())
                 .orElseThrow(() -> new NotFoundException("User", req.id()));
+        String previousEmail = user.getEmail();
 
-        if (req.fullName() != null) user.setFullName(req.fullName());
+        if (req.fullName() != null) user.setFullName(normalizeFullName(req.fullName()));
         if (req.email() != null) {
             if (!EMAIL_REGEX.matcher(req.email()).matches()) {
                 throw new EmailInvalidException(req.email());
@@ -356,7 +565,19 @@ public class UserAdminService {
             }
         }
 
+        boolean reinvite = user.getStatus() == UserStatus.PENDING_ACTIVATION
+                && user.getEmail() != null
+                && !user.getEmail().equalsIgnoreCase(previousEmail);
+        if (reinvite) {
+            tokenService.issueActivationToken(user);
+        }
+
         User saved = userRepository.save(user);
+        if (reinvite) {
+            publishActivationEmail(saved, appName != null ? appName : resolveAppName(saved));
+            log.info("Email of pending user {} changed; activation re-sent to '{}'",
+                    saved.getId(), saved.getEmail());
+        }
         if (req.roleNames() != null) {
             // Roles just changed — drop the cache so the next
             // /login (or /auth/refresh) re-reads the new set
@@ -390,7 +611,7 @@ public class UserAdminService {
         log.info("Activated user '{}'", saved.getEmail());
 
         Map<String, Object> payload = new LinkedHashMap<>();
-        payload.put("displayName", saved.getFullName() == null ? saved.getEmail() : saved.getFullName());
+        payload.put("displayName", displayNameOf(saved));
         payload.put("email", saved.getEmail());
         events.publish("email", String.valueOf(saved.getId()), saved.getEmail(),
                 "account-activated", payload, null, resolveAppName(saved));
@@ -410,7 +631,7 @@ public class UserAdminService {
         log.info("Restored password for user '{}'", saved.getEmail());
 
         Map<String, Object> payload = new LinkedHashMap<>();
-        payload.put("displayName", saved.getFullName() == null ? saved.getEmail() : saved.getFullName());
+        payload.put("displayName", displayNameOf(saved));
         payload.put("email", saved.getEmail());
         events.publish("email", String.valueOf(saved.getId()), saved.getEmail(),
                 "password-changed", payload, null, resolveAppName(saved));
@@ -436,7 +657,8 @@ public class UserAdminService {
      * exigiria responder igual en ambos casos y es una decision de producto,
      * no tecnica.
      *
-     * <p>La busqueda va por {@code findByEmail} y no cargando la tabla entera:
+     * <p>La busqueda va por {@code findByEmailForUpdate} (por email, con la fila
+     * bloqueada; ver el comentario de abajo) y no cargando la tabla entera:
      * es un endpoint publico, y recorrer todos los usuarios en memoria por
      * cada llamada lo convertia en un amplificador de carga gratuito.
      *
@@ -445,7 +667,11 @@ public class UserAdminService {
      */
     @Transactional
     public ForgotPasswordResponse forgotPassword(String email, String appName) {
-        Optional<User> encontrado = userRepository.findByEmail(email);
+        // Con la fila bloqueada: issueRestoreToken reutiliza el token vigente
+        // para que los enlaces de correos anteriores sigan sirviendo, y dos
+        // pedidos simultaneos no deben terminar con dos tokens distintos (el
+        // segundo pisaria al primero). Ver TokenService#issueRestoreToken.
+        Optional<User> encontrado = userRepository.findByEmailForUpdate(EmailNormalizer.normalize(email));
 
         if (encontrado.isEmpty()) {
             throw new NotFoundException("User", email);
@@ -456,7 +682,7 @@ public class UserAdminService {
         userRepository.save(u);
 
         Map<String, Object> payload = new LinkedHashMap<>();
-        payload.put("displayName", u.getFullName() == null ? u.getEmail() : u.getFullName());
+        payload.put("displayName", displayNameOf(u));
         payload.put("email", u.getEmail());
         payload.put("resetLink", resolveRestoreUrl(token, appName));
         payload.put("ttlMinutes", RESTORE_TTL_SECONDS / 60);
@@ -725,9 +951,29 @@ public class UserAdminService {
 
     // ---- notification helpers -------------------------------------
 
+    /**
+     * Nombre del saludo de los correos ("Hola, <nombre>."). El correo de
+     * respaldo cubre la cuenta sin nombre o con un nombre en blanco.
+     */
+    static String displayNameOf(User user) {
+        String name = normalizeFullName(user.getFullName());
+        return name == null || name.isEmpty() ? user.getEmail() : name;
+    }
+
+    /**
+     * Recorta los extremos y colapsa los espacios internos del nombre. El de
+     * un funcionario llega de {@code concat_ws(' ', ...)} sobre TUSUARIO, y un
+     * apellido guardado como {@code ''} (no NULL) deja un espacio colgando:
+     * el correo salia "Hola, Administrador MALDONADO ." con el punto suelto.
+     * {@code null} sigue siendo {@code null}; un nombre en blanco queda {@code ""}.
+     */
+    static String normalizeFullName(String fullName) {
+        return fullName == null ? null : fullName.strip().replaceAll("\\s+", " ");
+    }
+
     private void publishRoleAssigned(User user, String roleName) {
         Map<String, Object> payload = new LinkedHashMap<>();
-        payload.put("displayName", user.getFullName() == null ? user.getEmail() : user.getFullName());
+        payload.put("displayName", displayNameOf(user));
         payload.put("email", user.getEmail());
         payload.put("roleName", roleName);
         events.publish("email", String.valueOf(user.getId()), user.getEmail(),
@@ -736,7 +982,7 @@ public class UserAdminService {
 
     private void publishRoleRevoked(User user, String roleName) {
         Map<String, Object> payload = new LinkedHashMap<>();
-        payload.put("displayName", user.getFullName() == null ? user.getEmail() : user.getFullName());
+        payload.put("displayName", displayNameOf(user));
         payload.put("email", user.getEmail());
         payload.put("roleName", roleName);
         events.publish("email", String.valueOf(user.getId()), user.getEmail(),
@@ -745,7 +991,7 @@ public class UserAdminService {
 
     private void publishAccountDeactivated(User user, String reason) {
         Map<String, Object> payload = new LinkedHashMap<>();
-        payload.put("displayName", user.getFullName() == null ? user.getEmail() : user.getFullName());
+        payload.put("displayName", displayNameOf(user));
         payload.put("email", user.getEmail());
         payload.put("reason", reason);
         events.publish("email", String.valueOf(user.getId()), user.getEmail(),
@@ -754,7 +1000,7 @@ public class UserAdminService {
 
     private void publishAccountReactivated(User user) {
         Map<String, Object> payload = new LinkedHashMap<>();
-        payload.put("displayName", user.getFullName() == null ? user.getEmail() : user.getFullName());
+        payload.put("displayName", displayNameOf(user));
         payload.put("email", user.getEmail());
         events.publish("email", String.valueOf(user.getId()), user.getEmail(),
                 "account-reactivated", payload, null, resolveAppName(user));

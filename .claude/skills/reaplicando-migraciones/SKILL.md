@@ -12,11 +12,13 @@ description: >-
 # Re-aplicando una migración editada
 
 Editar in-place un `V<n>` ya aplicado es la norma de este repo (`CLAUDE.md`:
-"editar, no duplicar"), y `deploy-test.yml` lo soporta: tras el `flyway repair`
-**re-ejecuta el SQL de las migraciones cuyo checksum cambió**, porque `repair`
-por sí solo realinea el historial pero no vuelve a correr nada.
+"editar, no duplicar"), y el deploy lo soporta: `scripts/flyway-deploy.sh`
+**re-ejecuta, antes de las pendientes, las migraciones aplicadas que cambiaron**
+(git diff desde el último deploy + checksum) y expande el set con
+`scripts/migration-reapply-set.py`. Esta skill explica ese set, para cuando hay
+que re-aplicar a mano o revisar qué hará el deploy.
 
-El problema es que re-ejecuta **solo ese fichero**.
+Re-aplicar **solo el fichero editado** no basta.
 
 ## Por qué eso rompe cosas
 
@@ -42,8 +44,8 @@ python .claude/skills/next-migration-number/deps.py --version 29
 python .claude/skills/next-migration-number/deps.py fn_x
 ```
 
-`deps.py` imprime **DEFINIDO HOY POR V\<n\>** y el historial completo con las
-versiones "muerta por". Toda versión posterior a la editada que aparezca
+`deps.py <objeto> --historial` imprime **EDITAR V\<n\>** (la dueña de hoy) y el
+historial completo con las versiones "muerta por". Toda versión posterior a la editada que aparezca
 definiendo uno de esos objetos entra en el set.
 
 Regla de oro: **si `deps.py` dice que el objeto lo define hoy una migración

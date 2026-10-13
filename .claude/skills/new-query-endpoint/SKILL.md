@@ -59,9 +59,20 @@ Con eso decides tres cosas:
 
 ## 3. La fila
 
-- **`param_types`** declara cada bind con su tipo. Los nombres van **exactos y
-  en mayúsculas** (`QUERY.SEARCH`, `BODY.FILTERS.IDS`); el ParamBinder no
-  normaliza camelCase y un bind no declarado se ignora en silencio.
+- **`param_types`** declara **cada** bind con su tipo (`BIGINT`, `VARCHAR`,
+  `TEXT`, `BOOLEAN`, `DATE`, `INTEGER`, `NUMERIC`, `JSONB`, `BIGINT[]`,
+  `TEXT[]`). El sufijo **`!`** lo hace obligatorio (`"BODY.NOMBRE": "VARCHAR!"`):
+  un `null` explícito es 400 en el binder, no un `NOT NULL` que revienta en la
+  base. Los nombres van **exactos y en mayúsculas** (`QUERY.SEARCH`, `BODY.FILTERS.IDS`). Un bind sin tipo llega
+  como texto y sin validar: una entrada mala es un 500 de la base en vez del
+  400 del binder (linter: `BIND-SIN-TIPO`).
+- **El tipo del `CAST` en el SQL y el de `param_types` coinciden**, y el SQL
+  solo llama al wrapper: `SELECT * FROM fn_x(fn_get_academico_usuario_id(
+  :CONTEXT.USER_ID::BIGINT), CAST(:QUERY.SEDE AS BIGINT))`. La lógica no vive
+  en la fila.
+- **Restricción por campo** en `query_param_constraint` (rango, enum, regex)
+  para lo que el binder puede rechazar antes de llegar a la base; lo que
+  depende de datos lo valida la capa de validaciones.
 - **Arrays por query string no existen**: un filtro multivalor en un `GET` viaja
   como CSV y se parte en SQL (V253). En un `POST` con cuerpo JSON sí puede ser
   `TEXT[]` / `BIGINT[]`.
@@ -93,7 +104,7 @@ mano o las pruebas pegan contra la imagen vieja.
 
 ## 5. Postman (obligatorio al cerrar)
 
-Con la skill `postman-collection-generator`, genera
+Con la skill `documentando-con-postman`, genera
 `docs/<dominio>/<nombre>.postman_collection.json`
 (el dominio del endpoint: `docs/planeador/`, `docs/auditoria/`, ...):
 

@@ -29,7 +29,7 @@
             but we declare it explicitly so the two modules can never
             drift.
         -->
-        <flyway.version>13.6.0</flyway.version>
+        <flyway.version>13.8.0</flyway.version>
         <!-- Twilio SDK — 10.9.x is the current line, Java 8+ compatible. -->
         <twilio.sdk.version>13.0.1</twilio.sdk.version>
         <!-- Firebase Admin SDK for FCM push. 9.9.0 bundles Messaging. -->
@@ -212,17 +212,17 @@
              versions from there. -->
         <dependency>
             <groupId>org.testcontainers</groupId>
-            <artifactId>postgresql</artifactId>
+            <artifactId>testcontainers-postgresql</artifactId>
             <scope>test</scope>
         </dependency>
         <dependency>
             <groupId>org.testcontainers</groupId>
-            <artifactId>rabbitmq</artifactId>
+            <artifactId>testcontainers-rabbitmq</artifactId>
             <scope>test</scope>
         </dependency>
         <dependency>
             <groupId>org.testcontainers</groupId>
-            <artifactId>junit-jupiter</artifactId>
+            <artifactId>testcontainers-junit-jupiter</artifactId>
             <scope>test</scope>
         </dependency>
         <!--

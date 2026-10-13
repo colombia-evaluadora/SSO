@@ -97,6 +97,13 @@ eureka:
     lease-expiration-duration-in-seconds: 30
 
 sso:
+  # Llamadas auth-center -> sso-admin /internal/** (hoy: cambio de correo de
+  # funcionario). Mismo secreto SSO_INTERNAL_TOKEN que api-gateway y
+  # query-service; vacio = el endpoint responde 500 en vez de llamar.
+  admin:
+    base-url: ${SSO_ADMIN_BASE_URL:http://sso-admin:8083}
+  internal:
+    token: ${SSO_INTERNAL_TOKEN:}
   jwt:
     # auth-center es el ÚNICO servicio con la clave privada: es el
     # único que emite tokens. Los verificadores llevan sólo la

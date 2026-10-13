@@ -208,14 +208,19 @@ BEGIN
             USING ERRCODE = '22023';
     ELSIF p_categoria NOT IN ('PLAN_ESTUDIOS', 'SIEE', 'MANUAL_CONVIVENCIA',
                                'PROYECTOS_TRANSVERSALES', 'PLAN_GESTION_RIESGO',
-                               'AUTOEVALUACION_INSTITUCIONAL') THEN
+                               'AUTOEVALUACION_INSTITUCIONAL', 'PLAN_MEJORAMIENTO',
+                               'PLAN_FORTALECIMIENTO') THEN
         RAISE EXCEPTION 'pigse: categoria invalida: %', p_categoria
             USING ERRCODE = '22023';
-    ELSIF p_tipo IN ('PMI', 'PFI') AND p_categoria <> 'AUTOEVALUACION_INSTITUCIONAL' THEN
-        RAISE EXCEPTION 'pigse: % solo admite la categoria AUTOEVALUACION_INSTITUCIONAL', p_tipo
+    ELSIF p_tipo = 'PMI' AND p_categoria NOT IN ('PLAN_MEJORAMIENTO', 'AUTOEVALUACION_INSTITUCIONAL') THEN
+        RAISE EXCEPTION 'pigse: PMI solo admite las categorias PLAN_MEJORAMIENTO y AUTOEVALUACION_INSTITUCIONAL'
             USING ERRCODE = '22023';
-    ELSIF p_tipo IN ('PEI', 'PEC') AND p_categoria = 'AUTOEVALUACION_INSTITUCIONAL' THEN
-        RAISE EXCEPTION 'pigse: % no admite la categoria AUTOEVALUACION_INSTITUCIONAL', p_tipo
+    ELSIF p_tipo = 'PFI' AND p_categoria NOT IN ('PLAN_FORTALECIMIENTO', 'AUTOEVALUACION_INSTITUCIONAL') THEN
+        RAISE EXCEPTION 'pigse: PFI solo admite las categorias PLAN_FORTALECIMIENTO y AUTOEVALUACION_INSTITUCIONAL'
+            USING ERRCODE = '22023';
+    ELSIF p_tipo IN ('PEI', 'PEC')
+          AND p_categoria IN ('AUTOEVALUACION_INSTITUCIONAL', 'PLAN_MEJORAMIENTO', 'PLAN_FORTALECIMIENTO') THEN
+        RAISE EXCEPTION 'pigse: % no admite la categoria %', p_tipo, p_categoria
             USING ERRCODE = '22023';
     END IF;
 

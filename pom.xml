@@ -45,7 +45,7 @@
         <bouncycastle.version>1.86</bouncycastle.version>
         <resilience4j.version>2.4.0</resilience4j.version>
         <postgresql.version>42.7.4</postgresql.version>
-        <testcontainers.version>1.21.4</testcontainers.version>
+        <testcontainers.version>2.0.5</testcontainers.version>
         <!--
             2.28.0-alpha es la version del proyecto opentelemetry-java-
             instrumentation que empareja exacto con el opentelemetry-api

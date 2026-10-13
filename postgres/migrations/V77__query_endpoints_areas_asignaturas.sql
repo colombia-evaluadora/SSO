@@ -245,10 +245,7 @@ SELECT
     'q-msp1s793-3oz3q24d',
     'SELECT *
 FROM academico_test.fn_especialidad_enfasis_listar(
-    (SELECT s.FK_TESTABLECIMIENTO
-       FROM academico_test.TPERIODO_ACADEMICO pa
-       JOIN academico_test.TSEDE s ON s.PK_TSEDE = pa.FK_TSEDE
-      WHERE pa.PK_TPERIODO_ACADEMICO = CAST(:PARAM.ID AS BIGINT)),
+    CAST(:PARAM.ID AS BIGINT),
     public.fn_get_academico_usuario_id(:CONTEXT.USER_ID::BIGINT)
 );',
     'postgres', false, false,
@@ -545,11 +542,7 @@ INSERT INTO public.query
 SELECT
     'q-9790ce68-ec01cfb6',
     'SELECT academico_test.fn_enfasis_resolver(
-    (SELECT s.FK_TESTABLECIMIENTO
-       FROM academico_test.TPERIODO_ACADEMICO pa
-       JOIN academico_test.TSEDE s ON s.PK_TSEDE = pa.FK_TSEDE
-      WHERE pa.PK_TPERIODO_ACADEMICO = CAST(:BODY.FK_PERIODO AS BIGINT)
-        AND pa.ACTIVE = TRUE),
+    CAST(:BODY.FK_PERIODO AS BIGINT),
     CAST(:BODY.NOMBRE AS VARCHAR),
     NULL,
     public.fn_get_academico_usuario_id(:CONTEXT.USER_ID::BIGINT)
@@ -682,3 +675,23 @@ SELECT r.id_role, q.id_query
    AND q.path_template = '/periodos/:ID/areas/asignaturas'
    AND q.http_method   = 'GET'
 ON CONFLICT DO NOTHING;
+
+-- ---------------------------------------------------------------------------
+-- Enfasis por sede: fn_enfasis_resolver y fn_especialidad_enfasis_listar
+-- reciben el periodo academico (de ahi sale la sede). El INSERT de arriba no
+-- toca filas existentes, por eso el UPDATE por uuid.
+-- ---------------------------------------------------------------------------
+UPDATE public.query SET query = $q$SELECT *
+FROM academico_test.fn_especialidad_enfasis_listar(
+    CAST(:PARAM.ID AS BIGINT),
+    public.fn_get_academico_usuario_id(:CONTEXT.USER_ID::BIGINT)
+);$q$
+ WHERE uuid = 'q-msp1s793-3oz3q24d';
+
+UPDATE public.query SET query = $q$SELECT academico_test.fn_enfasis_resolver(
+    CAST(:BODY.FK_PERIODO AS BIGINT),
+    CAST(:BODY.NOMBRE AS VARCHAR),
+    NULL,
+    public.fn_get_academico_usuario_id(:CONTEXT.USER_ID::BIGINT)
+) AS id;$q$
+ WHERE uuid = 'q-9790ce68-ec01cfb6';

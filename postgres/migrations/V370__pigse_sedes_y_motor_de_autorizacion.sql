@@ -177,6 +177,11 @@ AS $$
 DECLARE
     v_puede BOOLEAN;
 BEGIN
+    -- Super admin (categoria 0): las cuatro capacidades, como CEVAL (V303).
+    IF pigse.fn_usuario_categoria_rol_nivel(p_pk_tusuario) = 0 THEN
+        RETURN UPPER(TRIM(COALESCE(p_accion, ''))) IN ('CREAR', 'EDITAR', 'ELIMINAR', 'VER');
+    END IF;
+
     SELECT bool_or(
         CASE UPPER(TRIM(COALESCE(p_accion, '')))
             WHEN 'CREAR'    THEN rr.puede_crear

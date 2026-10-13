@@ -1,85 +1,114 @@
--- V521 reescribió pigse.fn_documentos_listar para que el tipo no aplicable
--- (PEI/PMI vs PEC/PFI, según ETNIAS) directamente NO aparezca en el
--- resultado -- antes devolvía una fila con status NO_APLICA.
---
--- pigse.fn_cumplimiento_listar (V261, nunca tocada por V521) sigue
--- exigiendo, vía tres JOIN LATERAL (no LEFT), que fn_documentos_listar
--- devuelva SIEMPRE una fila con id='PEI', una con id='PEC' Y una con
--- id='PMI' para el mismo establecimiento. Desde V521 eso ya no pasa nunca
--- (todo establecimiento tiene ETNIAS='S' o 'N', nunca ambos PEI/PEC ni
--- ambos PMI/PFI a la vez) -- el three-way join no matchea para NINGÚN
--- establecimiento y "Monitoreo y cumplimiento institucional" quedó con la
--- tabla de detalle vacía, aunque las tarjetas de arriba (que salen de
--- fn_cumplimiento_metricas, sí corregida en V521) siguen mostrando bien.
---
--- Fix: LEFT JOIN LATERAL en vez de JOIN LATERAL (un establecimiento puede
--- no tener fila para un tipo dado), con COALESCE a 'NO_APLICA' cuando no
--- hay fila -- mismo resultado visual que antes de V521. Se agrega además
--- la columna "pfi" (antes no existía en este RETURNS TABLE) para que el
--- global progress cuente PEC+PFI en vez de seguir ignorando PFI, y para
--- que el front tenga el dato disponible cuando se actualice para
--- mostrarlo (pendiente, feature de monitoreo aparte).
+-- ===========================================================================
+-- V523 — pigse.fn_cumplimiento_listar: una fila por establecimiento activo con
+-- el estado de PEI/PEC/PMI/PFI (LEFT JOIN: desde V521 el tipo no aplicable por
+-- ETNIAS no tiene fila y queda NO_APLICA). Cada tipo trae además su avance por
+-- anexos (completedCategories/totalCategories), estado derivado (COMPLETO /
+-- PARCIAL / SIN_CARGAR / NO_APLICA) y última carga; la fila trae municipio,
+-- código, plazo efectivo (fecha global o excepción, V522) y si ya venció.
+-- p_fk_establecimiento (opcional) acota a un solo establecimiento: lo usa el
+-- detalle documental del tablero sin recalcular el universo.
+-- Depende de: V521 (fn_documentos_listar por categorías), V522 (fecha límite).
+-- ===========================================================================
 DROP FUNCTION IF EXISTS pigse.fn_cumplimiento_listar();
+DROP FUNCTION IF EXISTS pigse.fn_cumplimiento_listar(BIGINT);
 
-CREATE FUNCTION pigse.fn_cumplimiento_listar()
+CREATE FUNCTION pigse.fn_cumplimiento_listar(p_fk_establecimiento BIGINT DEFAULT NULL)
 RETURNS TABLE(
-    id BIGINT, "establishmentName" TEXT, pei JSONB, pec JSONB, pmi JSONB, pfi JSONB,
-    "globalProgress" INTEGER
+    id BIGINT, "establishmentName" TEXT, "establishmentCode" TEXT,
+    "municipioId" BIGINT, municipio TEXT, etnoeducativo BOOLEAN,
+    pei JSONB, pec JSONB, pmi JSONB, pfi JSONB,
+    "globalProgress" INTEGER, "lastUploadedAt" TIMESTAMP,
+    "fechaLimite" DATE, "tieneExcepcion" BOOLEAN, plazo TEXT
 )
 LANGUAGE sql
 STABLE
 AS $$
+    WITH config AS (
+        SELECT c.fecha_limite FROM pigse.tgestion_documental_config c WHERE c.pk_config = 1
+    ),
+    base AS (
+        SELECT te.PK_ESTABLECIMIENTO AS id,
+               te.NOMBRE::TEXT AS nombre,
+               te.CODIGO::TEXT AS codigo,
+               te.FK_TMUNICIPIO AS municipio_id,
+               mu.NOMBRE::TEXT AS municipio,
+               (te.ETNIAS = 'S') AS etnoeducativo,
+               docs.por_tipo,
+               cargas.ultima_global,
+               ex.fecha_limite AS fecha_excepcion,
+               COALESCE(ex.fecha_limite, (SELECT fecha_limite FROM config)) AS fecha_limite
+          FROM pigse.testablecimiento te
+          LEFT JOIN pigse.tmunicipio mu ON mu.PK_TMUNICIPIO = te.FK_TMUNICIPIO
+          LEFT JOIN pigse.tgestion_documental_excepcion ex
+                 ON ex.fk_testablecimiento = te.PK_ESTABLECIMIENTO AND ex.active
+          -- Una sola llamada por establecimiento (antes cuatro, una por tipo).
+          LEFT JOIN LATERAL (
+              SELECT jsonb_object_agg(d.id, jsonb_build_object(
+                         'status', d.status,
+                         'estado', CASE
+                             WHEN d.status = 'COMPLETO' THEN 'COMPLETO'
+                             WHEN COALESCE(d."completedCategories", 0) > 0 THEN 'PARCIAL'
+                             ELSE 'SIN_CARGAR' END,
+                         'fileName', d."fileName",
+                         'archivoId', d."archivoId",
+                         'downloadUrl', d."downloadUrl",
+                         'completedCategories', d."completedCategories",
+                         'totalCategories', d."totalCategories",
+                         'lastUploadedAt', u.ultima)) AS por_tipo
+                FROM pigse.fn_documentos_listar(te.PK_ESTABLECIMIENTO) d
+                LEFT JOIN LATERAL (
+                    SELECT max(COALESCE(di.modified_at, di.created_at)) AS ultima
+                      FROM pigse.tdocumento_institucional di
+                     WHERE di.fk_testablecimiento = te.PK_ESTABLECIMIENTO
+                       AND di.tipo = d.id AND di.active AND di.fk_tarchivo IS NOT NULL
+                ) u ON true
+          ) docs ON true
+          LEFT JOIN LATERAL (
+              SELECT max(COALESCE(di.modified_at, di.created_at)) AS ultima_global
+                FROM pigse.tdocumento_institucional di
+               WHERE di.fk_testablecimiento = te.PK_ESTABLECIMIENTO
+                 AND di.active AND di.fk_tarchivo IS NOT NULL
+          ) cargas ON true
+         WHERE te.ACTIVE
+           AND (p_fk_establecimiento IS NULL OR te.PK_ESTABLECIMIENTO = p_fk_establecimiento)
+    ),
+    tipos AS (
+        SELECT b.*,
+               COALESCE(b.por_tipo->'PEI', '{"status":"NO_APLICA","estado":"NO_APLICA"}'::jsonb) AS j_pei,
+               COALESCE(b.por_tipo->'PEC', '{"status":"NO_APLICA","estado":"NO_APLICA"}'::jsonb) AS j_pec,
+               COALESCE(b.por_tipo->'PMI', '{"status":"NO_APLICA","estado":"NO_APLICA"}'::jsonb) AS j_pmi,
+               COALESCE(b.por_tipo->'PFI', '{"status":"NO_APLICA","estado":"NO_APLICA"}'::jsonb) AS j_pfi
+          FROM base b
+    ),
+    conteo AS (
+        SELECT t.*,
+               (SELECT count(*) FROM unnest(ARRAY[t.j_pei, t.j_pec, t.j_pmi, t.j_pfi]) j
+                 WHERE j->>'status' <> 'NO_APLICA') AS aplicables,
+               (SELECT count(*) FROM unnest(ARRAY[t.j_pei, t.j_pec, t.j_pmi, t.j_pfi]) j
+                 WHERE j->>'status' = 'COMPLETO') AS completos
+          FROM tipos t
+    )
     SELECT
-        te.PK_ESTABLECIMIENTO AS id,
-        te.NOMBRE AS "establishmentName",
-        jsonb_build_object('status', COALESCE(d_pei.status, 'NO_APLICA'), 'fileName', d_pei."fileName",
-                            'archivoId', d_pei."archivoId", 'downloadUrl', d_pei."downloadUrl") AS pei,
-        jsonb_build_object('status', COALESCE(d_pec.status, 'NO_APLICA'), 'fileName', d_pec."fileName",
-                            'archivoId', d_pec."archivoId", 'downloadUrl', d_pec."downloadUrl") AS pec,
-        jsonb_build_object('status', COALESCE(d_pmi.status, 'NO_APLICA'), 'fileName', d_pmi."fileName",
-                            'archivoId', d_pmi."archivoId", 'downloadUrl', d_pmi."downloadUrl") AS pmi,
-        jsonb_build_object('status', COALESCE(d_pfi.status, 'NO_APLICA'), 'fileName', d_pfi."fileName",
-                            'archivoId', d_pfi."archivoId", 'downloadUrl', d_pfi."downloadUrl") AS pfi,
+        c.id,
+        c.nombre,
+        c.codigo,
+        c.municipio_id,
+        c.municipio,
+        c.etnoeducativo,
+        c.j_pei, c.j_pec, c.j_pmi, c.j_pfi,
+        CASE WHEN c.aplicables = 0 THEN 0
+             ELSE round(100.0 * c.completos / c.aplicables)::INTEGER END,
+        c.ultima_global,
+        c.fecha_limite,
+        (c.fecha_excepcion IS NOT NULL),
         CASE
-            WHEN (CASE WHEN COALESCE(d_pei.status, 'NO_APLICA') <> 'NO_APLICA' THEN 1 ELSE 0 END
-                  + CASE WHEN COALESCE(d_pec.status, 'NO_APLICA') <> 'NO_APLICA' THEN 1 ELSE 0 END
-                  + CASE WHEN COALESCE(d_pmi.status, 'NO_APLICA') <> 'NO_APLICA' THEN 1 ELSE 0 END
-                  + CASE WHEN COALESCE(d_pfi.status, 'NO_APLICA') <> 'NO_APLICA' THEN 1 ELSE 0 END) = 0 THEN 0
-            ELSE round(
-                100.0 * (
-                    CASE WHEN d_pei.status = 'COMPLETO' THEN 1 ELSE 0 END
-                    + CASE WHEN d_pec.status = 'COMPLETO' THEN 1 ELSE 0 END
-                    + CASE WHEN d_pmi.status = 'COMPLETO' THEN 1 ELSE 0 END
-                    + CASE WHEN d_pfi.status = 'COMPLETO' THEN 1 ELSE 0 END
-                ) / (
-                    CASE WHEN COALESCE(d_pei.status, 'NO_APLICA') <> 'NO_APLICA' THEN 1 ELSE 0 END
-                    + CASE WHEN COALESCE(d_pec.status, 'NO_APLICA') <> 'NO_APLICA' THEN 1 ELSE 0 END
-                    + CASE WHEN COALESCE(d_pmi.status, 'NO_APLICA') <> 'NO_APLICA' THEN 1 ELSE 0 END
-                    + CASE WHEN COALESCE(d_pfi.status, 'NO_APLICA') <> 'NO_APLICA' THEN 1 ELSE 0 END
-                )
-            )
-        END AS "globalProgress"
-      FROM pigse.testablecimiento te
-      LEFT JOIN LATERAL (
-              SELECT * FROM pigse.fn_documentos_listar(te.PK_ESTABLECIMIENTO) WHERE id = 'PEI'
-          ) d_pei ON true
-      LEFT JOIN LATERAL (
-              SELECT * FROM pigse.fn_documentos_listar(te.PK_ESTABLECIMIENTO) WHERE id = 'PEC'
-          ) d_pec ON true
-      LEFT JOIN LATERAL (
-              SELECT * FROM pigse.fn_documentos_listar(te.PK_ESTABLECIMIENTO) WHERE id = 'PMI'
-          ) d_pmi ON true
-      LEFT JOIN LATERAL (
-              SELECT * FROM pigse.fn_documentos_listar(te.PK_ESTABLECIMIENTO) WHERE id = 'PFI'
-          ) d_pfi ON true
-     WHERE te.ACTIVE
-     ORDER BY te.NOMBRE;
+            WHEN c.fecha_limite IS NULL THEN 'SIN_FECHA'
+            WHEN CURRENT_DATE > c.fecha_limite THEN 'VENCIDO'
+            ELSE 'VIGENTE'
+        END
+      FROM conteo c
+     ORDER BY c.nombre;
 $$;
 
-COMMENT ON FUNCTION pigse.fn_cumplimiento_listar() IS
-    'V523: LEFT JOIN LATERAL (antes JOIN) -- desde V521 fn_documentos_listar no devuelve fila para el tipo no aplicable (ETNIAS), el INNER JOIN de tres vías dejaba la tabla siempre vacía. Agrega columna "pfi" y el global progress ahora cuenta PEC+PFI o PEI+PMI según aplique.';
-
--- fn_cumplimiento_listar_paginado (misma migración, sin cambios de firma:
--- sigue haciendo `SELECT * FROM pigse.fn_cumplimiento_listar()` y
--- `to_jsonb(p) - 'rn'`, así que la columna "pfi" nueva viaja sola en el
--- JSON de cada fila sin tocar esa función.
+COMMENT ON FUNCTION pigse.fn_cumplimiento_listar(BIGINT) IS
+    'INTERNO: tablero de Monitoreo (fn_cumplimiento_listar_paginado, /cumplimiento/listar) y detalle documental (fn_cumplimiento_documento_detalle). Estado por tipo con avance por anexos, ultima carga y plazo efectivo (global o excepcion, V522). p_fk_establecimiento NULL = todos.';

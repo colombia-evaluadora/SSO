@@ -69,8 +69,8 @@ Cada carpeta es un paquete; `__main__.py` es el CLI.
 |---|---|---|
 | `base/` | `sqlscan`, `nucleo`, `modelo` | Splitter de SQL y máscara de lo que no se ejecuta; tipos (`Write`, `Migration`), orden de versiones (`vkey`, `vnum`) y rutas; acceso cacheado al modelo (`modelo.cargar`). |
 | `lectura/` | `extraccion`, `consultas` | `LectorMigracion` lee un archivo: `EXTRACTORES_DDL` (una clase por familia de DDL) y `_DML` por tabla destino; `Registro` resuelve esquemas como Postgres. Filas de `public.query` y destinos de los binds. |
-| `analisis/` | `construir`, `grafo`, `usos`, `historia`, `poda`, `categories` | `construir()` arma el modelo; un `Resolutor` por tipo de objeto decide qué vive; usos y firmas; autoría y números libres (git); recorte con `precision.py`; la única agregación por categoría. |
-| `vista/` | `render`, `render_categories` | El HTML: solo pinta el modelo, no recalcula ninguna cifra. |
+| `analisis/` | `construir`, `grafo`, `usos`, `historia`, `poda`, `categories`, `calidad`, `relaciones` | `construir()` arma el modelo; un `Resolutor` por tipo de objeto decide qué vive; usos y firmas; autoría y números libres (git); recorte con `precision.py`; la única agregación por categoría. |
+| `vista/` | `render`, `render_categories`, `render_calidad` | El HTML: solo pinta el modelo, no recalcula ninguna cifra. |
 | `comandos/` | `informe`, `lint`, `orden`, `mapa`, `oraculo` | Un módulo por subcomando, con su `main(argv)` y sus datos al lado (`lint-baseline.json`, `catalogo.sql`). |
 
 Solo `base/`, `lectura/` y `analisis/` (más `precision.py`) entran en la huella
@@ -106,6 +106,63 @@ el techo de las ramas de `origin`.)
 Se añade en `categories.categorize()` (o en `lineas()` si sale del mapa de
 líneas) y se pinta en `render_categories.py`. Nada más: `render.compact` pasa
 las definiciones tal cual, y `docs/MAPA.md` usa la misma asignación.
+
+## Calidad: el grafo de llamadas vivo
+
+La pestaña **Calidad** (`analisis/calidad.py`, en `model["calidad"]`) trabaja
+sobre las llamadas que hace la definición **vigente** de cada función o fila de
+`public.query` (las de versiones muertas se descartan):
+
+- **radio de impacto**: cuántos endpoints ejecutan una función, directa o
+  transitivamente, con su fan-in, fan-out y profundidad. Es lo que hay que
+  volver a probar al tocarla;
+- **endpoints sin gate en su cadena**: ninguna función alcanzada es un gate
+  (`fn_assert_*`, `*_gate_escritura`) ni un filtro de alcance (`*_puede_*`,
+  `*_alcance*`). Se separan los que lanzan 42501 a mano de los que no tienen
+  ningún control;
+- **violaciones de capa**: un `_interno` o una validación que llama a un gate
+  que lanza;
+- **cadenas más profundas** y **ciclos** (componentes fuertemente conexas);
+- **dependencias dinámicas**: funciones con `EXECUTE` y los objetos existentes
+  que nombran en literales, invisibles para el grafo estático.
+
+La capa sale del nombre (`capa_de`); el grafo, de `uses`. Debajo, el **lint**
+de todo el historial (`comandos/lint.resumen`): por regla, lo nuevo frente a la
+deuda congelada, y cuánta deuda de la baseline ya se corrigió.
+
+**Por categoría** (`calidad.por_categoria`, pintado en la pestaña Categorías):
+las mismas cifras repartidas por la categoría de cada función o endpoint, en
+cinco ejes que miden una regla de `.claude/rules/migraciones.md` cada uno
+(seguridad, componentización, reutilización, extensibilidad, optimización) más
+el lint por migración (`lint.resumen()["por_version"]`). Cada eje guarda hasta
+seis ejemplos para que el informe diga dónde mirar, no solo cuánto.
+
+## Relaciones entre migraciones
+
+`analisis/relaciones.py` (`model["relaciones"]`) es lo que pinta la pestaña
+Dependencias. A diferencia de `model["edges"]` (solo llamadas, atadas a la
+migración que **creó** la función, y lo que siguen leyendo `mapa` y la Matriz),
+cada relación se ata a la definición **vigente** cuando la migración actúa y
+lleva su tipo: `usa` (llama), `lee` (tabla o vista), `redefine`, `parchea` y
+`borra`. `fo` marca un uso fuera de orden: algo que solo define una versión
+posterior. Todas las migraciones son nodos, también las que no se relacionan.
+
+## Rendimiento
+
+El informe completo tarda ~15 s (antes ~23 s; el modelo solo, ~10 s frente a
+~36 s). Lo que lo bajó, por si se vuelve a perfilar:
+
+- `sqlscan.strip_comments` / `split_statements` saltan con una regex hasta el
+  siguiente carácter relevante y casan el dollar-quote con `pattern.match(s, i)`:
+  antes miraban carácter a carácter y hacían `re.match(..., s[i:])`, que copiaba
+  el resto del fichero en cada `$`. Ambas están cacheadas por contenido
+  (`lru_cache`): modelo, usos y precision parten el mismo fichero 4-6 veces.
+- `usos.collect_java_callsites` poda `node_modules`, `.git`, `target`... en vez
+  de `rglob` sobre todo el repo.
+- `modelo.guardar` serializa de una vez y sin espacios.
+
+Cualquier cambio así se valida con el modelo: tiene que salir idéntico antes y
+después (comparación canónica de JSON), además de `oraculo.py`.
 
 ## Por elemento
 
@@ -215,9 +272,9 @@ pestaña Migraciones filtra por categoría. El JSON lo expone como `categories`;
   lo que deja ver de un golpe que media migración ya no hace nada.
 - Barras de presupuesto (líneas, sin efecto, comentarios, cabecera) y los
   objetos escritos **agrupados por tipo**, con el recuento vivo/muerto.
-- Dependencias en los dos sentidos, con el número de objetos de cada arista:
-  *usa objetos creados en* (si esa migración cambia una firma, esta hay que
-  revisarla) y *sus objetos los usa* (las que romperían si esta cambia).
+- Relaciones con otras migraciones por tipo y en los dos sentidos (llama a,
+  redefine, parchea, borra, lee; y quién le hace lo mismo a ella), con los
+  objetos de cada una. Es la misma lista que el detalle del grafo.
 - Las cabeceras de la tabla ordenan; `/` enfoca el buscador y `Esc` lo limpia.
 - El hash guarda la selección (`#migraciones/51`,
   `#objetos/function:academico_test.fn_fun_actualizar`), así que un enlace abre

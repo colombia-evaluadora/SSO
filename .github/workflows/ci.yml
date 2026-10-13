@@ -132,10 +132,10 @@ jobs:
       # recompilara los 8 módulos aunque la PR sólo tocara uno: en PR
       # filtraba bien, en push corría todo. deploy-test.yml ya usa
       # fetch-depth: 2 en su propio job `changes` por este mismo motivo.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 2
-      - uses: dorny/paths-filter@v3
+      - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
         id: filter
         with:
           filters: |
@@ -194,7 +194,111 @@ jobs:
             migrations:
               - 'postgres/migrations/**'
               - '.github/scripts/check-flyway-migrations.sh'
+              - 'scripts/flyway-deploy.sh'
+              - 'scripts/migration-reapply-set.py'
+              - 'scripts/migration-analysis/**'
               - '.github/workflows/ci.yml'
+
+  # ───────── Migraciones: análisis estático (sin contenedores) ─────────
+  #
+  # Primero lo que se sabe leyendo el SQL, con el mismo grafo de dependencias
+  # que docs/MAPA.md y deps.py; los jobs con Postgres van detrás y no gastan
+  # minutos si esto ya falla:
+  #   * orden: una migración del diff (nueva o EDITADA) que reescribe un
+  #     objeto que una versión POSTERIOR redefine nace muerta en una base
+  #     limpia y revierte lo posterior en un servidor (V29 en el PR #311).
+  #     Antes solo lo miraba deploy-test, con el cambio ya en dev.
+  #   * lint: invariantes del repo (gate, tildes en CODIGO, aridad, ...)
+  #     sobre los ficheros del diff; el baseline deja fuera lo viejo.
+  #   * plan de re-aplicación: editadas desde el release de partida de
+  #     flyway-upgrade, expandidas con las posteriores que redefinen lo mismo
+  #     (scripts/migration-reapply-set.py). flyway-upgrade usa ESTE cálculo en
+  #     vez de rehacerlo, así que la simulación prueba exactamente el plan.
+  migraciones-estatico:
+    name: migraciones-estatico
+    runs-on: ubuntu-latest
+    needs: [changes]
+    if: needs.changes.outputs.migrations == 'true'
+    outputs:
+      base_1:    ${{ steps.plan.outputs.base_1 }}
+      reapply_1: ${{ steps.plan.outputs.reapply_1 }}
+      base_5:    ${{ steps.plan.outputs.base_5 }}
+      reapply_5: ${{ steps.plan.outputs.reapply_5 }}
+      # JSON con los tags_atras (1, 5) cuyo plan no está vacío.
+      upgrade_matriz: ${{ steps.plan.outputs.upgrade_matriz }}
+    env:
+      PYTHONIOENCODING: utf-8
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Base del diff
+        id: base
+        # Por env y no interpolado en el script: el nombre de rama de un PR
+        # lo elige quien lo abre.
+        env:
+          EVENT: ${{ github.event_name }}
+          PR_BASE: ${{ github.event.pull_request.base.ref }}
+          BEFORE: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT" = "pull_request" ]; then
+            git fetch origin "refs/heads/$PR_BASE" --no-tags
+            BASE="$(git rev-parse FETCH_HEAD)"
+          elif [ -n "$BEFORE" ] && git rev-parse -q --verify "$BEFORE^{commit}" >/dev/null; then
+            BASE="$BEFORE"
+          else
+            # Rama nueva (before = 000…) o force-push: el padre del commit.
+            BASE="$(git rev-parse HEAD~1)"
+          fi
+          echo "Base: $BASE"
+          echo "ref=$BASE" >> "$GITHUB_OUTPUT"
+
+      - name: Orden (migraciones que nacen pisadas por una posterior)
+        run: python scripts/migration-analysis orden --base "${{ steps.base.outputs.ref }}"
+
+      - name: Lint de invariantes sobre el diff
+        run: |
+          set -euo pipefail
+          mapfile -t FILES < <(git diff --name-only --diff-filter=AMR "${{ steps.base.outputs.ref }}...HEAD" \
+                                 -- 'postgres/migrations/V*.sql')
+          if [ "${#FILES[@]}" -eq 0 ]; then
+            echo "Sin migraciones en el diff."; exit 0
+          fi
+          python scripts/migration-analysis lint "${FILES[@]}"
+
+      - name: Plan de re-aplicación desde los releases de partida
+        id: plan
+        run: |
+          set -euo pipefail
+          MATRIZ=""
+          for n in 1 5; do
+            BASE="$(git tag --list 'v*' --sort=-v:refname | sed -n "${n}p")"
+            [ -n "$BASE" ] || BASE="$(git tag --list 'v*' --sort=-v:refname | tail -1)"
+            # Solo las que ya existían en ese release (M/R): una nueva (A) no
+            # está aplicada allí, la aplica migrate y no es una editada.
+            # deploy.yml usa AMR porque el servidor descarta las no aplicadas.
+            EDITADAS="$(git diff --name-only --diff-filter=MR "$BASE" HEAD -- 'postgres/migrations/V*.sql' \
+                        | xargs -r -n1 basename | tr '\n' ' ')"
+            PLAN=""
+            if [ -n "${EDITADAS// /}" ]; then
+              # shellcheck disable=SC2086  # lista de basenames, a propósito
+              PLAN="$(python scripts/migration-reapply-set.py $EDITADAS | tr '\n' ' ')"
+            fi
+            echo "base_$n=$BASE" >> "$GITHUB_OUTPUT"
+            echo "reapply_$n=$PLAN" >> "$GITHUB_OUTPUT"
+            {
+              echo "### Re-aplicación desde \`$BASE\`"
+              echo "- Editadas: ${EDITADAS:-ninguna}"
+              echo "- Plan (con las posteriores que redefinen lo mismo): ${PLAN:-ninguno}"
+            } >> "$GITHUB_STEP_SUMMARY"
+            # flyway-upgrade solo simula los puntos de partida con algo que
+            # re-aplicar; sin editadas, flyway-migrations ya cubre el caso.
+            if [ -n "${PLAN// /}" ]; then MATRIZ="${MATRIZ:+$MATRIZ,}$n"; fi
+          done
+          echo "upgrade_matriz=[${MATRIZ}]" >> "$GITHUB_OUTPUT"
+          echo "flyway-upgrade correrá desde: [${MATRIZ}]"
 
   # ───────── Migraciones Flyway: choque de versión + idempotencia ─────────
   #
@@ -214,7 +318,7 @@ jobs:
   flyway-migrations:
     name: flyway-migrations
     runs-on: ubuntu-latest
-    needs: [changes]
+    needs: [changes, migraciones-estatico]
     if: needs.changes.outputs.migrations == 'true'
     services:
       postgres:
@@ -234,7 +338,7 @@ jobs:
       # fetch-depth: 0 (historial completo): el chequeo de colisión de
       # versión necesita poder listar el árbol de la rama destino con
       # `git ls-tree`, y eso exige tener sus commits disponibles localmente.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
 
@@ -278,6 +382,124 @@ jobs:
             "${{ steps.target.outputs.ref }}" \
             localhost 5432 flyway_ci flyway_ci flyway_ci
 
+  # ───────── Migraciones: subida desde el último release ─────────
+  #
+  # Reproduce lo que hace el deploy sobre un servidor real, no sobre una base
+  # vacía: base en el estado del último tag v*, `flyway repair` con los
+  # ficheros nuevos (como quedó producción tras v1.1.57: el checksum ya no
+  # delata las migraciones editadas) y luego scripts/flyway-deploy.sh, el
+  # mismo que corre deploy.yml. Atrapa una editada que no es re-ejecutable
+  # sobre su versión vieja, o una pendiente que necesita lo que la edición
+  # añadió (V540 -> fn_grado_escala_aplicable de V428). Al final compara el
+  # esquema con una base limpia migrada desde HEAD: re-aplicar en otro orden
+  # dejaría las mismas funciones con otro cuerpo, sin un solo error.
+  #
+  # Dos puntos de partida: el último tag (el deploy normal) y el quinto más
+  # reciente (un servidor que se saltó releases fallidos, como producción
+  # entre v1.1.55 y v1.1.58, con más migraciones editadas por medio).
+  flyway-upgrade:
+    name: flyway-upgrade (tag -${{ matrix.tags_atras }})
+    runs-on: ubuntu-latest
+    needs: [changes, migraciones-estatico]
+    # Sin migraciones editadas desde ningún release de partida no hay subida
+    # que simular: el job queda skipped (ci-ok lo acepta).
+    if: >-
+      needs.changes.outputs.migrations == 'true'
+      && needs.migraciones-estatico.outputs.upgrade_matriz != '[]'
+    strategy:
+      fail-fast: false
+      matrix:
+        tags_atras: ${{ fromJSON(needs.migraciones-estatico.outputs.upgrade_matriz) }}
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: flyway_ci
+          POSTGRES_PASSWORD: flyway_ci
+          POSTGRES_DB: flyway_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U flyway_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      PGHOST: localhost
+      PGUSER: flyway_ci
+      PGPASSWORD: flyway_ci
+      FW: >-
+        docker run --rm --network host
+        -v ${{ github.workspace }}/postgres/migrations:/flyway/sql:ro
+        flyway/flyway:11-alpine -user=flyway_ci -password=flyway_ci -connectRetries=10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Instalar cliente psql
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends postgresql-client
+
+      - name: Base en el estado de un release anterior
+        id: base
+        run: |
+          set -euo pipefail
+          # El mismo release de partida que usó el plan de migraciones-estatico.
+          BASE="${{ needs.migraciones-estatico.outputs[format('base_{0}', matrix.tags_atras)] }}"
+          echo "Release de partida: $BASE"
+          echo "ref=$BASE" >> "$GITHUB_OUTPUT"
+          mkdir -p /tmp/base
+          git archive "$BASE" postgres/migrations | tar -x -C /tmp/base
+          docker run --rm --network host -v /tmp/base/postgres/migrations:/flyway/sql:ro \
+            flyway/flyway:11-alpine -url=jdbc:postgresql://localhost:5432/flyway_ci \
+            -user=flyway_ci -password=flyway_ci -connectRetries=10 migrate
+          $FW -url=jdbc:postgresql://localhost:5432/flyway_ci repair
+
+      - name: Fase de migraciones del deploy (scripts/flyway-deploy.sh)
+        env:
+          # El plan de migraciones-estatico, no un cálculo propio: la
+          # simulación prueba exactamente lo que el análisis decidió.
+          REAPPLY_CANDIDATES: ${{ needs.migraciones-estatico.outputs[format('reapply_{0}', matrix.tags_atras)] }}
+        run: |
+          set -euo pipefail
+          echo "Plan de re-aplicación (migraciones-estatico): ${REAPPLY_CANDIDATES:-<ninguno>}"
+          export MIGRATIONS_DIR="$PWD/postgres/migrations"
+          export FLYWAY_CMD="$FW -url=jdbc:postgresql://localhost:5432/flyway_ci"
+          export PSQL_CMD="psql -d flyway_ci"
+          bash scripts/flyway-deploy.sh
+
+      - name: Mismo esquema que una base limpia
+        run: |
+          set -euo pipefail
+          psql -d flyway_ci -c 'CREATE DATABASE limpia'
+          $FW -url=jdbc:postgresql://localhost:5432/limpia migrate > /dev/null
+          snapshot() {
+            psql -d "$1" -AtX <<'SQL'
+          SELECT 'fn '||n.nspname||'.'||p.proname||'('||pg_get_function_identity_arguments(p.oid)||') '||md5(pg_get_functiondef(p.oid))
+            FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+           WHERE n.nspname NOT IN ('pg_catalog','information_schema') AND n.nspname NOT LIKE 'pg\_%' AND p.prokind IN ('f','p');
+          SELECT 'view '||schemaname||'.'||viewname||' '||md5(definition)
+            FROM pg_views WHERE schemaname NOT IN ('pg_catalog','information_schema');
+          SELECT 'col '||table_schema||'.'||table_name||'.'||column_name||' '||data_type
+            FROM information_schema.columns WHERE table_schema NOT IN ('pg_catalog','information_schema');
+          SELECT 'query '||coalesce(type,'')||' '||http_method||' '||coalesce(path_template,'')||' '||md5(query)||' '||param_types::text
+            FROM public.query;
+          SQL
+          }
+          snapshot flyway_ci | sort > /tmp/subida.txt
+          snapshot limpia    | sort > /tmp/limpia.txt
+          # Lo que está en la limpia y falta (o difiere) en la subida. Lo que
+          # sobra en la subida (objetos de migraciones borradas) no cuenta.
+          FALTA="$(comm -13 /tmp/subida.txt /tmp/limpia.txt)"
+          if [ -n "$FALTA" ]; then
+            echo "::error::La subida desde ${{ steps.base.outputs.ref }} no deja el mismo esquema que una base limpia:"
+            printf '%s\n' "$FALTA" | head -50
+            exit 1
+          fi
+          echo "Esquema idéntico a una base limpia ($(wc -l < /tmp/limpia.txt) objetos comparados)."
+
   # ───────── Backend: common (compilación + unit tests) ─────────
   maven-common:
     if: needs.changes.outputs.common == 'true'
@@ -285,8 +507,8 @@ jobs:
     name: maven-common
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
         with:
           distribution: temurin
           java-version: '25'
@@ -308,8 +530,8 @@ jobs:
       && needs.changes.outputs.auth-center == 'true'
       && needs.maven-common.result != 'failure'
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
         with:
           distribution: temurin
           java-version: '25'
@@ -327,8 +549,8 @@ jobs:
       && needs.changes.outputs.sso-admin == 'true'
       && needs.maven-common.result != 'failure'
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
         with:
           distribution: temurin
           java-version: '25'
@@ -358,8 +580,8 @@ jobs:
       && needs.changes.outputs.query-service == 'true'
       && needs.maven-common.result != 'failure'
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
         with:
           distribution: temurin
           java-version: '25'
@@ -380,8 +602,8 @@ jobs:
       && needs.changes.outputs.file-service == 'true'
       && needs.maven-common.result != 'failure'
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
         with:
           distribution: temurin
           java-version: '25'
@@ -402,8 +624,8 @@ jobs:
       && needs.changes.outputs.reporting-service == 'true'
       && needs.maven-common.result != 'failure'
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
         with:
           distribution: temurin
           java-version: '25'
@@ -423,8 +645,8 @@ jobs:
       && needs.changes.outputs.ai-control-service == 'true'
       && needs.maven-common.result != 'failure'
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
         with:
           distribution: temurin
           java-version: '25'
@@ -451,8 +673,8 @@ jobs:
     needs: [changes]
     if: needs.changes.outputs.cdc == 'true'
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
         with:
           distribution: temurin
           java-version: '25'
@@ -487,8 +709,8 @@ jobs:
       && needs.changes.outputs.notification-service == 'true'
       && needs.maven-common.result != 'failure'
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
         with:
           distribution: temurin
           java-version: '25'
@@ -527,8 +749,8 @@ jobs:
       && needs.changes.outputs.provisioner == 'true'
       && needs.maven-common.result != 'failure'
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
         with:
           distribution: temurin
           java-version: '25'
@@ -545,8 +767,8 @@ jobs:
     needs: [changes]
     if: needs.changes.outputs.eurekaserver == 'true'
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
         with:
           distribution: temurin
           java-version: '25'
@@ -564,8 +786,8 @@ jobs:
       && needs.changes.outputs.hello-service == 'true'
       && needs.maven-common.result != 'failure'
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
         with:
           distribution: temurin
           java-version: '25'
@@ -585,8 +807,8 @@ jobs:
       && needs.maven-auth-center.result != 'failure'
       && needs.maven-sso-admin.result != 'failure'
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
         with:
           distribution: temurin
           java-version: '25'
@@ -596,7 +818,7 @@ jobs:
       - name: Build api-gateway jar (for SPA bake-in smoke)
         run: mvn -B -ntp -pl api-gateway -am package -DskipTests
       - name: Upload api-gateway jar
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: api-gateway-jar
           path: api-gateway/target/*.jar
@@ -620,8 +842,8 @@ jobs:
       run:
         working-directory: admin-ui
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: '22'
           cache: npm
@@ -641,8 +863,8 @@ jobs:
       run:
         working-directory: admin-ui
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: '22'
           cache: npm
@@ -662,8 +884,8 @@ jobs:
       run:
         working-directory: admin-ui
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: '22'
           cache: npm
@@ -683,8 +905,8 @@ jobs:
       run:
         working-directory: admin-ui
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: '22'
           cache: npm
@@ -694,7 +916,7 @@ jobs:
       - name: Build
         run: npm run build
       - name: Upload bundle
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: admin-ui-dist
           path: admin-ui/dist
@@ -730,7 +952,9 @@ jobs:
     if: always()
     needs:
       - changes
+      - migraciones-estatico
       - flyway-migrations
+      - flyway-upgrade
       - maven-common
       - maven-auth-center
       - maven-sso-admin
@@ -761,7 +985,9 @@ jobs:
           # es una expresión trivial.
           for r in \
             '${{ needs.changes.result }}' \
+            '${{ needs.migraciones-estatico.result }}' \
             '${{ needs.flyway-migrations.result }}' \
+            '${{ needs.flyway-upgrade.result }}' \
             '${{ needs.maven-common.result }}' \
             '${{ needs.maven-auth-center.result }}' \
             '${{ needs.maven-sso-admin.result }}' \

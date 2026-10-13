@@ -90,7 +90,7 @@ Evidencia:
 
 ## 4. Dónde SÍ hay datos de negocio disponibles: las funciones `fn_*`
 
-`query-service` no ejecuta SQL ad-hoc contra tablas — ejecuta funciones catalogadas en `sso-admin` con `executionMode = PROCEDURE | FUNCTION | DML`. El patrón dominante (127 funciones `academico_test.fn_*` en `postgres/migrations`, 52 con forma de escritura — `crear`/`actualizar`/`soft_delete`/`bulk_delete`/`guardar`) ya sigue una convención consistente. Ejemplo real, [`V43__grade_module.sql:81-137`](../postgres/migrations/V43__grade_module.sql) (`fn_grado_actualizar`):
+`query-service` no ejecuta SQL ad-hoc contra tablas — ejecuta funciones catalogadas en `sso-admin` con `executionMode = PROCEDURE | FUNCTION | DML`. El patrón dominante (127 funciones `academico_test.fn_*` en `postgres/migrations`, 52 con forma de escritura — `crear`/`actualizar`/`soft_delete`/`bulk_delete`/`guardar`) ya sigue una convención consistente. Ejemplo real, [`V43.3__grado_grupo_wrappers.sql`](../postgres/migrations/V43.3__grado_grupo_wrappers.sql) (`fn_grado_actualizar`):
 
 ```sql
 CREATE OR REPLACE FUNCTION academico_test.fn_grado_actualizar(

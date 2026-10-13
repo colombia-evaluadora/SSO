@@ -158,8 +158,13 @@ END;
 $function$;
 
 DROP FUNCTION IF EXISTS academico_test.fn_usu_empleados_listar(bigint, character varying, bigint[], bigint[], character varying[], bigint, character varying, boolean, integer, integer);
+-- Correo en la lista (botones de restablecer contrasena / reenviar activacion
+-- de la tabla de funcionarios): agregar correo_electronico cambia el RETURNS
+-- TABLE, y CREATE OR REPLACE no puede cambiar la forma de una funcion ya
+-- creada -- por eso se dropea tambien la firma vigente antes de recrearla.
+DROP FUNCTION IF EXISTS academico_test.fn_usu_empleados_listar(bigint, character varying, character varying[], character varying[], character varying[], bigint, character varying, boolean, integer, integer);
 CREATE OR REPLACE FUNCTION academico_test.fn_usu_empleados_listar(p_pk_usuario_solicitante bigint, p_search character varying DEFAULT NULL::character varying, p_roles character varying[] DEFAULT NULL::character varying[], p_work_schedules character varying[] DEFAULT NULL::character varying[], p_statuses character varying[] DEFAULT NULL::character varying[], p_campus_id bigint DEFAULT NULL::bigint, p_sort_campo character varying DEFAULT NULL::character varying, p_sort_desc boolean DEFAULT false, p_page_index integer DEFAULT 0, p_page_size integer DEFAULT 10)
- RETURNS TABLE(pk_empleado bigint, numero_documento character varying, primer_nombre character varying, segundo_nombre character varying, primer_apellido character varying, segundo_apellido character varying, nombre_completo character varying, fk_estado character varying, estado_label character varying, jornada_id bigint, jornada_nombre character varying, roles jsonb, sedes jsonb, estados_permisos jsonb)
+ RETURNS TABLE(pk_empleado bigint, numero_documento character varying, primer_nombre character varying, segundo_nombre character varying, primer_apellido character varying, segundo_apellido character varying, nombre_completo character varying, fk_estado character varying, estado_label character varying, jornada_id bigint, jornada_nombre character varying, roles jsonb, sedes jsonb, estados_permisos jsonb, correo_electronico character varying)
  LANGUAGE plpgsql
  STABLE
 AS $function$
@@ -286,7 +291,7 @@ BEGIN
         SELECT DISTINCT f.PK_TFUNCIONARIO, u.PK_TUSUARIO, u.IDENTIFICACION,
                u.PRIMER_NOMBRE, u.SEGUNDO_NOMBRE,
                u.PRIMER_APELLIDO, u.SEGUNDO_APELLIDO,
-               u.ESTADO
+               u.ESTADO, u.CORREO_ELECTRONICO
           FROM academico_test.TFUNCIONARIO f
           JOIN academico_test.TUSUARIO      u ON u.PK_TUSUARIO = f.FK_TUSUARIO
          WHERE f.ACTIVE = TRUE
@@ -437,7 +442,8 @@ BEGIN
                    AND su_e.FK_TROL >= 7 AND su_e.FK_TROL NOT IN (15, 16)
                    AND (v_es_super OR su_e.FK_TSEDE IN (SELECT PK_TSEDE FROM sedes_accesibles))),
                '[]'::jsonb
-           )                             AS estados_agg
+           )                             AS estados_agg,
+           b.CORREO_ELECTRONICO::VARCHAR AS correo_electronico
       FROM base b
       LEFT JOIN LATERAL (
             SELECT su.FK_TLV_JORNADA AS jornada_id, tlv.NOMBRE AS jornada_nombre
@@ -922,7 +928,7 @@ BEGIN
               pk_empleado, numero_documento, primer_nombre, segundo_nombre,
               primer_apellido, segundo_apellido, nombre_completo,
               fk_estado, estado_label, jornada_id, jornada_nombre,
-              roles, sedes, estados_permisos
+              roles, sedes, estados_permisos, correo_electronico
           )
     LOOP
         v_rows_json := v_rows_json || jsonb_build_array(v_one_row);

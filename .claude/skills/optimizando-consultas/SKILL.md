@@ -4,10 +4,12 @@ description: >-
   Escribe o revisa una consulta, un listado o un indice del esquema de SSO
   partiendo de lo que la tabla ya tiene: indices vivos y su definicion real
   (casi todo UNIQUE es parcial WHERE active = true), FKs sin indice, quien la
-  usa. Patrones de este repo para listados paginados, agregados por fila,
-  busqueda ILIKE con trigram y EXPLAIN contra el Postgres local. Usar antes de
-  crear un indice, al escribir un fn_*_listar o un endpoint de consulta, o
-  cuando un listado o un endpoint responde lento.
+  usa. Plantilla del nucleo de listado (STABLE, filtros opcionales y plan
+  cacheado, paginacion OFFSET/keyset, total con count OVER, DISTINCT ON,
+  ROW_NUMBER/RANK, FILTER), agregados por fila, busqueda ILIKE con trigram y
+  EXPLAIN contra el Postgres local. Usar antes de crear un indice, al escribir
+  un fn_*_listar / _listar_interno o un endpoint de consulta, o cuando un
+  listado o un endpoint responde lento.
 ---
 
 # Optimizando consultas
@@ -48,7 +50,54 @@ anadidas despues sin indice que las encabece. Lo que hay que saber del esquema:
 | Listado "sin paginar" para exportar | `p_page_size NULL`; `GREATEST(NULL, 1)` vale 1, no NULL | V401 |
 | Recorrer dependientes antes de borrar | indice que encabece la FK del hijo; si no, cada borrado recorre la tabla hija | V354 |
 
-## 3. Indice nuevo: reglas
+## 3. Plantilla de un `_listar_interno`
+
+El nucleo de lectura recibe el alcance ya resuelto por el wrapper y aplica esto,
+en este orden:
+
+1. **`STABLE`**, nunca el `VOLATILE` por defecto: una funcion `VOLATILE` no
+   puede ir en la condicion de un index scan y el planner la evalua por fila.
+   `IMMUTABLE` solo si no lee tablas (la cachea como constante).
+2. **Filtros opcionales y plan cacheado.** `(p_x IS NULL OR col = p_x)` es el
+   patron del repo y esta bien con plan *custom* (el planner pliega el
+   `NULL IS NULL` y el filtro activo usa su indice). PL/pgSQL cachea el plan y,
+   tras unas llamadas, puede quedarse con el *generico*, que no puede elegir
+   indice por filtro: si las primeras llamadas venian sin filtros, las
+   selectivas siguen con el Seq Scan. Con 3+ filtros opcionales:
+   `SET plan_cache_mode = force_custom_plan` en el `CREATE FUNCTION` (linter:
+   `LISTADO-PLAN-GENERICO`). Si los filtros cambian la forma de la consulta
+   (joins que solo hacen falta con un filtro), `RETURN QUERY EXECUTE format(...)
+   USING ...` arma solo el `WHERE` que aplica (ya hay 12 en el repo).
+3. **Alcance en el `WHERE`** con la booleana (`fn_*_puede_ver`,
+   `fn_planeador_alcanza`) o con los arrays que resolvio el wrapper
+   (`= ANY(p_sedes)`), nunca reimplementando permisos.
+4. **Filtrar antes de agregar** (V112). El agregado por fila va en subconsulta
+   correlacionada o `LATERAL ... LIMIT 1`, que solo corre para la pagina.
+5. **Paginacion.** `OFFSET` sirve para la pantalla (paginas cortas y numeradas),
+   pero lee y descarta todo lo anterior: una exportacion o un recorrido completo
+   va sin paginar (`p_page_size NULL`, V401) o por keyset
+   (`WHERE (orden, pk) > (p_ultimo_orden, p_ultimo_pk) ORDER BY orden, pk`) con
+   un indice que cubra `(orden, pk)`. El `ORDER BY` siempre termina en el pk, o
+   dos paginas repiten o pierden filas.
+6. **Total.** `count(*) OVER ()` cuenta el conjunto filtrado **entero** antes
+   del `LIMIT`: cada pagina paga el total. Solo si la pantalla muestra el total;
+   si solo necesita "hay mas", pide `LIMIT n + 1`.
+7. **Ventanas y agregados de una pasada:**
+   - ultimo/primero por grupo: `DISTINCT ON (grupo) ... ORDER BY grupo, fecha DESC`
+     o `ROW_NUMBER() OVER (PARTITION BY ...)`, no una subconsulta `MAX` por fila;
+   - varios conteos condicionales: `count(*) FILTER (WHERE estado = 'X')` en un
+     solo `GROUP BY`, no un `SELECT` por estado;
+   - puestos y rankings: `RANK() OVER (... ORDER BY nota DESC NULLS LAST)`
+     (sin `NULLS LAST`, los NULL quedan primeros: informes V330-V347);
+   - `count(DISTINCT x) OVER (...)` no existe en PostgreSQL: se agrega antes.
+8. **Columnas explicitas**, nunca `SELECT *` dentro del nucleo: un `RETURNS
+   TABLE` con `SELECT *` se rompe en cuanto la tabla gana una columna.
+
+Fuentes: [volatilidad](https://www.postgresql.org/docs/current/xfunc-volatility.html),
+[plan_cache_mode](https://postgresqlco.nf/en/doc/param/plan_cache_mode/),
+[OFFSET vs keyset](https://blog.jooq.org/faster-sql-pagination-with-keysets-continued/).
+
+## 4. Indice nuevo: reglas
 
 - **Buscar antes** con `tabla`: un indice cuyas primeras columnas ya cubren el
   filtro sirve; dos indices con el mismo prefijo solo pagan escritura.
@@ -57,13 +106,13 @@ anadidas despues sin indice que las encabece. Lo que hay que saber del esquema:
 - **Orden de columnas**: primero igualdad, luego rango u `ORDER BY`.
 - **Nunca `CONCURRENTLY` en una migracion**: Flyway corre cada migracion en una
   transaccion y `CREATE INDEX CONCURRENTLY` falla ahi ("cannot run inside a
-  transaction block"). La skill generica `flyway-migrations` lo sugiere; aqui
+  transaction block"). Las guias genericas de Flyway lo sugieren; aqui
   no aplica.
 - **Idempotente**: `CREATE INDEX IF NOT EXISTS`, nombre `idx_<tabla>_<que>`.
 - **Va en la migracion de la funcionalidad** que lo necesita (capa de
   validaciones o la de la tabla), no en una suelta.
 
-## 4. Medir, no suponer
+## 5. Medir, no suponer
 
 Solo si el usuario pide probar, y solo contra el Postgres local
 (`sso-postgres`; ver `probando-en-contenedores-locales`):

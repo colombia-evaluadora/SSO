@@ -1,5 +1,7 @@
 package com.co.eurekatic.ssoadmin.dto;
 
+import com.co.eurekatic.common.util.EmailNormalizer;
+
 import jakarta.validation.constraints.Email;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
@@ -27,4 +29,8 @@ public record UpdateAccountRequest(
         Boolean ldap,
         /** If non-null, replaces the user's role set. */
         List<@NotBlank String> roleNames
-) {}
+) {
+    public UpdateAccountRequest {
+        email = EmailNormalizer.normalize(email);
+    }
+}
