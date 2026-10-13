@@ -240,11 +240,26 @@ public class PdfRenderer {
                 (imagenes == null || def == null || def.getImageFields() == null)
                         ? java.util.Set.of()
                         : new java.util.HashSet<>(def.getImageFields());
-        // Bucle y no stream: el cast de Map<String,Object> a Map<String,?>
-        // dentro del map() hace que se infiera List<Map<String,capture-of-?>>,
-        // que no es asignable a List<Map<String,?>>.
-        List<Map<String, ?>> out = new ArrayList<>(rows.size());
-        for (Map<String, Object> row : rows) {
+        // Vista perezosa: cada fila se aplana cuando Jasper la pide y se suelta
+        // al avanzar, en vez de duplicar las 50k filas en memoria antes de llenar.
+        return new java.util.AbstractList<Map<String, ?>>() {
+            @Override
+            public int size() {
+                return rows.size();
+            }
+
+            @Override
+            public Map<String, ?> get(int i) {
+                return normalizarFila(rows.get(i), columnas, imagen, imagenes);
+            }
+        };
+    }
+
+    private Map<String, ?> normalizarFila(Map<String, Object> row,
+                                          Map<String, String> columnas,
+                                          java.util.Set<String> imagen,
+                                          Imagenes imagenes) {
+        {
             Map<String, Object> limpia = new LinkedHashMap<>();
             for (String col : columnas.keySet()) {
                 if (imagen.contains(col)) {
@@ -258,9 +273,8 @@ public class PdfRenderer {
                     limpia.put(col, CellValues.toText(row.get(col)));
                 }
             }
-            out.add(limpia);
+            return limpia;
         }
-        return out;
     }
 
     /** El pk de un TARCHIVO tal como lo devuelve el JSON: Integer, Long o texto. */
