@@ -38,6 +38,9 @@ public class QueryServiceClient {
 
     private static final Logger log = LoggerFactory.getLogger(QueryServiceClient.class);
 
+    private static final String PERFIL_TIMEOUT_HEADER = "X-Query-Timeout-Profile";
+    private static final String PERFIL_TIMEOUT_REPORT = "report";
+
     /** Base por defecto: la instancia del catalogo academico (eval-col). */
     private final String baseUrlPorDefecto;
 
@@ -75,6 +78,8 @@ public class QueryServiceClient {
                     .baseUrl(b)
                     .requestFactory((ClientHttpRequestFactory) factory)
                     .defaultHeader(HttpHeaders.ACCEPT, MediaType.APPLICATION_JSON_VALUE)
+                    // Pide a query-service el timeout largo de reportes (no el de listados).
+                    .defaultHeader(PERFIL_TIMEOUT_HEADER, PERFIL_TIMEOUT_REPORT)
                     .build();
         });
     }
