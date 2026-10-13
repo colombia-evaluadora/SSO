@@ -153,6 +153,8 @@ query:
     rate-limit:
       rps: ${QUERY_RATE_LIMIT_RPS:100}
       window: ${QUERY_RATE_LIMIT_WINDOW:1s}
+      idle-expiry: ${QUERY_RATE_LIMIT_IDLE_EXPIRY:10m}
+      max-principals: ${QUERY_RATE_LIMIT_MAX_PRINCIPALS:100000}
   # Redis-backed @Cacheable settings.
   cache:
     # TTL for "schema-metadata" (@Cacheable("tables") /

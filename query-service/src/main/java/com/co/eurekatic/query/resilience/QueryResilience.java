@@ -8,8 +8,10 @@ import io.github.resilience4j.ratelimiter.RateLimiterConfig;
 import io.github.resilience4j.ratelimiter.RateLimiterRegistry;
 import io.github.resilience4j.ratelimiter.RequestNotPermitted;
 import com.co.eurekatic.common.security.AuthPrincipal;
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
+import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
-import io.micrometer.core.instrument.Tag;
 import io.micrometer.core.instrument.Tags;
 import jakarta.annotation.PostConstruct;
 import org.slf4j.Logger;
@@ -18,9 +20,10 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Component;
+import org.springframework.web.context.request.RequestContextHolder;
+import org.springframework.web.context.request.ServletRequestAttributes;
 
 import java.time.Duration;
-import java.util.LinkedHashMap;
 import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -76,16 +79,26 @@ public class QueryResilience {
      *  lower-case like JdbcTemplateRegistry. Built lazily on first access. */
     private final Map<String, Bulkhead> bulkheads = new ConcurrentHashMap<>();
 
-    /** One RateLimiter per principal (email). Built lazily; old
-     *  entries are pruned when they age out (see Refresh). */
-    private final Map<String, RateLimiter> rateLimiters = new LinkedHashMap<>();
+    /** One RateLimiter per principal (email). Built lazily and evicted
+     *  after an idle period, with a hard size cap. */
+    private final Cache<String, RateLimiter> rateLimiters;
+
+    /** Rejections, with no per-user tags (bounded cardinality). */
+    private final Counter rateLimitRejected;
 
     public QueryResilience(
             MeterRegistry meters,
             @Value("${query.resilience.bulkhead.max-concurrent:8}") int bulkheadMaxConcurrent,
             @Value("${query.resilience.rate-limit.rps:100}") int rateLimitRps,
-            @Value("${query.resilience.rate-limit.window:1s}") Duration rateLimitWindow) {
+            @Value("${query.resilience.rate-limit.window:1s}") Duration rateLimitWindow,
+            @Value("${query.resilience.rate-limit.idle-expiry:10m}") Duration rateLimitIdleExpiry,
+            @Value("${query.resilience.rate-limit.max-principals:100000}") long rateLimitMaxPrincipals) {
         this.meters = meters;
+        this.rateLimiters = Caffeine.newBuilder()
+                .expireAfterAccess(rateLimitIdleExpiry)
+                .maximumSize(rateLimitMaxPrincipals)
+                .build();
+        this.rateLimitRejected = meters.counter("query.resilience.rate_limit.rejected");
         this.bulkheadMaxConcurrent = bulkheadMaxConcurrent;
         this.rateLimitRps = rateLimitRps;
         this.rateLimitWindow = rateLimitWindow;
@@ -133,14 +146,14 @@ public class QueryResilience {
      * limiters are per-caller — a noisy client can't
      * starve a quiet one.
      */
-    public synchronized RateLimiter rateLimiterFor(String principal) {
-        return rateLimiters.computeIfAbsent(principal, this::buildRateLimiter);
+    public RateLimiter rateLimiterFor(String principal) {
+        return rateLimiters.get(principal, this::buildRateLimiter);
     }
 
     /**
      * Applies the per-principal cap to the request on this thread, keyed by
-     * the JWT subject (email) or, with no principal, by a shared
-     * {@code "anonymous"} bucket.
+     * the JWT subject (email) or, with no principal, by a bucket per
+     * client address ({@code X-Client-Ip}, set by the gateway).
      *
      * <p>Lives here rather than in a controller so every read entry point
      * gets the same treatment by construction. It didn't, before: the one
@@ -155,16 +168,27 @@ public class QueryResilience {
         Authentication auth = SecurityContextHolder.getContext().getAuthentication();
         String key = (auth != null && auth.getPrincipal() instanceof AuthPrincipal p)
                 ? p.email()
-                : ANONYMOUS_BUCKET;
+                : anonymousKey();
         RateLimiter limiter = rateLimiterFor(key);
         if (!limiter.acquirePermission()) {
-            log.warn("Rate limit exceeded for principal={}", key);
+            rateLimitRejected.increment();
+            // Debug on purpose: the key is an email, and one noisy client
+            // would otherwise flood the log at warn.
+            log.debug("Rate limit exceeded for principal-hash={}", Integer.toHexString(key.hashCode()));
             throw RequestNotPermitted.createRequestNotPermitted(limiter);
         }
     }
 
-    /** Shared bucket for callers with no verified identity. */
-    static final String ANONYMOUS_BUCKET = "anonymous";
+    /** Bucket prefix for callers with no verified identity. */
+    static final String ANONYMOUS_PREFIX = "anon:";
+
+    private static String anonymousKey() {
+        String ip = null;
+        if (RequestContextHolder.getRequestAttributes() instanceof ServletRequestAttributes sra) {
+            ip = sra.getRequest().getHeader("X-Client-Ip");
+        }
+        return ANONYMOUS_PREFIX + (ip == null || ip.isBlank() ? "unknown" : ip.trim());
+    }
 
     private RateLimiter buildRateLimiter(String principal) {
         RateLimiterConfig config = RateLimiterConfig.custom()
@@ -175,7 +199,6 @@ public class QueryResilience {
                 .build();
         RateLimiter rl = RateLimiterRegistry.of(config)
                 .rateLimiter("query-rl-" + principal, config);
-        registerRateLimiterMeters(rl, principal);
         return rl;
     }
 
@@ -187,19 +210,9 @@ public class QueryResilience {
                 tags, bh, b -> b.getMetrics().getAvailableConcurrentCalls());
     }
 
-    private void registerRateLimiterMeters(RateLimiter rl, String principal) {
-        // No PII in metric tags — principal email is fine
-        // for per-user dashboards; operators can choose to
-        // drop this tag via meter filter if they want
-        // lower-cardinality rollups.
-        Tags tags = Tags.of("principal", principal, "kind", "ratelimiter");
-        meters.gauge("query.resilience.rate_limit.available",
-                tags, rl, r -> r.getMetrics().getAvailablePermissions());
-    }
-
     /** Test-only: clear cached instances. */
-    public synchronized void reset() {
+    public void reset() {
         bulkheads.clear();
-        rateLimiters.clear();
+        rateLimiters.invalidateAll();
     }
 }
