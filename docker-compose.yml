@@ -88,6 +88,18 @@
 #     -H "Authorization: Bearer $TOKEN"
 # =============================================================================
 
+# Bloque común de logging: rota los logs json-file para que no llenen el disco.
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "${DOCKER_LOG_MAX_SIZE:-20m}"
+    max-file: "${DOCKER_LOG_MAX_FILE:-5}"
+
+# Defaults de los servicios Java: tiempo para apagado ordenado + logging rotado.
+x-java-defaults: &java-defaults
+  stop_grace_period: ${JAVA_STOP_GRACE_PERIOD:-40s}
+  logging: *default-logging
+
 services:
 
   postgres:
@@ -111,6 +123,7 @@ services:
       - max_wal_senders=4
     container_name: sso-postgres
     restart: unless-stopped
+    logging: *default-logging
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
@@ -147,6 +160,7 @@ services:
     image: alpine:3.20
     container_name: sso-tsesion-web-gc
     restart: unless-stopped
+    logging: *default-logging
     # Alpine + dcron + postgresql16-client (la 16 matchea con la
     # imagen de Postgres del cluster). No usamos la imagen de
     # debezium/postgres para esto -- sería sobredimensionada
@@ -226,6 +240,7 @@ services:
     image: ${IMAGE_PREFIX:-eurekatic}/eurekaserver:${IMAGE_TAG:-1.0.0-SNAPSHOT}
     container_name: sso-eureka
     restart: unless-stopped
+    <<: *java-defaults
     # Cap the cgroup memory so MaxRAMPercentage=75 inside the JVM
     # translates to a sane heap (180MB instead of "whatever the
     # host has"). On a 1.9GiB colima with 5 JVMs this is the
@@ -266,6 +281,7 @@ services:
     image: redis:7-alpine
     container_name: sso-redis
     restart: unless-stopped
+    logging: *default-logging
     mem_limit: 256m
     mem_reservation: 128m
     # Mapped to 127.0.0.1 so the host (and an IDE on the host)
@@ -292,6 +308,7 @@ services:
     image: ${IMAGE_PREFIX:-eurekatic}/auth-center:${IMAGE_TAG:-1.0.0-SNAPSHOT}
     container_name: sso-auth-center
     restart: unless-stopped
+    <<: *java-defaults
     # Subido de 640m a 896m el 2026-09-09. En el servidor de pruebas el
     # contenedor estaba estable en 583MiB — el 91% de los 640m — y es el
     # único servicio cuya caída deja a TODO el mundo fuera: es quien
@@ -393,6 +410,7 @@ services:
     image: ${IMAGE_PREFIX:-eurekatic}/api-gateway:${IMAGE_TAG:-1.0.0-SNAPSHOT}
     container_name: sso-api-gateway
     restart: unless-stopped
+    <<: *java-defaults
     mem_limit: 512m
     mem_reservation: 384m
     depends_on:
@@ -485,6 +503,7 @@ services:
     image: traefik:v3.5
     container_name: sso-traefik
     restart: unless-stopped
+    logging: *default-logging
     mem_limit: 256m
     mem_reservation: 128m
     command:
@@ -555,6 +574,7 @@ services:
     image: ${IMAGE_PREFIX:-eurekatic}/hello-service:${IMAGE_TAG:-1.0.0-SNAPSHOT}
     container_name: sso-hello-service
     restart: unless-stopped
+    <<: *java-defaults
     mem_limit: 256m
     mem_reservation: 192m
     depends_on:
@@ -590,6 +610,7 @@ services:
     image: ${IMAGE_PREFIX:-eurekatic}/sso-admin:${IMAGE_TAG:-1.0.0-SNAPSHOT}
     container_name: sso-admin
     restart: unless-stopped
+    <<: *java-defaults
     # Bumped to 3g after JVM 25 + Spring Boot 4 + Spring Cloud
     # 2025.1.x exceeded 1.5g during startup under steady traffic
     # (Hibernate schema-validate + Eureka lease renewal + first
@@ -740,6 +761,7 @@ services:
     image: mailhog/mailhog:latest
     container_name: sso-mailhog
     restart: unless-stopped
+    logging: *default-logging
     ports:
       - "${BIND_IP:-0.0.0.0}:${MAILHOG_SMTP_PORT:-1025}:1025"
       - "${BIND_IP:-0.0.0.0}:${MAILHOG_WEB_PORT:-8025}:8025"
@@ -762,6 +784,7 @@ services:
     image: rabbitmq:3.13.7-management
     container_name: sso-rabbitmq
     restart: unless-stopped
+    logging: *default-logging
     hostname: rabbitmq
     # Custom entrypoint: renders the CDC user/password from .env into
     # definitions.json before the original rabbitmq entrypoint boots.
@@ -822,6 +845,7 @@ services:
     image: ${IMAGE_PREFIX:-eurekatic}/notification-service:${IMAGE_TAG:-1.0.0-SNAPSHOT}
     container_name: sso-notification-service
     restart: unless-stopped
+    <<: *java-defaults
     mem_limit: 640m
     mem_reservation: 512m
     depends_on:
@@ -937,6 +961,7 @@ services:
     image: ${IMAGE_PREFIX:-eurekatic}/query-service:${IMAGE_TAG:-1.0.0-SNAPSHOT}
     container_name: sso-query-service-postgres
     restart: unless-stopped
+    <<: *java-defaults
     mem_limit: 384m
     mem_reservation: 256m
     depends_on:
@@ -1024,6 +1049,7 @@ services:
     image: ${IMAGE_PREFIX:-eurekatic}/query-service:${IMAGE_TAG:-1.0.0-SNAPSHOT}
     container_name: sso-query-service-postgres-analytics
     restart: unless-stopped
+    <<: *java-defaults
     mem_limit: 384m
     mem_reservation: 256m
     depends_on:
@@ -1136,6 +1162,7 @@ services:
     image: ${IMAGE_PREFIX:-eurekatic}/provisioner:${IMAGE_TAG:-1.0.0-SNAPSHOT}
     container_name: sso-provisioner
     restart: unless-stopped
+    <<: *java-defaults
     mem_limit: 384m
     mem_reservation: 256m
     # PRIVILEGE BOUNDARY: the docker socket is the only path
@@ -1261,6 +1288,7 @@ services:
     image: grafana/alloy:latest
     container_name: sso-alloy
     restart: unless-stopped
+    logging: *default-logging
     mem_limit: 300m
     mem_reservation: 192m
     # The Grafana host user (root inside the container, see below) needs
@@ -1304,6 +1332,7 @@ services:
     image: grafana/tempo:2.10.7
     container_name: sso-tempo
     restart: unless-stopped
+    logging: *default-logging
     # Bumped from 512m after enabling metrics_generator (spans
     # processed into RED metrics + service graph; needs the
     # extra headroom on cold start when the WAL replays).
@@ -1319,6 +1348,7 @@ services:
     image: grafana/mimir:latest
     container_name: sso-mimir
     restart: unless-stopped
+    logging: *default-logging
     mem_limit: 640m
     mem_reservation: 384m
     command: ["-config.file=/etc/mimir/mimir.yaml"]
@@ -1331,6 +1361,7 @@ services:
     image: grafana/loki:latest
     container_name: sso-loki
     restart: unless-stopped
+    logging: *default-logging
     mem_limit: 512m
     mem_reservation: 256m
     command: ["-config.file=/etc/loki/loki-config.yaml"]
@@ -1343,6 +1374,7 @@ services:
     image: grafana/grafana:latest
     container_name: sso-grafana
     restart: unless-stopped
+    logging: *default-logging
     mem_limit: 300m
     mem_reservation: 192m
     ports:
@@ -1396,6 +1428,7 @@ services:
     image: clickhouse/clickhouse-server:24.8-alpine
     container_name: cdc-clickhouse
     restart: unless-stopped
+    logging: *default-logging
     environment:
       CLICKHOUSE_USER: ${CDC_CLICKHOUSE_USER:-default}
       CLICKHOUSE_PASSWORD: ${CDC_CLICKHOUSE_PASSWORD:-demopass}
@@ -1425,6 +1458,7 @@ services:
     image: ${IMAGE_PREFIX:-eurekatic}/cdc-capture:${IMAGE_TAG:-1.0.0-SNAPSHOT}
     container_name: cdc-capture
     restart: unless-stopped
+    <<: *java-defaults
     mem_limit: 640m
     mem_reservation: 384m
     depends_on:
@@ -1513,6 +1547,7 @@ services:
     image: ${IMAGE_PREFIX:-eurekatic}/cdc-worker:${IMAGE_TAG:-1.0.0-SNAPSHOT}
     container_name: cdc-worker
     restart: unless-stopped
+    <<: *java-defaults
     mem_limit: 768m
     mem_reservation: 512m
     depends_on:
@@ -1553,6 +1588,7 @@ services:
     image: dxflrs/garage:v1.0.1
     container_name: sso-garage
     restart: unless-stopped
+    logging: *default-logging
     volumes:
       - ./docker/garage/garage.toml:/etc/garage.toml:ro
       - garage-meta:/var/lib/garage/meta
@@ -1616,6 +1652,7 @@ services:
     image: ${IMAGE_PREFIX:-eurekatic}/file-service:${IMAGE_TAG:-1.0.0-SNAPSHOT}
     container_name: sso-file-service
     restart: unless-stopped
+    <<: *java-defaults
     depends_on:
       eurekaserver:
         condition: service_healthy
@@ -1718,6 +1755,7 @@ services:
     image: ${IMAGE_PREFIX:-eurekatic}/reporting-service:${IMAGE_TAG:-1.0.0-SNAPSHOT}
     container_name: sso-reporting-service
     restart: unless-stopped
+    <<: *java-defaults
     # PID 1 es el JVM crudo (sin tini/dumb-init), asi que no reapea hijos
     # huerfanos. El healthcheck de abajo forkea bash+grep cada intervalo;
     # si grep queda huerfano (carrera al cortar la sesion del exec antes
@@ -1783,6 +1821,7 @@ services:
     image: ${IMAGE_PREFIX:-eurekatic}/ai-control-service:${IMAGE_TAG:-1.0.0-SNAPSHOT}
     container_name: sso-ai-control-service
     restart: unless-stopped
+    <<: *java-defaults
     # tini como PID 1 para reapear los hijos del healthcheck (ver
     # reporting-service).
     init: true
