@@ -134,7 +134,7 @@ public class ProvisionerProperties {
     /** Límite de memoria del contenedor spawneado (HostConfig.Memory).
      *  Acepta bytes o sufijo k/m/g (con o sin "b"). Sin límite, un
      *  query-service desbocado se come el host. */
-    private String queryMemLimit = "512m";
+    private String queryMemLimit = "768m";
 
     /** Reserva blanda de memoria (HostConfig.MemoryReservation). */
     private String queryMemReservation = "256m";

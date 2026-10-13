@@ -55,7 +55,7 @@ docker:
   socket-path: ${DOCKER_SOCKET_PATH:/var/run/docker.sock}
   # Recursos y logs de cada query-service spawneado (HostConfig).
   # query-cpus vacío = sin límite de CPU.
-  query-mem-limit: ${PROVISIONER_QUERY_MEM_LIMIT:512m}
+  query-mem-limit: ${PROVISIONER_QUERY_MEM_LIMIT:768m}
   query-mem-reservation: ${PROVISIONER_QUERY_MEM_RESERVATION:256m}
   query-cpus: ${PROVISIONER_QUERY_CPUS:}
   log-max-size: ${DOCKER_LOG_MAX_SIZE:20m}

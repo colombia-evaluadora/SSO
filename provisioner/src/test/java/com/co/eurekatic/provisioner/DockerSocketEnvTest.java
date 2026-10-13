@@ -74,7 +74,7 @@ class DockerSocketEnvTest {
         ProvisionerProperties props = new ProvisionerProperties();
         Map<String, Object> host = new DockerSocket(props, Map.of()).buildHostConfig();
 
-        assertThat(host).containsEntry("Memory", 512L * 1024 * 1024)
+        assertThat(host).containsEntry("Memory", 768L * 1024 * 1024)
                 .containsEntry("MemoryReservation", 256L * 1024 * 1024)
                 .doesNotContainKey("NanoCpus");
         assertThat(host.get("LogConfig")).isEqualTo(Map.of(

@@ -48,7 +48,7 @@ public class DockerSocket {
      *  No se inventan defaults aquí: lo no definido cae al
      *  application.yml del query-service. */
     static final List<String> PASSTHROUGH_ENV = List.of(
-            "QUERY_BULKHEAD_MAX_CONCURRENT", "QUERY_RATE_LIMIT_RPS",
+            "QUERY_BULKHEAD_MAX_CONCURRENT", "QUERY_BULKHEAD_MAX_WAIT", "QUERY_RATE_LIMIT_RPS",
             "QUERY_RATE_LIMIT_WINDOW", "QUERY_TIMEOUT_SECONDS",
             "QUERY_REPORT_TIMEOUT_SECONDS", "QUERY_LONG_PATH_PATTERN", "QUERY_MAX_ROWS",
             "QUERY_DS_CONNECTION_TIMEOUT_MS", "QUERY_DS_STATEMENT_TIMEOUT_MS",
