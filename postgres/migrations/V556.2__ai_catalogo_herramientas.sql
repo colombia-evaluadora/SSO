@@ -254,6 +254,41 @@ ON CONFLICT (codigo) WHERE active = TRUE DO UPDATE SET
     modified_at           = CURRENT_TIMESTAMP;
 
 -- ---------------------------------------------------------------------------
+-- 2b. obligatorio: lo que la funcion destino exige de verdad (columna NOT NULL sin
+--     default que el INSERT llena, o RAISE si IS NULL). Los PARAM.* son siempre
+--     obligatorios. Va despues del upsert porque este reescribe parametros.
+--     Observar: OBSERVACION es obligatoria solo si no hay evidencias (no se marca).
+-- ---------------------------------------------------------------------------
+UPDATE ai.herramienta h
+   SET parametros = h.parametros || COALESCE(
+           (SELECT jsonb_object_agg(e.key, e.value || '{"obligatorio": true}'::jsonb)
+              FROM jsonb_each(h.parametros) e
+             WHERE e.key LIKE 'PARAM.%'), '{}'::jsonb)
+ WHERE h.active = TRUE
+   AND h.parametros::text LIKE '%"PARAM.%';
+
+UPDATE ai.herramienta h
+   SET parametros = h.parametros || COALESCE((
+         SELECT jsonb_object_agg(v.param, (h.parametros -> v.param) || '{"obligatorio": true}'::jsonb)
+           FROM (VALUES
+    ('crear_actividad_planeador', 'BODY.TITULO'),
+    ('crear_actividad_planeador', 'BODY.FK_TASIGNATURA'),
+    ('crear_actividad_planeador', 'BODY.FK_TLV_TIPO_ACTIVIDAD'),
+    ('crear_actividad_planeador', 'BODY.FK_TLV_JERARQUIA'),
+    ('crear_unidad_planeador', 'BODY.NOMBRE'),
+    ('crear_unidad_planeador', 'BODY.FK_TASIGNATURA'),
+    ('crear_unidad_planeador', 'BODY.FK_TGRADO'),
+    ('crear_unidad_planeador', 'BODY.FK_TFUNCIONARIO'),
+    ('ponderar_actividad_unidad', 'BODY.PONDERACION'),
+    ('vincular_enunciado_unidad', 'BODY.FK_REFERENTE_ENUNCIADO'),
+    ('vincular_criterio_actividad', 'BODY.FK_TCRITERIO_UNIDAD'),
+    ('vincular_evidencia_actividad', 'BODY.FK_REFERENTE_ENUNCIADO'),
+    ('calificar_estudiante_actividad', 'BODY.CALIFICACION')
+  ) AS v (codigo, param)
+          WHERE v.codigo = h.codigo AND h.parametros ? v.param), '{}'::jsonb)
+ WHERE h.active = TRUE;
+
+-- ---------------------------------------------------------------------------
 -- 3. ruta_ui: una fila por menu. Enriquece TMENU; la URL sale de academico_test.tmenu.
 -- ---------------------------------------------------------------------------
 INSERT INTO ai.ruta_ui (codigo, menu_codigo, descripcion, sinonimos, created_by)

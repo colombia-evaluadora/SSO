@@ -1,31 +1,36 @@
--- V556.1 -- ai.fn_herramienta_catalogo_interno: catalogo que el agente carga al arrancar
--- Que hace: devuelve cada herramienta activa con su ruta de eval-col (por uuid y
---   microservicio), sus restricciones de query_param_constraint y los roles de
---   role_query. Sin gate: no es endpoint; la autoridad es el gate de cada ruta.
--- Por que aqui: el servicio construye sus tools desde esta fuente y no desde
---   public.query directo, para que la allowlist de ai.herramienta sea la unica entrada.
--- Depende de: V556 (ai.herramienta), public.query, public.query_param_constraint, public.role_query.
+-- V556.1 -- Utilidades del agente: catalogo de herramientas y menus del usuario
+-- Que hace: ai.fn_herramienta_catalogo_interno devuelve cada herramienta activa con su
+--   ruta de eval-col (uuid y microservicio), restricciones y roles. ai.fn_menus_usuario_interno
+--   devuelve los permisos por menu del usuario reutilizando academico_test.fn_usuario_permisos_menu.
+-- Por que aqui: el servicio construye sus tools desde la allowlist ai.herramienta; los menus
+--   se filtran en el agente solo como UX. Sin gate: la autoridad es el gate de cada ruta.
+-- Depende de: V556 (ai.herramienta), V303 (fn_usuario_permisos_menu), V299 (fn_get_academico_usuario_id).
+
+-- La firma cambia (columna id nueva): CREATE OR REPLACE no puede cambiar el RETURNS TABLE.
+DROP FUNCTION IF EXISTS ai.fn_herramienta_catalogo_interno();
 
 CREATE OR REPLACE FUNCTION ai.fn_herramienta_catalogo_interno()
 RETURNS TABLE (
-    codigo               VARCHAR,
-    tipo                 VARCHAR,
-    descripcion_modelo   TEXT,
-    parametros           JSONB,
+    id                    BIGINT,
+    codigo                VARCHAR,
+    tipo                  VARCHAR,
+    descripcion_modelo    TEXT,
+    parametros            JSONB,
     requiere_confirmacion BOOLEAN,
-    ejemplos             JSONB,
-    version              INTEGER,
-    menu_codigo          VARCHAR,
-    path_template        VARCHAR,
-    http_method          VARCHAR,
-    param_types          JSONB,
-    restricciones        JSONB,
-    roles                TEXT[]
+    ejemplos              JSONB,
+    version               INTEGER,
+    menu_codigo           VARCHAR,
+    path_template         VARCHAR,
+    http_method           VARCHAR,
+    param_types           JSONB,
+    restricciones         JSONB,
+    roles                 TEXT[]
 )
 LANGUAGE sql
 STABLE
 AS $$
-    SELECT h.codigo::VARCHAR,
+    SELECT h.id,
+           h.codigo::VARCHAR,
            h.tipo::VARCHAR,
            h.descripcion_modelo,
            h.parametros,
@@ -56,3 +61,26 @@ $$;
 
 COMMENT ON FUNCTION ai.fn_herramienta_catalogo_interno() IS
     'INTERNO: catalogo de herramientas activas del agente para el arranque del servicio. Une ai.herramienta con public.query por uuid y eval-col; devuelve restricciones y roles. Sin gate: la autoridad es el gate de cada ruta. Lo lee solo ai-control-service.';
+
+-- p_user_id es public.users.id (claim uid del JWT). Sin usuario academico, el puente devuelve NULL.
+CREATE OR REPLACE FUNCTION ai.fn_menus_usuario_interno(p_user_id BIGINT)
+RETURNS TABLE (
+    codigo         VARCHAR,
+    puede_ver      BOOLEAN,
+    puede_crear    BOOLEAN,
+    puede_editar   BOOLEAN,
+    puede_eliminar BOOLEAN
+)
+LANGUAGE sql
+STABLE
+AS $$
+    SELECT p.codigo::VARCHAR,
+           p.puede_ver,
+           p.puede_crear,
+           p.puede_editar,
+           p.puede_eliminar
+      FROM academico_test.fn_usuario_permisos_menu(public.fn_get_academico_usuario_id(p_user_id)) p;
+$$;
+
+COMMENT ON FUNCTION ai.fn_menus_usuario_interno(BIGINT) IS
+    'INTERNO: permisos por menu (ver, crear, editar, eliminar) del usuario public.users p_user_id, reutilizando academico_test.fn_usuario_permisos_menu. El filtro por menus del agente es UX; la autoridad es el gate de cada ruta.';

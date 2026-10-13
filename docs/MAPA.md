@@ -1,7 +1,7 @@
 # Mapa del dominio
 
 **Generado** por `python scripts/migration-analysis mapa` — no editar a mano.
-Estado: 495 migraciones (V1–V556.3), 1322 funciones vivas, 49 endpoints vivos. Ultima generacion: 2026-10-13.
+Estado: 495 migraciones (V1–V556.3), 1323 funciones vivas, 49 endpoints vivos. Ultima generacion: 2026-10-13.
 
 Para una **funcion**, la migracion dueña es la que hay que editar: es su ultima escritura viva, no la que la creo.
 
@@ -28,7 +28,7 @@ Las secciones son las categorias funcionales de `scripts/migration-analysis/anal
 - [Funcionarios](#funcionarios) — 40 funcion(es), 2 endpoint(s)
 - [Sedes](#sedes) — 29 funcion(es), 0 endpoint(s)
 - [Establecimiento](#establecimiento) — 14 funcion(es), 0 endpoint(s)
-- [Menús](#menus) — 27 funcion(es), 1 endpoint(s)
+- [Menús](#menus) — 28 funcion(es), 1 endpoint(s)
 - [Permisos](#permisos) — 23 funcion(es), 0 endpoint(s)
 - [Estructura académica](#academico) — 171 funcion(es), 0 endpoint(s)
 - [Plataforma SSO](#plataforma) — 54 funcion(es), 0 endpoint(s)
@@ -1286,8 +1286,9 @@ Las secciones son las categorias funcionales de `scripts/migration-analysis/anal
 | `academico_test.fn_upsert_menu` | 11 | V113 | V126 |
 | `academico_test.fn_upsert_menu_interno` | 10 | V113 | — |
 | `academico_test.fn_usu_actualizar` | 19 | V179 | — |
-| `academico_test.fn_usuario_permisos_menu` | 1 | V303 | V29, V127 |
+| `academico_test.fn_usuario_permisos_menu` | 1 | V303 | V29, V127, V556.1 |
 | `academico_test.fn_usuario_puede_en_menu` | 3 | V29 | V40, V43.3, V51, V52, V53, V116… |
+| `ai.fn_menus_usuario_interno` | 1 | V556.1 | — |
 
 <a id="permisos"></a>
 
