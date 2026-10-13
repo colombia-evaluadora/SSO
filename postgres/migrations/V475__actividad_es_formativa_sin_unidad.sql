@@ -2,10 +2,9 @@
 -- V475 - El referente decide si la actividad lleva nota, tambien sin unidad
 -- (desde V218 una actividad puede nacer sin TUNIDAD). fn_actividad_contexto_
 -- evaluativo y fn_actividad_es_formativa viven en V243; aqui solo se corrige
--- el detail de los endpoints que anunciaban la decision vieja.
--- El detail de /planeador/actividades/configuracion se construye en orden
--- V459 (texto) -> V475 (append): se re-aplican juntas.
--- Depende de: V243 (funciones), V450, V459.
+-- el detail de los endpoints que anunciaban la decision vieja. Pantalla de
+-- edicion y /planeador/actividades/configuracion ya traen este texto en V496.4.
+-- Depende de: V243 (funciones), V450, V246.
 -- ===========================================================================
 
 SET search_path TO academico_test, public;
@@ -16,7 +15,7 @@ UPDATE public.query q
   FROM public.microservice m
  WHERE m.id_microservice = q.microservice_id
    AND m.serviceid       = 'eval-col'
-   AND q.path_template   IN ('/planeador/actividades/:ID', '/planeador/actividades/:ID/pantalla-edicion')
+   AND q.path_template   = '/planeador/actividades/:ID'
    AND q.http_method     = 'GET'
    AND q.detail NOT LIKE '%V475 --%';
 
@@ -27,14 +26,5 @@ UPDATE public.query q
  WHERE m.id_microservice = q.microservice_id
    AND m.serviceid       = 'eval-col'
    AND q.path_template   = '/planeador/actividades/:ID/configuracion'
-   AND q.http_method     = 'GET'
-   AND q.detail NOT LIKE '%V476 --%';
-
-UPDATE public.query q
-   SET detail = q.detail || ' V476 -- La respuesta gana esFormativo (boolean) y esSumativoSugerido (S|N) al lado de esSumativoConsultado: el primero es lo que el usuario pregunto, estos dos son lo que el referente DICTA. Con referente Formativo (y en Preescolar, formativo por definicion) esSumativoSugerido = N: es lo que el front debe traer marcado y lo que POST /planeador/actividades guarda si no envia es_evaluativa. Enviar es_evaluativa = S contra un referente Formativo se rechaza con 422 (22023), venga o no la actividad con unidad.'
-  FROM public.microservice m
- WHERE m.id_microservice = q.microservice_id
-   AND m.serviceid       = 'eval-col'
-   AND q.path_template   = '/planeador/actividades/configuracion'
    AND q.http_method     = 'GET'
    AND q.detail NOT LIKE '%V476 --%';
