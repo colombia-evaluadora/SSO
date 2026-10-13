@@ -1541,8 +1541,8 @@ Las secciones son las categorias funcionales de `scripts/migration-analysis/anal
 | `academico_test.fn_sync_users_to_tusuario` | 0 | V215 | — |
 | `academico_test.fn_tlv_estado_resultado_pk` | 1 | V496.5 | V496.6 |
 | `academico_test.fn_tlv_momento_registro_pk` | 1 | V496.5 | V496.6 |
-| `academico_test.fn_tlv_solicitud_estado_pk` | 1 | V496.18 | V469.3, V496.19, V496.23, V536, V537 |
-| `academico_test.fn_tlv_solicitud_tipo_pk` | 1 | V496.18 | V469.3, V496.19, V496.23, V536, V537 |
+| `academico_test.fn_tlv_solicitud_estado_pk` | 1 | V496.18 | V469.3, V496.6, V496.19, V496.23, V536, V537 |
+| `academico_test.fn_tlv_solicitud_tipo_pk` | 1 | V496.18 | V469.3, V496.6, V496.19, V496.23, V536, V537 |
 | `academico_test.fn_usu_buscar_por_documento` | 3 | V51 | V93 |
 | `academico_test.fn_usu_crear` | 15 | V51 | — |
 | `academico_test.fn_usuario_coincide_busqueda` | 6 | V116 | — |
