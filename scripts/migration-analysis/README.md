@@ -227,10 +227,24 @@ La pestaña **Autoría** dice de quién es cada migración —quien hizo el **pr
 commit que la creó— y quién la tocó después, en orden, con `+`/`−` líneas por
 commit. Distingue tres aportes que no conviene mezclar: **crear**, **editar la
 de otro** (lo que obliga a `flyway repair` donde ya se había aplicado) y
-**volver sobre la propia**. Al elegir una persona se ven sus aportes: qué creó,
-en qué estado quedó (veredictos), qué objetos, su % de comentario, su actividad
-por mes y la lista de lo que editó de otros. El selector de la pestaña
-Migraciones filtra por persona.
+**volver sobre la propia**. El selector de la pestaña Migraciones filtra por persona.
+
+**Código de hoy por persona.** `historia.blame()` corre `git blame -w` sobre
+cada migración (cacheado por fichero en `%TEMP%/sso-blame-cache.json`, con el
+blob de HEAD y el contenido como clave: 14 s en frío, nada si no cambió) y lo
+guarda en `authors.blame` por tramos. La vista lo cruza línea a línea con el
+mapa de líneas: cuánto de lo que escribió cada persona sigue **vigente**, cuánto
+quedó **sin efecto** (recortable o conservado) y cuánto es **comentario**, por
+migración y por categoría. Así se ve dónde está su código muerto y qué
+migraciones comenta de más, cosa que los `+`/`−` del `git log` no dicen (una
+reescritura entera cuenta dos veces). Los hallazgos del lint
+(`lint.resumen()["todos"]`) se atribuyen a quien escribió su línea; los de
+fichero (cabecera, % de comentario), a quien creó la migración.
+
+La pestaña muestra el código de hoy del equipo por estado, una tarjeta por
+persona, una línea de tiempo con un punto por commit y, para la persona elegida,
+sus funcionalidades, commits por semana, código sin efecto, comentario, lint,
+con quién comparte migraciones y su historial de commits.
 
 Las identidades se unifican con `.mailmap`, en la raíz del repo: las mismas
 cinco personas firmaron con ocho pares nombre/correo distintos, y sin eso
