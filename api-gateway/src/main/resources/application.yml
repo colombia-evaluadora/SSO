@@ -65,12 +65,15 @@ spring:
           globalcors:
             add-to-simple-url-handler-mapping: false
           # Timeouts del cliente HTTP hacia los servicios. Sin ellos un
-          # backend colgado retiene la conexion indefinidamente. Los
-          # endpoints lentos (IA, reportes, subidas) los amplian por ruta
-          # con `metadata.response-timeout` (milisegundos).
+          # backend colgado retiene la conexion indefinidamente. El global
+          # es holgado (180s) porque las rutas de query-service salen del
+          # catalogo sin metadata y sus exportaciones/importaciones en lote
+          # tardan hasta 170s; el tope fino lo pone query-service por
+          # sentencia. Reportes y subidas lo amplian por ruta con
+          # `metadata.response-timeout` (milisegundos).
           httpclient:
             connect-timeout: ${GATEWAY_CONNECT_TIMEOUT_MS:2000}
-            response-timeout: ${GATEWAY_RESPONSE_TIMEOUT:15s}
+            response-timeout: ${GATEWAY_RESPONSE_TIMEOUT:180s}
             pool:
               max-idle-time: ${GATEWAY_POOL_MAX_IDLE_TIME:30s}
           # Static routes. The dynamic discovery locator (see
@@ -319,7 +322,8 @@ spring:
             - id: api-reporting-service
               uri: lb://reporting-service
               metadata:
-                response-timeout: ${GATEWAY_REPORTING_RESPONSE_TIMEOUT_MS:190000}
+                # consulta (hasta 170s) + render del PDF/Excel de 50k filas
+                response-timeout: ${GATEWAY_REPORTING_RESPONSE_TIMEOUT_MS:300000}
               predicates:
                 - Path=/api/reportes/**
               filters:
