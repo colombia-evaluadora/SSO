@@ -1,12 +1,12 @@
 package com.co.eurekatic.aicontrol.config;
 
+import com.co.eurekatic.aicontrol.llm.ModeloInvoker;
 import io.github.resilience4j.bulkhead.Bulkhead;
 import io.github.resilience4j.bulkhead.BulkheadConfig;
 import io.github.resilience4j.circuitbreaker.CircuitBreaker;
 import io.github.resilience4j.circuitbreaker.CircuitBreakerConfig;
 import io.github.resilience4j.ratelimiter.RateLimiter;
 import io.github.resilience4j.ratelimiter.RateLimiterConfig;
-import com.co.eurekatic.aicontrol.llm.ModeloInvoker;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -35,6 +35,9 @@ import java.time.Duration;
 @Configuration
 public class ResilienceConfig {
 
+    private static final int VENTANA_CIRCUITO = 10;
+    private static final int LLAMADAS_MINIMAS_CIRCUITO = 5;
+
     @Bean
     public RateLimiter modeloRateLimiter(AiProperties props) {
         return RateLimiter.of("modelo", RateLimiterConfig.custom()
@@ -61,7 +64,7 @@ public class ResilienceConfig {
     @Bean
     public Bulkhead razonadorBulkhead(AgenteProperties props) {
         return Bulkhead.of("razonador", BulkheadConfig.custom()
-                .maxConcurrentCalls(props.maxConcurrentRazonador())
+                .maxConcurrentCalls(props.limites().maxConcurrentRazonador())
                 .maxWaitDuration(Duration.ZERO)
                 .build());
     }
@@ -82,8 +85,8 @@ public class ResilienceConfig {
     public CircuitBreaker modeloCircuitBreaker(AiProperties props) {
         return CircuitBreaker.of("modelo", CircuitBreakerConfig.custom()
                 .failureRateThreshold(props.circuitFailureRate())
-                .slidingWindowSize(10)
-                .minimumNumberOfCalls(5)
+                .slidingWindowSize(VENTANA_CIRCUITO)
+                .minimumNumberOfCalls(LLAMADAS_MINIMAS_CIRCUITO)
                 .waitDurationInOpenState(props.circuitOpenWait())
                 // Un 4xx nuestro (JSON invalido del modelo, 429 propio) no es
                 // una caida del proveedor y no debe abrir el circuito.

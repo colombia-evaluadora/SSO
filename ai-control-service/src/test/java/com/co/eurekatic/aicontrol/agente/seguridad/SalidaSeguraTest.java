@@ -29,7 +29,7 @@ class SalidaSeguraTest {
                 "Tu sesión: eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjMifQ.SflKxwRJSMeKKF2QT4fw en curso");
 
         assertThat(r.texto()).doesNotContain("eyJ").contains("[REDACTADO]").contains("en curso");
-        assertThat(r.motivos()).containsExactly("TOKEN_JWT");
+        assertThat(codigos(r)).containsExactly("TOKEN_JWT");
         assertThat(r.redactado()).isTrue();
         assertThat(r.riesgo()).isEqualTo(Riesgo.MEDIO);
     }
@@ -39,7 +39,7 @@ class SalidaSeguraTest {
         ResultadoSalida r = salida.revisar("Cabecera: Authorization: Bearer abc.def-ghi_123");
 
         assertThat(r.texto()).doesNotContain("abc.def").contains("[REDACTADO]");
-        assertThat(r.motivos()).containsExactly("TOKEN_BEARER");
+        assertThat(codigos(r)).containsExactly("TOKEN_BEARER");
     }
 
     @Test
@@ -47,7 +47,7 @@ class SalidaSeguraTest {
         ResultadoSalida r = salida.revisar("La clave es sk-abcdefghijklmnop1234 para el proveedor");
 
         assertThat(r.texto()).doesNotContain("sk-abc").contains("[REDACTADO]");
-        assertThat(r.motivos()).containsExactly("CLAVE_API");
+        assertThat(codigos(r)).containsExactly("CLAVE_API");
     }
 
     @Test
@@ -56,7 +56,7 @@ class SalidaSeguraTest {
 
         assertThat(r.texto()).isEqualTo(SalidaSegura.MENSAJE_BLOQUEO).doesNotContain(SalidaSegura.CANARIO);
         assertThat(r.redactado()).isTrue();
-        assertThat(r.motivos()).containsExactly("FUGA_PROMPT");
+        assertThat(codigos(r)).containsExactly("FUGA_PROMPT");
         assertThat(r.riesgo()).isEqualTo(Riesgo.ALTO);
     }
 
@@ -80,7 +80,7 @@ class SalidaSeguraTest {
         ResultadoSalida r = salida.revisar("Escribe a juan.perez@colegio.edu.co o llama al 300 123 4567.");
 
         assertThat(r.texto()).contains("[CORREO]", "[TELEFONO]").doesNotContain("@", "4567");
-        assertThat(r.motivos()).containsExactly("PII_CORREO", "PII_TELEFONO");
+        assertThat(codigos(r)).containsExactly("PII_CORREO", "PII_TELEFONO");
     }
 
     @Test
@@ -89,5 +89,9 @@ class SalidaSeguraTest {
 
         assertThat(r.redactado()).isFalse();
         assertThat(r.texto()).isEqualTo("Calificación 4.5 para 5A, con 3 actividades y 2 notas.");
+    }
+
+    private static java.util.List<String> codigos(ResultadoSalida r) {
+        return r.motivos().stream().map(Motivo::codigo).toList();
     }
 }

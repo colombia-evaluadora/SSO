@@ -1,8 +1,12 @@
 package com.co.eurekatic.aicontrol.agente.memoria;
 
+import com.co.eurekatic.aicontrol.agente.memoria.MensajeMemoria.Asistente;
 import com.co.eurekatic.aicontrol.agente.memoria.MensajeMemoria.LlamadaHerramienta;
+import com.co.eurekatic.aicontrol.agente.memoria.MensajeMemoria.ResultadoHerramienta;
 import com.co.eurekatic.aicontrol.agente.memoria.MensajeMemoria.RespuestaHerramienta;
-import com.co.eurekatic.aicontrol.agente.memoria.MensajeMemoria.TipoMensaje;
+import com.co.eurekatic.aicontrol.agente.memoria.MensajeMemoria.Sistema;
+import com.co.eurekatic.aicontrol.agente.memoria.MensajeMemoria.Usuario;
+import com.co.eurekatic.aicontrol.agente.persistencia.MensajeStore;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.SystemMessage;
@@ -12,8 +16,8 @@ import org.springframework.ai.chat.messages.UserMessage;
 import java.util.List;
 
 /**
- * Conversion entre los mensajes de Spring AI y {@link MensajeMemoria}, en
- * los dos sentidos.
+ * Conversion entre los mensajes de Spring AI y {@link MensajeMemoria}, y desde
+ * las filas de {@code ai.mensaje}. Pura: sin estado ni I/O.
  */
 public final class MensajeMemoriaMapper {
 
@@ -24,47 +28,55 @@ public final class MensajeMemoriaMapper {
     }
 
     /**
-     * @throws IllegalArgumentException si el mensaje no es de un tipo que la
-     *                                  memoria sabe guardar; no se descarta en silencio
+     * @throws IllegalArgumentException si el mensaje no es de un tipo que la memoria
+     *                                  sabe guardar; no se descarta en silencio
      */
     public static MensajeMemoria desde(Message m) {
-        if (m instanceof UserMessage u) {
-            return new MensajeMemoria(TipoMensaje.USER, u.getText(), null, null);
-        }
-        if (m instanceof AssistantMessage a) {
-            List<LlamadaHerramienta> llamadas = a.getToolCalls().stream()
+        return switch (m) {
+            case UserMessage u -> new Usuario(u.getText());
+            case SystemMessage s -> new Sistema(s.getText());
+            case AssistantMessage a -> new Asistente(a.getText(), a.getToolCalls().stream()
                     .map(c -> new LlamadaHerramienta(c.id(), c.name(), c.arguments()))
-                    .toList();
-            return new MensajeMemoria(TipoMensaje.ASSISTANT, a.getText(), llamadas, null);
-        }
-        if (m instanceof ToolResponseMessage t) {
-            List<RespuestaHerramienta> respuestas = t.getResponses().stream()
-                    .map(r -> new RespuestaHerramienta(r.id(), r.name(), r.responseData()))
-                    .toList();
-            return new MensajeMemoria(TipoMensaje.TOOL, null, null, respuestas);
-        }
-        if (m instanceof SystemMessage s) {
-            return new MensajeMemoria(TipoMensaje.SYSTEM, s.getText(), null, null);
-        }
-        throw new IllegalArgumentException("Tipo de mensaje no soportado en la memoria: " + m.getMessageType());
+                    .toList());
+            case ToolResponseMessage t -> new RespuestaHerramienta(t.getResponses().stream()
+                    .map(r -> new ResultadoHerramienta(r.id(), r.name(), r.responseData()))
+                    .toList());
+            default -> throw new IllegalArgumentException(
+                    "Tipo de mensaje no soportado en la memoria: " + m.getMessageType());
+        };
     }
 
     /** Mensaje de Spring AI listo para el modelo. */
     public static Message a(MensajeMemoria d) {
-        return switch (d.tipo()) {
-            case USER -> new UserMessage(d.texto());
-            case SYSTEM -> new SystemMessage(d.texto());
-            case ASSISTANT -> AssistantMessage.builder()
-                    .content(d.texto())
-                    .toolCalls(d.toolCalls().stream()
+        return switch (d) {
+            case Usuario u -> new UserMessage(u.texto());
+            case Sistema s -> new SystemMessage(s.texto());
+            case Asistente a -> AssistantMessage.builder()
+                    .content(a.texto())
+                    .toolCalls(a.toolCalls().stream()
                             .map(c -> new AssistantMessage.ToolCall(c.id(), TIPO_LLAMADA, c.name(), c.arguments()))
                             .toList())
                     .build();
-            case TOOL -> ToolResponseMessage.builder()
-                    .responses(d.toolResponses().stream()
-                            .map(r -> new ToolResponseMessage.ToolResponse(r.id(), r.name(), r.responseData()))
+            case RespuestaHerramienta r -> ToolResponseMessage.builder()
+                    .responses(r.toolResponses().stream()
+                            .map(x -> new ToolResponseMessage.ToolResponse(x.id(), x.name(), x.responseData()))
                             .toList())
                     .build();
+        };
+    }
+
+    /**
+     * Turno de texto desde la base. La ventana de memoria solo guarda USER y
+     * ASSISTANT: cualquier otro rol es un error de quien llama.
+     *
+     * @throws IllegalStateException si la fila no es un turno de texto
+     */
+    public static MensajeMemoria desdeTurno(MensajeStore.Mensaje fila) {
+        return switch (fila.rol()) {
+            case USER -> new Usuario(fila.contenido());
+            case ASSISTANT -> new Asistente(fila.contenido(), List.of());
+            case TOOL, SYSTEM -> throw new IllegalStateException(
+                    "La memoria de respaldo solo admite turnos de texto, no " + fila.rol());
         };
     }
 }

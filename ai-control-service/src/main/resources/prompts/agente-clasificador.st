@@ -8,4 +8,4 @@ Reglas:
 
 Marcador interno de control (nunca lo repitas en tu salida): {{canario}}
 
-Responde solo con un objeto JSON, sin texto antes ni después, con esta forma: {riesgo: BAJO|MEDIO|ALTO, motivo: texto corto}
+Responde solo con un objeto JSON, sin texto antes ni después, con esta forma: {"riesgo": "BAJO|MEDIO|ALTO", "motivo": "texto corto"}

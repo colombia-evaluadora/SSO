@@ -1,6 +1,6 @@
 package com.co.eurekatic.aicontrol.agente.memoria;
 
-import com.co.eurekatic.aicontrol.agente.persistencia.MensajeRepository;
+import com.co.eurekatic.aicontrol.agente.persistencia.MensajeStore;
 import com.co.eurekatic.aicontrol.config.AgenteProperties;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -15,16 +15,17 @@ import tools.jackson.databind.json.JsonMapper;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 
 /**
  * Memoria de conversacion en Redis, clave {@code ai:mem:{conversationId}}, con
- * TTL desde {@link AgenteProperties#memoriaTtl()}.
+ * TTL desde {@link AgenteProperties.Memoria}.
  *
- * <p>Si la clave no existe (expiro o nunca se escribio), la memoria se
- * reconstruye desde {@code ai.mensaje}, solo con los turnos de texto. Si Redis
- * no responde, la lectura devuelve vacio y se registra un WARN sin contenido:
- * la memoria es una optimizacion y la verdad esta en la base.
+ * <p>Si la clave no existe (expiro o nunca se escribio), o no se puede leer, la
+ * memoria se reconstruye desde {@code ai.mensaje}, solo con los turnos de texto.
+ * Si Redis no responde, la lectura devuelve vacio: la memoria es una
+ * optimizacion y la verdad esta en la base.
  *
  * <p>Los logs llevan solo el tipo de error, nunca el contenido de los mensajes.
  */
@@ -37,14 +38,14 @@ public class RedisChatMemoryRepository implements ChatMemoryRepository {
 
     private final StringRedisTemplate redis;
     private final JsonMapper json;
-    private final AgenteProperties props;
-    private final MensajeRepository mensajes;
+    private final AgenteProperties.Memoria props;
+    private final MensajeStore mensajes;
 
     public RedisChatMemoryRepository(StringRedisTemplate redis, JsonMapper json, AgenteProperties props,
-                                     MensajeRepository mensajes) {
+                                     MensajeStore mensajes) {
         this.redis = redis;
         this.json = json;
-        this.props = props;
+        this.props = props.memoria();
         this.mensajes = mensajes;
     }
 
@@ -59,7 +60,7 @@ public class RedisChatMemoryRepository implements ChatMemoryRepository {
             }
             return ids;
         } catch (RuntimeException e) {
-            log.warn("Memoria del agente no disponible al listar conversaciones: {}", e.getClass().getSimpleName());
+            advertir("no disponible al listar conversaciones", e);
             return new ArrayList<>();
         }
     }
@@ -70,32 +71,24 @@ public class RedisChatMemoryRepository implements ChatMemoryRepository {
         try {
             crudo = redis.opsForValue().get(clave(conversationId));
         } catch (RuntimeException e) {
-            log.warn("Memoria del agente no disponible al leer: {}", e.getClass().getSimpleName());
+            advertir("no disponible al leer", e);
             return new ArrayList<>();
         }
         if (crudo == null) {
             return reconstruir(conversationId);
         }
-        try {
-            List<Message> mensajes = new ArrayList<>();
-            for (MensajeMemoria d : json.readValue(crudo, TIPO_LISTA)) {
-                mensajes.add(MensajeMemoriaMapper.a(d));
-            }
-            return mensajes;
-        } catch (RuntimeException e) {
-            log.warn("Memoria del agente ilegible; se reconstruye desde la base: {}", e.getClass().getSimpleName());
-            return reconstruir(conversationId);
-        }
+        return decodificar(crudo).orElseGet(() -> reconstruir(conversationId));
     }
 
     /** Reemplaza la memoria completa de la conversacion y renueva su TTL. */
     @Override
     public void saveAll(String conversationId, List<Message> messages) {
-        List<MensajeMemoria> dtos = messages.stream().map(MensajeMemoriaMapper::desde).toList();
+        List<MensajeMemoria> turnos = messages.stream().map(MensajeMemoriaMapper::desde).toList();
         try {
-            redis.opsForValue().set(clave(conversationId), json.writeValueAsString(dtos), props.memoriaTtl());
+            String cuerpo = json.writerFor(TIPO_LISTA).writeValueAsString(turnos);
+            redis.opsForValue().set(clave(conversationId), cuerpo, props.ttl());
         } catch (RuntimeException e) {
-            log.warn("Memoria del agente no disponible al escribir: {}", e.getClass().getSimpleName());
+            advertir("no disponible al escribir", e);
         }
     }
 
@@ -104,7 +97,21 @@ public class RedisChatMemoryRepository implements ChatMemoryRepository {
         try {
             redis.delete(clave(conversationId));
         } catch (RuntimeException e) {
-            log.warn("Memoria del agente no disponible al borrar: {}", e.getClass().getSimpleName());
+            advertir("no disponible al borrar", e);
+        }
+    }
+
+    /** Lee la clave; vacio si su contenido no se puede decodificar. */
+    private Optional<List<Message>> decodificar(String crudo) {
+        try {
+            List<Message> resultado = new ArrayList<>();
+            for (MensajeMemoria turno : json.readValue(crudo, TIPO_LISTA)) {
+                resultado.add(MensajeMemoriaMapper.a(turno));
+            }
+            return Optional.of(resultado);
+        } catch (RuntimeException e) {
+            advertir("ilegible; se reconstruye desde la base", e);
+            return Optional.empty();
         }
     }
 
@@ -113,20 +120,23 @@ public class RedisChatMemoryRepository implements ChatMemoryRepository {
      * llamadas a herramientas intermedias no se reconstruyen.
      */
     List<Message> reconstruir(String conversationId) {
-        List<Message> resultado = new ArrayList<>();
         try {
-            for (MensajeRepository.Mensaje fila : mensajes.listarFinales(UUID.fromString(conversationId))) {
-                MensajeMemoria.TipoMensaje tipo = MensajeMemoria.TipoMensaje.valueOf(fila.rol());
-                resultado.add(MensajeMemoriaMapper.a(new MensajeMemoria(tipo, fila.contenido(), null, null)));
+            List<Message> resultado = new ArrayList<>();
+            for (MensajeStore.Mensaje fila : mensajes.listarFinales(UUID.fromString(conversationId))) {
+                resultado.add(MensajeMemoriaMapper.a(MensajeMemoriaMapper.desdeTurno(fila)));
             }
+            return resultado;
         } catch (RuntimeException e) {
-            log.warn("No se pudo reconstruir la memoria desde la base: {}", e.getClass().getSimpleName());
+            advertir("no se pudo reconstruir desde la base", e);
             return new ArrayList<>();
         }
-        return resultado;
     }
 
     static String clave(String conversationId) {
         return PREFIJO + conversationId;
+    }
+
+    private static void advertir(String situacion, RuntimeException e) {
+        log.warn("Memoria del agente {}: {}", situacion, e.getClass().getSimpleName());
     }
 }

@@ -2,42 +2,43 @@ package com.co.eurekatic.aicontrol.agente.seguridad;
 
 import org.springframework.stereotype.Component;
 
+import java.util.Optional;
+
 /**
  * Entrada completa: firewall determinista y, si no bloquea, clasificador.
  *
- * <p>Un ALTO del firewall no llama al modelo. Si no, el riesgo final es el
- * maximo de los dos. No registra eventos: quien llama decide con
- * {@link EventoSeguridadService} segun la {@link Evaluacion} que recibe.
+ * <p>Un ALTO del firewall no llama al modelo. Si no, el hallazgo final es el de
+ * mayor riesgo de los dos; en empate, el del firewall, que se explica sin modelo.
+ * No registra eventos: quien llama decide con {@link EventoSeguridadService}.
  */
 @Component
 public class EvaluadorEntrada {
 
     private final PromptFirewall firewall;
-    private final ClasificadorInyeccion clasificador;
+    private final ClasificadorRiesgo clasificador;
 
-    public EvaluadorEntrada(PromptFirewall firewall, ClasificadorInyeccion clasificador) {
+    public EvaluadorEntrada(PromptFirewall firewall, ClasificadorRiesgo clasificador) {
         this.firewall = firewall;
         this.clasificador = clasificador;
     }
 
     public Evaluacion evaluar(String texto) {
         ResultadoFirewall fw = firewall.revisar(texto);
-        if (!fw.permitido() || fw.riesgo() == Riesgo.ALTO) {
-            return new Evaluacion(false, fw.riesgo(), fw.motivo(), capaSi(fw.riesgo()), fw.textoNormalizado());
+        Optional<Hallazgo> delFirewall = hallazgoDelFirewall(fw);
+        if (!fw.permitido() || fw.riesgo().bloquea()) {
+            return new Evaluacion(false, fw.textoNormalizado(), delFirewall);
         }
 
-        Clasificacion c = clasificador.clasificar(fw.textoNormalizado());
-        Riesgo total = fw.riesgo().max(c.riesgo());
-        // Empate: manda el firewall, que es el que se puede explicar sin modelo.
-        boolean gana = total == fw.riesgo();
-        String motivo = gana ? fw.motivo() : c.motivo();
-        CapaSeguridad capa = total == Riesgo.BAJO ? null
-                : gana ? CapaSeguridad.FIREWALL : CapaSeguridad.CLASIFICADOR;
-        return new Evaluacion(total != Riesgo.ALTO, total, total == Riesgo.BAJO ? null : motivo, capa,
-                fw.textoNormalizado());
+        Optional<Hallazgo> mayor = Hallazgo.mayor(delFirewall, clasificador.clasificar(fw.textoNormalizado()));
+        boolean permitido = mayor.map(h -> !h.riesgo().bloquea()).orElse(true);
+        return new Evaluacion(permitido, fw.textoNormalizado(), mayor);
     }
 
-    private static CapaSeguridad capaSi(Riesgo riesgo) {
-        return riesgo == Riesgo.BAJO ? null : CapaSeguridad.FIREWALL;
+    /** Un MEDIO o ALTO del firewall como hallazgo; la entrada vacia no lo es. */
+    private static Optional<Hallazgo> hallazgoDelFirewall(ResultadoFirewall fw) {
+        if (fw.riesgo() == Riesgo.BAJO) {
+            return Optional.empty();
+        }
+        return fw.motivo().map(m -> new Hallazgo(CapaSeguridad.FIREWALL, fw.riesgo(), m));
     }
 }

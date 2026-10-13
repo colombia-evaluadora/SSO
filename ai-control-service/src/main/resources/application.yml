@@ -129,23 +129,30 @@ sso:
     circuit-failure-rate: ${AI_CIRCUIT_FAILURE_RATE:50}
     circuit-open-wait: ${AI_CIRCUIT_OPEN_WAIT:60s}
     agente:
-      # Rapido: router, clasificador y redaccion, sin razonamiento. Nunca
-      # ejecuta herramientas de escritura. Razonador: planea y elige herramientas.
-      modelo-rapido: ${AI_MODEL_FAST:${AI_MODEL:MiniMax-M3}}
-      modelo-razonador: ${AI_MODEL_REASONING:${AI_MODEL:MiniMax-M3}}
-      extra-body-rapido-json: '${AI_EXTRA_BODY_FAST_JSON:{"thinking":{"type":"disabled"}}}'
-      extra-body-razonador-json: '${AI_EXTRA_BODY_REASONING_JSON:{"thinking":{"type":"adaptive"},"reasoning_split":true}}'
-      max-tokens-rapido: ${AI_MAX_TOKENS_FAST:1500}
-      # Incluye los tokens de razonamiento: con 1500 el razonador se corta antes de elegir herramienta.
-      max-tokens-razonador: ${AI_MAX_TOKENS_REASONING:6000}
-      max-total-tool-calls: ${AI_AGENTE_MAX_TOOL_CALLS:15}
-      max-calls-por-herramienta: ${AI_AGENTE_MAX_CALLS_POR_HERRAMIENTA:5}
-      memoria-max-mensajes: ${AI_AGENTE_MEMORIA_MAX_MENSAJES:30}
-      memoria-ttl: ${AI_AGENTE_MEMORIA_TTL:24h}
-      accion-expira: ${AI_AGENTE_ACCION_EXPIRA:10m}
-      rate-limit-usuario-por-min: ${AI_AGENTE_RATE_LIMIT_USUARIO_POR_MIN:20}
-      texto-max-caracteres: ${AI_AGENTE_TEXTO_MAX_CARACTERES:4000}
-      max-concurrent-razonador: ${AI_AGENTE_MAX_CONCURRENT_REASONING:2}
+      modelos:
+        # Rapido: router, clasificador y redaccion, sin razonamiento. Nunca
+        # ejecuta herramientas de escritura.
+        rapido:
+          nombre: ${AI_MODEL_FAST:${AI_MODEL:MiniMax-M3}}
+          extra-body-json: '${AI_EXTRA_BODY_FAST_JSON:{"thinking":{"type":"disabled"}}}'
+          max-tokens: ${AI_MAX_TOKENS_FAST:1500}
+        # Razonador: planea y elige herramientas. El tope incluye los tokens de
+        # razonamiento: con 1500 se corta antes de elegir herramienta.
+        razonador:
+          nombre: ${AI_MODEL_REASONING:${AI_MODEL:MiniMax-M3}}
+          extra-body-json: '${AI_EXTRA_BODY_REASONING_JSON:{"thinking":{"type":"adaptive"},"reasoning_split":true}}'
+          max-tokens: ${AI_MAX_TOKENS_REASONING:6000}
+      limites:
+        max-total-tool-calls: ${AI_AGENTE_MAX_TOOL_CALLS:15}
+        max-calls-por-herramienta: ${AI_AGENTE_MAX_CALLS_POR_HERRAMIENTA:5}
+        rate-limit-usuario-por-min: ${AI_AGENTE_RATE_LIMIT_USUARIO_POR_MIN:20}
+        texto-max-caracteres: ${AI_AGENTE_TEXTO_MAX_CARACTERES:4000}
+        max-concurrent-razonador: ${AI_AGENTE_MAX_CONCURRENT_REASONING:2}
+      memoria:
+        max-mensajes: ${AI_AGENTE_MEMORIA_MAX_MENSAJES:30}
+        ttl: ${AI_AGENTE_MEMORIA_TTL:24h}
+      acciones:
+        expira: ${AI_AGENTE_ACCION_EXPIRA:10m}
   jwt:
     # Solo la publica: este servicio verifica firmas, no emite tokens.
     public-key: ${JWT_PUBLIC_KEY}

@@ -1,14 +1,18 @@
 package com.co.eurekatic.aicontrol.agente.seguridad;
 
+import java.util.Optional;
+
 /**
  * Veredicto combinado de la entrada: firewall y clasificador.
  *
  * @param permitido        false si el turno debe detenerse aqui
- * @param riesgo           maximo de los filtros que revisaron la entrada
- * @param motivo           codigo del filtro que dio el riesgo final; null si es BAJO
- * @param capa             filtro que dio el riesgo final; null si es BAJO
  * @param textoNormalizado texto tras el firewall, para auditar por huella
+ * @param hallazgo         el de mayor riesgo; vacio si la entrada es BAJO
  */
-public record Evaluacion(boolean permitido, Riesgo riesgo, String motivo, CapaSeguridad capa,
-                         String textoNormalizado) {
+public record Evaluacion(boolean permitido, String textoNormalizado, Optional<Hallazgo> hallazgo) {
+
+    /** Riesgo final de la entrada; BAJO si no hubo hallazgo. */
+    public Riesgo riesgo() {
+        return hallazgo.map(Hallazgo::riesgo).orElse(Riesgo.BAJO);
+    }
 }

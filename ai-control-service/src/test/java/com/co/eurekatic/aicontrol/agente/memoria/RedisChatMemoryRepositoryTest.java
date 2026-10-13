@@ -1,10 +1,12 @@
 package com.co.eurekatic.aicontrol.agente.memoria;
 
+import com.co.eurekatic.aicontrol.agente.memoria.MensajeMemoria.Asistente;
 import com.co.eurekatic.aicontrol.agente.memoria.MensajeMemoria.LlamadaHerramienta;
 import com.co.eurekatic.aicontrol.agente.memoria.MensajeMemoria.RespuestaHerramienta;
-import com.co.eurekatic.aicontrol.agente.memoria.MensajeMemoria.TipoMensaje;
-import com.co.eurekatic.aicontrol.agente.persistencia.MensajeRepository;
-import com.co.eurekatic.aicontrol.config.AgenteProperties;
+import com.co.eurekatic.aicontrol.agente.memoria.MensajeMemoria.ResultadoHerramienta;
+import com.co.eurekatic.aicontrol.agente.memoria.MensajeMemoria.Usuario;
+import com.co.eurekatic.aicontrol.agente.persistencia.MensajeStore;
+import com.co.eurekatic.aicontrol.agente.persistencia.RolMensaje;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -17,12 +19,14 @@ import org.springframework.data.redis.core.Cursor;
 import org.springframework.data.redis.core.ScanOptions;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ValueOperations;
+import tools.jackson.core.type.TypeReference;
 import tools.jackson.databind.json.JsonMapper;
 
 import java.time.Duration;
 import java.util.List;
 import java.util.UUID;
 
+import static com.co.eurekatic.aicontrol.config.PropiedadesAgenteFixture.propiedades;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -37,12 +41,13 @@ import static org.mockito.Mockito.when;
 class RedisChatMemoryRepositoryTest {
 
     private static final JsonMapper JSON = JsonMapper.builder().build();
+    private static final TypeReference<List<MensajeMemoria>> TIPO_LISTA = new TypeReference<>() {};
     private static final String ID = "3f2c9a1e-5b7d-4e8f-9a0b-1c2d3e4f5a6b";
     private static final String CLAVE = "ai:mem:" + ID;
 
     private StringRedisTemplate redis;
     private ValueOperations<String, String> valores;
-    private MensajeRepository mensajes;
+    private MensajeStore mensajes;
     private RedisChatMemoryRepository repo;
 
     @SuppressWarnings("unchecked")
@@ -50,7 +55,7 @@ class RedisChatMemoryRepositoryTest {
     void setUp() {
         redis = mock(StringRedisTemplate.class);
         valores = mock(ValueOperations.class);
-        mensajes = mock(MensajeRepository.class);
+        mensajes = mock(MensajeStore.class);
         when(redis.opsForValue()).thenReturn(valores);
         repo = new RedisChatMemoryRepository(redis, JSON, propiedades(), mensajes);
     }
@@ -65,14 +70,12 @@ class RedisChatMemoryRepositoryTest {
     }
 
     @Test
-    void lecturaConClaveRestauraTurnosConLlamadasYRespuestas() throws Exception {
-        String guardado = JSON.writeValueAsString(List.of(
-                new MensajeMemoria(TipoMensaje.USER, "hola", null, null),
-                new MensajeMemoria(TipoMensaje.ASSISTANT, "Busco.",
-                        List.of(new LlamadaHerramienta("c1", "consultar_notas", "{}")), null),
-                new MensajeMemoria(TipoMensaje.TOOL, null, null,
-                        List.of(new RespuestaHerramienta("c1", "consultar_notas", "{\"ok\":true}")))));
-        when(valores.get(CLAVE)).thenReturn(guardado);
+    void lecturaConClaveRestauraTurnosConLlamadasYRespuestas() {
+        List<MensajeMemoria> turnos = List.of(
+                new Usuario("hola"),
+                new Asistente("Busco.", List.of(new LlamadaHerramienta("c1", "consultar_notas", "{}"))),
+                new RespuestaHerramienta(List.of(new ResultadoHerramienta("c1", "consultar_notas", "{\"ok\":true}"))));
+        when(valores.get(CLAVE)).thenReturn(JSON.writerFor(TIPO_LISTA).writeValueAsString(turnos));
 
         List<Message> r = repo.findByConversationId(ID);
 
@@ -84,12 +87,22 @@ class RedisChatMemoryRepositoryTest {
     }
 
     @Test
+    void unaClaveConElFormatoAnteriorSeReconstruyeDesdeLaBase() {
+        UUID id = UUID.fromString(ID);
+        when(valores.get(CLAVE)).thenReturn("[{\"tipo\":\"DESCONOCIDO\",\"texto\":\"x\"}]");
+        when(mensajes.listarFinales(id)).thenReturn(List.of(
+                new MensajeStore.Mensaje(1L, id, 1, RolMensaje.USER, "hola", null, null, null)));
+
+        assertThat(repo.findByConversationId(ID)).extracting(Message::getText).containsExactly("hola");
+    }
+
+    @Test
     void sinClaveSeReconstruyeDesdeLaBaseSoloConTurnosDeTexto() {
         UUID id = UUID.fromString(ID);
         when(valores.get(CLAVE)).thenReturn(null);
         when(mensajes.listarFinales(id)).thenReturn(List.of(
-                new MensajeRepository.Mensaje(1L, id, 1, "USER", "hola", null, null, null),
-                new MensajeRepository.Mensaje(2L, id, 2, "ASSISTANT", "buenas", "RESPUESTA", null, null)));
+                new MensajeStore.Mensaje(1L, id, 1, RolMensaje.USER, "hola", null, null, null),
+                new MensajeStore.Mensaje(2L, id, 2, RolMensaje.ASSISTANT, "buenas", "RESPUESTA", null, null)));
 
         List<Message> r = repo.findByConversationId(ID);
 
@@ -130,11 +143,5 @@ class RedisChatMemoryRepositoryTest {
         repo.deleteByConversationId(ID);
 
         verify(redis).delete(CLAVE);
-    }
-
-    private static AgenteProperties propiedades() {
-        return new AgenteProperties("MiniMax-M3", "MiniMax-M3",
-                "{}", "{}", 1500, 6000, 15, 5, 30,
-                Duration.ofHours(24), Duration.ofMinutes(10), 20, 4000, 2);
     }
 }

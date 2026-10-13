@@ -9,77 +9,74 @@ import java.time.LocalDateTime;
 import java.util.List;
 import java.util.UUID;
 
-/**
- * Mensajes de una conversacion en {@code ai.mensaje}. El contenido llega ya
- * anonimizado: aqui no se sanea nada.
- */
+/** Adaptador JDBC de {@link MensajeStore} sobre {@code ai.mensaje}. */
 @Repository
-public class MensajeRepository {
+public class MensajeRepository implements MensajeStore {
 
     private static final String COLUMNAS =
             "id, conversacion_id, secuencia, rol, contenido, tipo_respuesta, acciones_ui, created_at";
+
+    /**
+     * Bloquea la conversacion antes de calcular el maximo: dos turnos simultaneos
+     * de la misma conversacion se serializan en vez de chocar con {@code ux_ai_mensaje_secuencia}.
+     */
+    private static final String SQL_BLOQUEAR_CONVERSACION =
+            "SELECT id FROM ai.conversacion WHERE id = :cid FOR UPDATE";
+
+    private static final String SQL_INSERTAR = """
+            INSERT INTO ai.mensaje (conversacion_id, secuencia, rol, contenido, tipo_respuesta,
+                                    acciones_ui, modelo, tokens_entrada, tokens_salida,
+                                    tokens_razonamiento, latencia_ms, created_by)
+            VALUES (:cid,
+                    (SELECT COALESCE(MAX(secuencia), 0) + 1 FROM ai.mensaje WHERE conversacion_id = :cid),
+                    :rol, :contenido, :tipoRespuesta, CAST(:accionesUi AS jsonb), :modelo,
+                    :tokensEntrada, :tokensSalida, :tokensRazonamiento, :latenciaMs, :actor)
+            RETURNING id
+            """;
+
+    private static final String SQL_LISTAR = """
+            SELECT """ + COLUMNAS + """
+             FROM ai.mensaje
+            WHERE conversacion_id = :cid AND active = TRUE
+            ORDER BY secuencia
+            """;
+
+    private static final String SQL_LISTAR_FINALES = """
+            SELECT """ + COLUMNAS + """
+             FROM ai.mensaje
+            WHERE conversacion_id = :cid AND active = TRUE AND rol IN ('USER', 'ASSISTANT')
+            ORDER BY secuencia
+            """;
 
     private static final RowMapper<Mensaje> FILA = (rs, n) -> new Mensaje(
             rs.getLong("id"),
             rs.getObject("conversacion_id", UUID.class),
             rs.getInt("secuencia"),
-            rs.getString("rol"),
+            RolMensaje.valueOf(rs.getString("rol")),
             rs.getString("contenido"),
             rs.getString("tipo_respuesta"),
             rs.getString("acciones_ui"),
             rs.getObject("created_at", LocalDateTime.class));
 
     private final JdbcClient jdbc;
-    private final ConversacionRepository conversaciones;
+    private final ConversacionStore conversaciones;
 
-    public MensajeRepository(JdbcClient jdbc, ConversacionRepository conversaciones) {
+    public MensajeRepository(JdbcClient jdbc, ConversacionStore conversaciones) {
         this.jdbc = jdbc;
         this.conversaciones = conversaciones;
     }
 
-    /** Fila de {@code ai.mensaje}. {@code rol}: USER, ASSISTANT, TOOL o SYSTEM. */
-    public record Mensaje(long id, UUID conversacionId, int secuencia, String rol, String contenido,
-                          String tipoRespuesta, String accionesUi, LocalDateTime createdAt) {
-    }
-
-    /**
-     * Datos de un mensaje nuevo. {@code accionesUiJson} es JSON o null;
-     * los tokens son null cuando el mensaje no vino del modelo.
-     */
-    public record NuevoMensaje(String rol, String contenido, String tipoRespuesta, String accionesUiJson,
-                               String modelo, Integer tokensEntrada, Integer tokensSalida,
-                               Integer tokensRazonamiento, Integer latenciaMs) {
-    }
-
-    /**
-     * Inserta un mensaje con la siguiente secuencia de la conversacion y
-     * actualiza su ultimo mensaje, todo en una transaccion.
-     *
-     * <p>La conversacion se bloquea con {@code FOR UPDATE} antes de calcular
-     * el maximo: dos turnos simultaneos de la misma conversacion se serializan
-     * en vez de chocar con {@code ux_ai_mensaje_secuencia}.
-     *
-     * @return id del mensaje insertado
-     */
+    @Override
     @Transactional
     public long insertar(UUID conversacionId, NuevoMensaje m) {
-        jdbc.sql("SELECT id FROM ai.conversacion WHERE id = :cid FOR UPDATE")
+        jdbc.sql(SQL_BLOQUEAR_CONVERSACION)
                 .param("cid", conversacionId)
                 .query(UUID.class)
                 .single();
 
-        long id = jdbc.sql("""
-                        INSERT INTO ai.mensaje (conversacion_id, secuencia, rol, contenido, tipo_respuesta,
-                                                acciones_ui, modelo, tokens_entrada, tokens_salida,
-                                                tokens_razonamiento, latencia_ms, created_by)
-                        VALUES (:cid,
-                                (SELECT COALESCE(MAX(secuencia), 0) + 1 FROM ai.mensaje WHERE conversacion_id = :cid),
-                                :rol, :contenido, :tipoRespuesta, CAST(:accionesUi AS jsonb), :modelo,
-                                :tokensEntrada, :tokensSalida, :tokensRazonamiento, :latenciaMs, :actor)
-                        RETURNING id
-                        """)
+        long id = jdbc.sql(SQL_INSERTAR)
                 .param("cid", conversacionId)
-                .param("rol", m.rol())
+                .param("rol", m.rol().name())
                 .param("contenido", m.contenido())
                 .param("tipoRespuesta", m.tipoRespuesta())
                 .param("accionesUi", m.accionesUiJson())
@@ -96,30 +93,17 @@ public class MensajeRepository {
         return id;
     }
 
-    /** Todos los mensajes activos de la conversacion, en orden de secuencia. */
+    @Override
     public List<Mensaje> listar(UUID conversacionId) {
-        return jdbc.sql("""
-                        SELECT """ + COLUMNAS + """
-                         FROM ai.mensaje
-                        WHERE conversacion_id = :cid AND active = TRUE
-                        ORDER BY secuencia
-                        """)
+        return jdbc.sql(SQL_LISTAR)
                 .param("cid", conversacionId)
                 .query(FILA)
                 .list();
     }
 
-    /**
-     * Solo los turnos de texto (USER y ASSISTANT), en orden. Es con lo que se
-     * reconstruye la memoria cuando Redis ya no la tiene.
-     */
+    @Override
     public List<Mensaje> listarFinales(UUID conversacionId) {
-        return jdbc.sql("""
-                        SELECT """ + COLUMNAS + """
-                         FROM ai.mensaje
-                        WHERE conversacion_id = :cid AND active = TRUE AND rol IN ('USER', 'ASSISTANT')
-                        ORDER BY secuencia
-                        """)
+        return jdbc.sql(SQL_LISTAR_FINALES)
                 .param("cid", conversacionId)
                 .query(FILA)
                 .list();

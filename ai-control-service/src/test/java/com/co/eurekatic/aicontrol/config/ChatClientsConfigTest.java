@@ -16,7 +16,7 @@ class ChatClientsConfigTest {
     @Test
     void rapidoApagaElRazonamiento() {
         OpenAiChatOptions o = ChatClientsConfig
-                .opciones("MiniMax-M3", "{\"thinking\":{\"type\":\"disabled\"}}", 1500, JSON)
+                .opciones(new AgenteProperties.Modelo("MiniMax-M3", "{\"thinking\":{\"type\":\"disabled\"}}", 1500), JSON)
                 .build();
 
         assertThat(o.getModel()).isEqualTo("MiniMax-M3");
@@ -27,7 +27,8 @@ class ChatClientsConfigTest {
     @Test
     void razonadorPideAdaptativoYReasoningSplitComoBooleano() {
         OpenAiChatOptions o = ChatClientsConfig
-                .opciones("MiniMax-M3", "{\"thinking\":{\"type\":\"adaptive\"},\"reasoning_split\":true}", 6000, JSON)
+                .opciones(new AgenteProperties.Modelo("MiniMax-M3",
+                        "{\"thinking\":{\"type\":\"adaptive\"},\"reasoning_split\":true}", 6000), JSON)
                 .build();
 
         assertThat(o.getMaxTokens()).isEqualTo(6000);
@@ -37,7 +38,8 @@ class ChatClientsConfigTest {
 
     @Test
     void extraBodyInvalidoFallaAlConstruir() {
-        assertThatThrownBy(() -> ChatClientsConfig.opciones("MiniMax-M3", "no es json", 1500, JSON))
+        assertThatThrownBy(() -> ChatClientsConfig.opciones(
+                        new AgenteProperties.Modelo("MiniMax-M3", "no es json", 1500), JSON))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("AI_EXTRA_BODY_JSON");
     }

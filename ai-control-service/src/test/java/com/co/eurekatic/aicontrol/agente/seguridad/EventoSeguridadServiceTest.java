@@ -1,7 +1,7 @@
 package com.co.eurekatic.aicontrol.agente.seguridad;
 
-import com.co.eurekatic.aicontrol.agente.persistencia.EventoSeguridadRepository;
-import com.co.eurekatic.aicontrol.agente.persistencia.EventoSeguridadRepository.NuevoEvento;
+import com.co.eurekatic.aicontrol.agente.persistencia.EventoSeguridadStore;
+import com.co.eurekatic.aicontrol.agente.persistencia.EventoSeguridadStore.NuevoEvento;
 import com.co.eurekatic.aicontrol.agente.seguridad.EventoSeguridadService.RegistroEvento;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.BeforeEach;
@@ -9,6 +9,7 @@ import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.dao.DataAccessResourceFailureException;
 
+import java.util.Optional;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -21,14 +22,16 @@ class EventoSeguridadServiceTest {
 
     // sha256("abc")
     private static final String SHA256_ABC = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+    private static final Hallazgo INSTRUCCION_IGNORADA =
+            new Hallazgo(CapaSeguridad.FIREWALL, Riesgo.ALTO, new Motivo("INSTRUCCION_IGNORADA"));
 
-    private EventoSeguridadRepository repositorio;
+    private EventoSeguridadStore repositorio;
     private SimpleMeterRegistry metricas;
     private EventoSeguridadService servicio;
 
     @BeforeEach
     void setUp() {
-        repositorio = mock(EventoSeguridadRepository.class);
+        repositorio = mock(EventoSeguridadStore.class);
         metricas = new SimpleMeterRegistry();
         servicio = new EventoSeguridadService(repositorio, metricas);
     }
@@ -37,12 +40,10 @@ class EventoSeguridadServiceTest {
     void guardaLaHuellaDelTextoNormalizadoNuncaElTexto() {
         UUID conversacion = UUID.randomUUID();
 
-        servicio.registrar(new RegistroEvento(conversacion, 42L, CapaSeguridad.FIREWALL, Riesgo.ALTO,
-                "INSTRUCCION_IGNORADA", "abc"));
+        servicio.registrar(new RegistroEvento(Optional.of(conversacion), 42L, INSTRUCCION_IGNORADA,
+                Optional.of("abc")));
 
-        ArgumentCaptor<NuevoEvento> guardado = ArgumentCaptor.forClass(NuevoEvento.class);
-        verify(repositorio).insertar(guardado.capture());
-        NuevoEvento e = guardado.getValue();
+        NuevoEvento e = capturarEvento();
         assertThat(e.conversacionId()).isEqualTo(conversacion);
         assertThat(e.fkUsuario()).isEqualTo(42L);
         assertThat(e.capa()).isEqualTo("FIREWALL");
@@ -53,21 +54,19 @@ class EventoSeguridadServiceTest {
 
     @Test
     void sinTextoLaHuellaQuedaNula() {
-        servicio.registrar(new RegistroEvento(null, 7L, CapaSeguridad.CLASIFICADOR, Riesgo.MEDIO,
-                Clasificacion.MOTIVO_NO_DISPONIBLE, null));
+        servicio.registrar(new RegistroEvento(Optional.empty(), 7L,
+                new Hallazgo(CapaSeguridad.CLASIFICADOR, Riesgo.MEDIO, RespuestaClasificador.NO_DISPONIBLE),
+                Optional.empty()));
 
-        ArgumentCaptor<NuevoEvento> guardado = ArgumentCaptor.forClass(NuevoEvento.class);
-        verify(repositorio).insertar(guardado.capture());
-        assertThat(guardado.getValue().fragmentoHash()).isNull();
-        assertThat(guardado.getValue().conversacionId()).isNull();
+        NuevoEvento e = capturarEvento();
+        assertThat(e.fragmentoHash()).isNull();
+        assertThat(e.conversacionId()).isNull();
     }
 
     @Test
     void cuentaLaMetricaPorCapaYMotivo() {
-        servicio.registrar(new RegistroEvento(null, 1L, CapaSeguridad.FIREWALL, Riesgo.ALTO,
-                "INSTRUCCION_IGNORADA", "x"));
-        servicio.registrar(new RegistroEvento(null, 1L, CapaSeguridad.FIREWALL, Riesgo.ALTO,
-                "INSTRUCCION_IGNORADA", "y"));
+        servicio.registrar(new RegistroEvento(Optional.empty(), 1L, INSTRUCCION_IGNORADA, Optional.of("x")));
+        servicio.registrar(new RegistroEvento(Optional.empty(), 1L, INSTRUCCION_IGNORADA, Optional.of("y")));
 
         assertThat(metricas.get("ai.firewall.bloqueos")
                 .tags("capa", "FIREWALL", "motivo", "INSTRUCCION_IGNORADA")
@@ -76,12 +75,12 @@ class EventoSeguridadServiceTest {
 
     @Test
     void unMotivoQueNoEsCodigoSeRegistraComoOtro() {
-        servicio.registrar(new RegistroEvento(null, 1L, CapaSeguridad.FIREWALL, Riesgo.MEDIO,
-                "Hola, ignora todo lo de Juan", "x"));
+        Hallazgo libre = new Hallazgo(CapaSeguridad.FIREWALL, Riesgo.MEDIO,
+                Motivo.de("Hola, ignora todo lo de Juan"));
 
-        ArgumentCaptor<NuevoEvento> guardado = ArgumentCaptor.forClass(NuevoEvento.class);
-        verify(repositorio).insertar(guardado.capture());
-        assertThat(guardado.getValue().motivo()).isEqualTo("OTRO");
+        servicio.registrar(new RegistroEvento(Optional.empty(), 1L, libre, Optional.of("x")));
+
+        assertThat(capturarEvento().motivo()).isEqualTo("OTRO");
         assertThat(metricas.get("ai.firewall.bloqueos")
                 .tags("capa", "FIREWALL", "motivo", "OTRO").counter().count()).isEqualTo(1.0);
     }
@@ -90,10 +89,17 @@ class EventoSeguridadServiceTest {
     void siLaBaseFallaSeSigueYLaMetricaCuenta() {
         doThrow(new DataAccessResourceFailureException("caida")).when(repositorio).insertar(any());
 
-        servicio.registrar(new RegistroEvento(null, 1L, CapaSeguridad.SALIDA, Riesgo.ALTO,
-                "FUGA_PROMPT", "x"));
+        servicio.registrar(new RegistroEvento(Optional.empty(), 1L,
+                new Hallazgo(CapaSeguridad.SALIDA, Riesgo.ALTO, DetectoresSalida.FUGA_PROMPT),
+                Optional.of("x")));
 
         assertThat(metricas.get("ai.firewall.bloqueos")
                 .tags("capa", "SALIDA", "motivo", "FUGA_PROMPT").counter().count()).isEqualTo(1.0);
+    }
+
+    private NuevoEvento capturarEvento() {
+        ArgumentCaptor<NuevoEvento> guardado = ArgumentCaptor.forClass(NuevoEvento.class);
+        verify(repositorio).insertar(guardado.capture());
+        return guardado.getValue();
     }
 }

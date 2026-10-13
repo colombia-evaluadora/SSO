@@ -17,7 +17,7 @@ public class MemoriaConfig {
     public ChatMemory chatMemory(RedisChatMemoryRepository repositorio, AgenteProperties props) {
         return MessageWindowChatMemory.builder()
                 .chatMemoryRepository(repositorio)
-                .maxMessages(props.memoriaMaxMensajes())
+                .maxMessages(props.memoria().maxMensajes())
                 .build();
     }
 }

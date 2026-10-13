@@ -23,25 +23,29 @@ public class LimitadorPorUsuario {
     private static final Duration VENTANA = Duration.ofSeconds(60);
 
     private final StringRedisTemplate redis;
-    private final AgenteProperties props;
+    private final int cupoPorMinuto;
 
     public LimitadorPorUsuario(StringRedisTemplate redis, AgenteProperties props) {
         this.redis = redis;
-        this.props = props;
+        this.cupoPorMinuto = props.limites().rateLimitUsuarioPorMin();
     }
 
     /**
      * @return true si el turno cabe en el cupo del minuto actual
      */
     public boolean permitir(long userId) {
-        String clave = PREFIJO + userId + ":" + System.currentTimeMillis() / VENTANA.toMillis();
+        String clave = clave(userId, System.currentTimeMillis() / VENTANA.toMillis());
         try {
             Long turnos = redis.opsForValue().increment(clave);
             redis.expire(clave, VENTANA);
-            return turnos == null || turnos <= props.rateLimitUsuarioPorMin();
+            return turnos == null || turnos <= cupoPorMinuto;
         } catch (RuntimeException e) {
             log.warn("Limitador por usuario no disponible; se permite el turno: {}", e.getClass().getSimpleName());
             return true;
         }
+    }
+
+    static String clave(long userId, long minuto) {
+        return PREFIJO + userId + ":" + minuto;
     }
 }

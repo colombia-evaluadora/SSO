@@ -7,8 +7,6 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import tools.jackson.databind.json.JsonMapper;
 
-import java.util.Map;
-
 /**
  * Los dos clientes del agente: mismo proveedor, distinto modelo y distinto
  * presupuesto de salida.
@@ -24,27 +22,23 @@ public class ChatClientsConfig {
     @Bean
     @Qualifier("rapido")
     public ChatClient rapido(ChatClient.Builder builder, AgenteProperties props, JsonMapper json) {
-        return builder.defaultOptions(opciones(props.modeloRapido(), props.extraBodyRapidoJson(),
-                props.maxTokensRapido(), json)).build();
+        return builder.defaultOptions(opciones(props.modelos().rapido(), json)).build();
     }
 
     @Bean
     @Qualifier("razonador")
     public ChatClient razonador(ChatClient.Builder builder, AgenteProperties props, JsonMapper json) {
-        return builder.defaultOptions(opciones(props.modeloRazonador(), props.extraBodyRazonadorJson(),
-                props.maxTokensRazonador(), json)).build();
+        return builder.defaultOptions(opciones(props.modelos().razonador(), json)).build();
     }
 
     /**
-     * Opciones por defecto de un cliente. Solo se fijan modelo, tope de tokens
-     * y extra_body; temperatura y top-p siguen los de {@code spring.ai.openai.chat}.
+     * Opciones por defecto de un cliente: modelo, tope de tokens y extra_body.
+     * Temperatura y top-p siguen los de {@code spring.ai.openai.chat}.
      */
-    static OpenAiChatOptions.Builder opciones(String modelo, String extraJson, int maxTokens, JsonMapper json) {
-        Map<String, Object> extra = ChatClientConfig.parseExtraBody(extraJson, json);
-        OpenAiChatOptions.Builder b = OpenAiChatOptions.builder();
-        b.model(modelo);
-        b.maxTokens(maxTokens);
-        b.extraBody(extra);
-        return b;
+    static OpenAiChatOptions.Builder opciones(AgenteProperties.Modelo modelo, JsonMapper json) {
+        return OpenAiChatOptions.builder()
+                .model(modelo.nombre())
+                .maxTokens(modelo.maxTokens())
+                .extraBody(ChatClientConfig.parseExtraBody(modelo.extraBodyJson(), json));
     }
 }

@@ -3,14 +3,16 @@ package com.co.eurekatic.aicontrol.agente.persistencia;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Repository;
 
-import java.util.UUID;
-
-/**
- * Bloqueos y descartes del agente, en {@code ai.evento_seguridad}. Guarda la
- * huella del fragmento sospechoso, nunca el texto.
- */
+/** Adaptador JDBC de {@link EventoSeguridadStore} sobre {@code ai.evento_seguridad}. */
 @Repository
-public class EventoSeguridadRepository {
+public class EventoSeguridadRepository implements EventoSeguridadStore {
+
+    private static final String SQL_INSERTAR = """
+            INSERT INTO ai.evento_seguridad (conversacion_id, fk_usuario, capa, riesgo, motivo,
+                                             fragmento_hash, created_by)
+            VALUES (:cid, :fkUsuario, :capa, :riesgo, :motivo, :hash, :actor)
+            RETURNING id
+            """;
 
     private final JdbcClient jdbc;
 
@@ -18,22 +20,9 @@ public class EventoSeguridadRepository {
         this.jdbc = jdbc;
     }
 
-    /**
-     * Datos de un evento. {@code capa} identifica el filtro que actuo;
-     * {@code riesgo} es BAJO, MEDIO o ALTO; {@code conversacionId} puede ser null.
-     */
-    public record NuevoEvento(UUID conversacionId, long fkUsuario, String capa, String riesgo,
-                              String motivo, String fragmentoHash) {
-    }
-
-    /** @return id del evento insertado */
+    @Override
     public long insertar(NuevoEvento e) {
-        return jdbc.sql("""
-                        INSERT INTO ai.evento_seguridad (conversacion_id, fk_usuario, capa, riesgo, motivo,
-                                                         fragmento_hash, created_by)
-                        VALUES (:cid, :fkUsuario, :capa, :riesgo, :motivo, :hash, :actor)
-                        RETURNING id
-                        """)
+        return jdbc.sql(SQL_INSERTAR)
                 .param("cid", e.conversacionId())
                 .param("fkUsuario", e.fkUsuario())
                 .param("capa", e.capa())

@@ -1,6 +1,5 @@
 package com.co.eurekatic.aicontrol.agente.seguridad;
 
-import com.co.eurekatic.aicontrol.config.AgenteProperties;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -10,6 +9,7 @@ import org.springframework.data.redis.core.ValueOperations;
 
 import java.time.Duration;
 
+import static com.co.eurekatic.aicontrol.config.PropiedadesAgenteFixture.propiedades;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -30,7 +30,7 @@ class LimitadorPorUsuarioTest {
         redis = mock(StringRedisTemplate.class);
         valores = mock(ValueOperations.class);
         when(redis.opsForValue()).thenReturn(valores);
-        limitador = new LimitadorPorUsuario(redis, propiedades(20));
+        limitador = new LimitadorPorUsuario(redis, propiedades(4000, 20));
     }
 
     @Test
@@ -74,8 +74,4 @@ class LimitadorPorUsuarioTest {
         assertThat(limitador.permitir(42L)).isTrue();
     }
 
-    private static AgenteProperties propiedades(int porMinuto) {
-        return new AgenteProperties("MiniMax-M3", "MiniMax-M3", "{}", "{}", 1500, 6000, 15, 5, 30,
-                Duration.ofHours(24), Duration.ofMinutes(10), porMinuto, 4000, 2);
-    }
 }
