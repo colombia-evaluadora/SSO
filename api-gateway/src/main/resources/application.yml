@@ -378,6 +378,14 @@ spring:
           # 404 for unmatched paths (deny-by-default). The reactive
           # filter will translate this to a 401 for paths that need auth.
           default-filters:
+            # Cabeceras de identidad que solo el gateway puede escribir
+            # (UserForwardingGlobalFilter, orden posterior). Se descartan las
+            # que traiga el cliente para que no se puedan falsificar.
+            - RemoveRequestHeader=X-Authenticated-User
+            - RemoveRequestHeader=X-Authenticated-User-Id
+            - RemoveRequestHeader=X-Authenticated-Roles
+            - RemoveRequestHeader=X-Authenticated-Token-Type
+            - RemoveRequestHeader=X-Authenticated-Family-Id
             - DedupeResponseHeader=Access-Control-Allow-Origin Access-Control-Allow-Credentials, RETAIN_UNIQUE
           discovery:
             locator:
