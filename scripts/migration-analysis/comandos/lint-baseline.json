@@ -164,8 +164,6 @@
  "postgres/migrations/V204__fn_matricula_obtener_completa_acudiente_de_la_matricula.sql|COMENTARIOS",
  "postgres/migrations/V204__fn_matricula_obtener_completa_acudiente_de_la_matricula.sql|COMMENT-LARGO",
  "postgres/migrations/V205__matricula_validar_cupo_por_estado.sql|CABECERA",
- "postgres/migrations/V206__endpoint_matricula_reporte.sql|CABECERA",
- "postgres/migrations/V206__endpoint_matricula_reporte.sql|COMENTARIOS",
  "postgres/migrations/V206__endpoint_matricula_reporte.sql|QUERY-ON-CONFLICT|INSERT en public.query con ON CONFLICT DO NOTHING y sin DELETE previo por uuid: si la fila ya existe esta migracion es un no-op silencioso (ver V253/V279)",
  "postgres/migrations/V210__reconcilia_peso_categoria_trol.sql|CABECERA",
  "postgres/migrations/V210__reconcilia_peso_categoria_trol.sql|COMENTARIOS",

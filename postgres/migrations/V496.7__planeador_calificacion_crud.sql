@@ -11,7 +11,7 @@
 SET search_path TO academico_test, public;
 
 DROP FUNCTION IF EXISTS academico_test.fn_actividad_nota_calificar_escala_bulk(BIGINT, BIGINT, BIGINT, NUMERIC, BIGINT[], DATE);
--- Cambia el tipo de retorno (estado, momento, enlace, resultados_completos).
+-- Cambia el tipo de retorno (estado, momento, enlace, resultados_completos, solicitud pendiente).
 DROP FUNCTION IF EXISTS academico_test.fn_actividad_estudiantes_calificaciones_listar(BIGINT, BIGINT, DATE, VARCHAR);
 
 CREATE OR REPLACE FUNCTION academico_test.fn_actividad_assert_resultados(
@@ -167,7 +167,8 @@ RETURNS TABLE (pk_tactividad_estudiante BIGINT, pk_tmatricula BIGINT, nombre_est
                valoracion VARCHAR, formato_valor VARCHAR, resultado_instrumento JSONB,
                estado_resultado VARCHAR, momento VARCHAR, evidencia_enlace VARCHAR, resultados_completos BOOLEAN,
                tipo_asistencia_valor VARCHAR, asistencia_justificada BOOLEAN, origen_asistencia VARCHAR,
-               asistencia_editable BOOLEAN)
+               asistencia_editable BOOLEAN, solicitud_pendiente BOOLEAN, nota_propuesta_homologada NUMERIC,
+               calificacion_propuesta JSONB)
 LANGUAGE plpgsql
 STABLE
 AS $$

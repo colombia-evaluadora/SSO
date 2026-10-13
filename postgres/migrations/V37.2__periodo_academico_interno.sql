@@ -513,13 +513,16 @@ COMMENT ON FUNCTION academico_test.fn_descanso_eliminar_interno(BIGINT, VARCHAR)
     IS 'INTERNO: baja logica de un descanso; P0002 si no existe o ya estaba inactivo. Lo usa fn_descanso_eliminar.';
 
 -- ------------------------------------------------- selects de los filtros
--- Alcance ya resuelto por el wrapper: p_global, o el periodo cae en uno de
--- p_establecimientos o de p_sedes.
+-- Alcance ya resuelto por el wrapper: p_periodos son los periodos visibles
+-- (NULL = sin restriccion).
+DROP FUNCTION IF EXISTS academico_test.fn_periodo_anos_lectivos_listar_interno(BOOLEAN, BIGINT[], BIGINT[]);
+DROP FUNCTION IF EXISTS academico_test.fn_periodo_jornadas_listar_interno(BIGINT, BOOLEAN, BIGINT[], BIGINT[]);
+DROP FUNCTION IF EXISTS academico_test.fn_periodo_sedes_listar_interno(BOOLEAN, BIGINT[], BIGINT[]);
 
 -- TANO_LECTIVO es unico por (establecimiento, nombre): el mismo "2026" es una
 -- fila por establecimiento. El filtro solo necesita el nombre: un id por año.
 CREATE OR REPLACE FUNCTION academico_test.fn_periodo_anos_lectivos_listar_interno(
-    p_global BOOLEAN, p_establecimientos BIGINT[], p_sedes BIGINT[]
+    p_periodos BIGINT[]
 )
 RETURNS TABLE (id BIGINT, name VARCHAR)
 LANGUAGE sql STABLE AS $$
@@ -530,18 +533,16 @@ LANGUAGE sql STABLE AS $$
      WHERE al.ACTIVE = TRUE
        AND pa.ACTIVE = TRUE
        AND al.NOMBRE = to_char(CURRENT_DATE, 'YYYY')
-       AND (p_global IS TRUE
-            OR s.FK_TESTABLECIMIENTO = ANY(p_establecimientos)
-            OR pa.FK_TSEDE = ANY(p_sedes))
+       AND (p_periodos IS NULL OR pa.PK_TPERIODO_ACADEMICO = ANY(p_periodos))
      GROUP BY al.NOMBRE
      ORDER BY al.NOMBRE DESC;
 $$;
 
-COMMENT ON FUNCTION academico_test.fn_periodo_anos_lectivos_listar_interno(BOOLEAN, BIGINT[], BIGINT[])
+COMMENT ON FUNCTION academico_test.fn_periodo_anos_lectivos_listar_interno(BIGINT[])
     IS 'INTERNO: años lectivos del año en curso con algun periodo academico activo dentro del alcance dado. Lo usa fn_periodo_anos_lectivos_listar.';
 
 CREATE OR REPLACE FUNCTION academico_test.fn_periodo_jornadas_listar_interno(
-    p_fk_sede BIGINT, p_global BOOLEAN, p_establecimientos BIGINT[], p_sedes BIGINT[]
+    p_fk_sede BIGINT, p_periodos BIGINT[]
 )
 RETURNS TABLE (id BIGINT, name VARCHAR)
 LANGUAGE sql STABLE AS $$
@@ -553,19 +554,17 @@ LANGUAGE sql STABLE AS $$
      WHERE pa.ACTIVE = TRUE
        AND al.ACTIVE = TRUE
        AND (p_fk_sede IS NULL OR pa.FK_TSEDE = p_fk_sede)
-       AND (p_global IS TRUE
-            OR s.FK_TESTABLECIMIENTO = ANY(p_establecimientos)
-            OR pa.FK_TSEDE = ANY(p_sedes))
+       AND (p_periodos IS NULL OR pa.PK_TPERIODO_ACADEMICO = ANY(p_periodos))
      GROUP BY jor.NOMBRE
      ORDER BY jor.NOMBRE;
 $$;
 
-COMMENT ON FUNCTION academico_test.fn_periodo_jornadas_listar_interno(BIGINT, BOOLEAN, BIGINT[], BIGINT[])
+COMMENT ON FUNCTION academico_test.fn_periodo_jornadas_listar_interno(BIGINT, BIGINT[])
     IS 'INTERNO: jornadas con algun periodo academico activo (opcionalmente de una sede) dentro del alcance dado. Lo usa fn_periodo_jornadas_listar.';
 
 -- Sin restriccion de año: sirve de filtro de la tabla de periodos academicos.
 CREATE OR REPLACE FUNCTION academico_test.fn_periodo_sedes_listar_interno(
-    p_global BOOLEAN, p_establecimientos BIGINT[], p_sedes BIGINT[]
+    p_periodos BIGINT[]
 )
 RETURNS TABLE (id BIGINT, name VARCHAR)
 LANGUAGE sql STABLE AS $$
@@ -574,11 +573,9 @@ LANGUAGE sql STABLE AS $$
       JOIN academico_test.TSEDE s ON s.PK_TSEDE = pa.FK_TSEDE
      WHERE pa.ACTIVE = TRUE
        AND s.ACTIVE = TRUE
-       AND (p_global IS TRUE
-            OR s.FK_TESTABLECIMIENTO = ANY(p_establecimientos)
-            OR pa.FK_TSEDE = ANY(p_sedes))
+       AND (p_periodos IS NULL OR pa.PK_TPERIODO_ACADEMICO = ANY(p_periodos))
      ORDER BY s.NOMBRE;
 $$;
 
-COMMENT ON FUNCTION academico_test.fn_periodo_sedes_listar_interno(BOOLEAN, BIGINT[], BIGINT[])
+COMMENT ON FUNCTION academico_test.fn_periodo_sedes_listar_interno(BIGINT[])
     IS 'INTERNO: sedes activas con algun periodo academico activo dentro del alcance dado. Lo usa fn_periodo_sedes_listar.';
