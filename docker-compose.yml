@@ -345,6 +345,14 @@ services:
     ports:
       - "${BIND_IP:-127.0.0.1}:${AUTH_CENTER_PORT:-8081}:8081"
     environment:
+      # JVM acotada aunque el contenedor no tenga mem_limit: sin -Xmx la JVM
+      # toma el 75% de la RAM del host y, con la basura de Argon2, llegó a
+      # 4,4 GiB y p99 de login de 6,9s. Con esto (benchmark local, 10 logins
+      # concurrentes): pico 869 MiB, 547 MiB en reposo y p99 436 ms.
+      # G1PeriodicGCInterval devuelve heap al SO en reposo (JEP 346);
+      # MALLOC_ARENA_MAX limita las arenas de glibc por hilo.
+      JAVA_TOOL_OPTIONS: ${AUTH_CENTER_JAVA_OPTS:--Xmx512m -XX:G1PeriodicGCInterval=15000 -Xss512k -XX:ReservedCodeCacheSize=64m -XX:MaxDirectMemorySize=64m}
+      MALLOC_ARENA_MAX: ${AUTH_CENTER_MALLOC_ARENA_MAX:-2}
       SPRING_DATASOURCE_URL: "jdbc:postgresql://${DB_URL}/${DB_NAME}?sslmode=${DB_SSLMODE:-require}&channel_binding=${DB_CHANNEL_BINDING:-prefer}"
       DB_USER: ${DB_USER}
       DB_PASSWORD: ${DB_PASSWORD}
