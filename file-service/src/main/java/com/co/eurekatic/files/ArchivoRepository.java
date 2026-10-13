@@ -126,9 +126,13 @@ public class ArchivoRepository {
         return (v == null || v.isBlank()) ? null : v;
     }
 
+    /** ObjectMapper es thread-safe una vez configurado: uno solo, no uno por llamada. */
+    private static final com.fasterxml.jackson.databind.ObjectMapper JSON =
+            new com.fasterxml.jackson.databind.ObjectMapper();
+
     private static String writeJson(Map<String, Object> map) {
         try {
-            return new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsString(map);
+            return JSON.writeValueAsString(map);
         } catch (Exception e) {
             return null;
         }
