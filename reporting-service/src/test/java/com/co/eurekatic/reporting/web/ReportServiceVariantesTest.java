@@ -14,6 +14,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
@@ -56,7 +57,7 @@ class ReportServiceVariantesTest {
         props.setReports(reportes);
 
         QueryServiceClient query = mock(QueryServiceClient.class);
-        when(query.fetchRows(any(), anyString(), any(), any(), any()))
+        when(query.fetchRows(any(), anyString(), any(), any(), any(), anyInt()))
                 .thenAnswer(inv -> {
                     throw new Consultado(inv.getArgument(1));
                 });

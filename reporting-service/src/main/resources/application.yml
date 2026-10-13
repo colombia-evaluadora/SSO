@@ -63,6 +63,8 @@ reporting:
   # Tope duro. V66 quito el LIMIT de las funciones, asi que este es el
   # unico freno que queda entre un filtro mal puesto y un PDF de
   # cientos de miles de filas.
+  # Debe ser MENOR que QUERY_MAX_ROWS de query-service (default 50001): si no,
+  # query-service recorta antes y el tope de aqui nunca se detecta.
   max-rows: ${REPORTING_MAX_ROWS:50000}
 
   # Exportaciones simultaneas por instancia (cada una retiene filas y archivo

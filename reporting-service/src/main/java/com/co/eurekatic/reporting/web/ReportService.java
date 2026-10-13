@@ -156,8 +156,10 @@ public class ReportService {
                 def.getPath(),
                 bearer,
                 request == null ? Map.of() : request.filters(),
-                request == null ? null : request.sorting());
+                request == null ? null : request.sorting(),
+                props.getMaxRows());
 
+        // Red de seguridad: el cliente ya corta en streaming al superar el tope.
         if (rows.size() > props.getMaxRows()) {
             // Se corta ACA y no despues de generar: el archivo de un
             // resultado desmedido puede tardar minutos y ocupar cientos
