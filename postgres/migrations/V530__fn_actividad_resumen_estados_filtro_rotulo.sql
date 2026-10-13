@@ -170,7 +170,7 @@ BEGIN
     SELECT * INTO v_alc
       FROM academico_test.fn_planeador_alcance_docente(p_pk_usuario_solicitante, p_fk_tfuncionario, p_fk_sede, p_fk_periodo);
 
-    IF v_alc.fk_tfuncionario IS NULL AND (v_alc.solo_propias OR v_alc.alcance_total) THEN
+    IF v_alc.fk_tfuncionario IS NULL AND v_alc.solo_propias THEN
         RETURN QUERY SELECT 0::BIGINT, 0::BIGINT, 0::BIGINT, 0::BIGINT, 0::BIGINT;
         RETURN;
     END IF;
@@ -185,4 +185,4 @@ END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_actividad_resumen_estados_docente(BIGINT, BIGINT, BIGINT, BIGINT, DATE, DATE, INT, VARCHAR[], BIGINT, BIGINT, BIGINT)
-    IS 'Tablero del Planeador (las CUATRO tarjetas, mas el total). Wrapper delgado: resuelve el docente con fn_planeador_alcance_docente y delega en fn_actividad_resumen_estados. Docente puro: el suyo (ignora p_fk_tfuncionario; sin funcionario, contadores en 0). Otros con p_fk_tfuncionario (?funcionario=): ese docente, 42501 si no dicta nada en su alcance. Otros sin él: todo su alcance (nivel 3: pares sede+jornada); alcance total sin docente elegido: contadores en 0. p_grado_asignatura_pares (V530): acota a una pestaña de Rotulo de Ejecucion, mismo contrato que fn_actividad_listar_docente (V526/V527)/fn_actividad_calendario_docente (V528/V529). Gate VER sobre PLANEADOR. V250/V530.';
+    IS 'Tablero del Planeador (las CUATRO tarjetas, mas el total). Wrapper delgado: resuelve el docente con fn_planeador_alcance_docente y delega en fn_actividad_resumen_estados. Docente puro: el suyo (ignora p_fk_tfuncionario; sin funcionario, contadores en 0). Otros con p_fk_tfuncionario (?funcionario=): ese docente, 42501 si no dicta nada en su alcance. Otros sin él: todo su alcance (nivel 3: pares sede+jornada; alcance total: todas las sedes). p_grado_asignatura_pares (V530): acota a una pestaña de Rotulo de Ejecucion, mismo contrato que fn_actividad_listar_docente (V526/V527)/fn_actividad_calendario_docente (V528/V529). Gate VER sobre PLANEADOR. V250/V530.';
