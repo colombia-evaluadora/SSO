@@ -4,6 +4,8 @@
 --   tablero (mias, calendario, stats, tabs, unidades, unidades/tabs,
 --   docentes/*); mias, calendario y unidades traen el docente de cada fila.
 --   ?sede=&periodo= (filtro avanzado, V553.1) acotan el alcance y las lecturas.
+--   ?instrumento= (pk_lista_valor) en mias, calendario y stats; ?estados= y
+--   ?search= tambien en calendario (stats: ?search=) (filtros "Estado"/"Instrumento" del popover del tablero).
 -- Que hace: el alcance (sedes + pares sede/jornada del nivel 3 resueltos a
 --   periodos academicos), la validacion del docente pedido y el selector de
 --   docentes; los wrappers que lo usan se editaron en su migracion dueña
@@ -460,13 +462,14 @@ UPDATE public.query q
     string_to_array(NULLIF(TRIM(CAST(:QUERY.GRADO_ASIGNATURA_PARES AS VARCHAR)), ''), ','),
     CAST(:QUERY.FUNCIONARIO AS BIGINT),
     CAST(:QUERY.SEDE AS BIGINT),
-    CAST(:QUERY.PERIODO AS BIGINT)
+    CAST(:QUERY.PERIODO AS BIGINT),
+    CAST(:QUERY.INSTRUMENTO AS BIGINT)
 ) WITH ORDINALITY f
   LEFT JOIN LATERAL academico_test.fn_actividad_docente_dicta(
            f.pk_tactividad,
            academico_test.fn_funcionario_actual(public.fn_get_academico_usuario_id(:CONTEXT.USER_ID::BIGINT))) d ON TRUE
  ORDER BY f.ordinality;$q$,
-       param_types = COALESCE(q.param_types, '{}'::jsonb) || '{"QUERY.FUNCIONARIO": "BIGINT", "QUERY.SEDE": "BIGINT", "QUERY.PERIODO": "BIGINT"}'::jsonb
+       param_types = COALESCE(q.param_types, '{}'::jsonb) || '{"QUERY.FUNCIONARIO": "BIGINT", "QUERY.SEDE": "BIGINT", "QUERY.PERIODO": "BIGINT", "QUERY.INSTRUMENTO": "BIGINT"}'::jsonb
   FROM public.microservice m
  WHERE m.id_microservice = q.microservice_id
    AND m.serviceid       = 'eval-col'
@@ -487,13 +490,16 @@ UPDATE public.query q
     string_to_array(NULLIF(TRIM(CAST(:QUERY.GRADO_ASIGNATURA_PARES AS VARCHAR)), ''), ','),
     CAST(:QUERY.FUNCIONARIO AS BIGINT),
     CAST(:QUERY.SEDE AS BIGINT),
-    CAST(:QUERY.PERIODO AS BIGINT)
+    CAST(:QUERY.PERIODO AS BIGINT),
+    string_to_array(NULLIF(TRIM(CAST(:QUERY.ESTADOS AS VARCHAR)), ''), ','),
+    CAST(:QUERY.INSTRUMENTO AS BIGINT),
+    CAST(:QUERY.SEARCH AS VARCHAR)
 ) WITH ORDINALITY c
   LEFT JOIN LATERAL academico_test.fn_actividad_docente_dicta(
            c.pk_tactividad,
            academico_test.fn_funcionario_actual(public.fn_get_academico_usuario_id(:CONTEXT.USER_ID::BIGINT))) d ON TRUE
  ORDER BY c.ordinality;$q$,
-       param_types = COALESCE(q.param_types, '{}'::jsonb) || '{"QUERY.FUNCIONARIO": "BIGINT", "QUERY.SEDE": "BIGINT", "QUERY.PERIODO": "BIGINT"}'::jsonb
+       param_types = COALESCE(q.param_types, '{}'::jsonb) || '{"QUERY.FUNCIONARIO": "BIGINT", "QUERY.SEDE": "BIGINT", "QUERY.PERIODO": "BIGINT", "QUERY.ESTADOS": "VARCHAR", "QUERY.INSTRUMENTO": "BIGINT", "QUERY.SEARCH": "VARCHAR"}'::jsonb
   FROM public.microservice m
  WHERE m.id_microservice = q.microservice_id
    AND m.serviceid       = 'eval-col'
@@ -522,9 +528,11 @@ UPDATE public.query q
     string_to_array(NULLIF(TRIM(CAST(:QUERY.GRADO_ASIGNATURA_PARES AS VARCHAR)), ''), ','),
     CAST(:QUERY.FUNCIONARIO AS BIGINT),
     CAST(:QUERY.SEDE AS BIGINT),
-    CAST(:QUERY.PERIODO AS BIGINT)
+    CAST(:QUERY.PERIODO AS BIGINT),
+    CAST(:QUERY.INSTRUMENTO AS BIGINT),
+    CAST(:QUERY.SEARCH AS VARCHAR)
 ) t;$q$,
-       param_types = COALESCE(q.param_types, '{}'::jsonb) || '{"QUERY.FUNCIONARIO": "BIGINT", "QUERY.SEDE": "BIGINT", "QUERY.PERIODO": "BIGINT"}'::jsonb
+       param_types = COALESCE(q.param_types, '{}'::jsonb) || '{"QUERY.FUNCIONARIO": "BIGINT", "QUERY.SEDE": "BIGINT", "QUERY.PERIODO": "BIGINT", "QUERY.INSTRUMENTO": "BIGINT", "QUERY.SEARCH": "VARCHAR"}'::jsonb
   FROM public.microservice m
  WHERE m.id_microservice = q.microservice_id
    AND m.serviceid       = 'eval-col'
