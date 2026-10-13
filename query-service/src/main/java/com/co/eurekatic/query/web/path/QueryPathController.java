@@ -166,6 +166,10 @@ public class QueryPathController {
         boolean cacheable = "GET".equals(method) && match.cacheable();
         String cacheKey = null;
         if (cacheable) {
+            // Autorizar ANTES de mirar la caché de resultados: un acierto
+            // se devuelve sin pasar por execute(), así que sin esto un
+            // usuario sin acceso leería lo que cacheó otro con acceso.
+            service.authorize(match.uuid(), false);
             cacheKey = CatalogResultCacheService.keyFor(match.uuid(), fullPath, queryParams,
                     org.springframework.security.core.context.SecurityContextHolder
                             .getContext().getAuthentication());

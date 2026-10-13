@@ -168,6 +168,24 @@ public class QueryService {
         }
     }
 
+    /**
+     * Comprueba el acceso del llamante a {@code uuid} sin ejecutar nada:
+     * resuelve la definición (vía la caché local, así que casi nunca es una
+     * llamada HTTP) y aplica las mismas comprobaciones de acceso que
+     * {@link #execute}. Lo llama el controlador antes de servir una respuesta
+     * de la caché de resultados, que de otro modo se saltaría la autorización.
+     */
+    public void authorize(String uuid, boolean publicOk) {
+        Authentication auth = currentAuthentication();
+        String bearer = auth == null ? "" : bearerToken(auth);
+        QueryDefinition def = catalog.query(auth, bearer, uuid);
+        if (!def.publicEnd() && publicOk) {
+            log.warn("Non-public query {} reached /public/service — denying", uuid);
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN,
+                    "La consulta no es pública");
+        }
+    }
+
     /** Sink through which {@link #doExecute} publishes what it resolved about the row. */
     @FunctionalInterface
     private interface ResolvedSink {
