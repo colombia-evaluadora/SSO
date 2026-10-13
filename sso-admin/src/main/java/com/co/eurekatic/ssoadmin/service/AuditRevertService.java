@@ -307,8 +307,9 @@ public class AuditRevertService {
                 : jdbc.queryForObject("SELECT public.fn_get_academico_usuario_id(?)", Long.class, actingUserId);
 
         // Misma conexión/transacción que el UPDATE de abajo — a
-        // diferencia de query-service, sso-admin SÍ tiene @Transactional
-        // real, así que no hace falta el truco del CTE MATERIALIZED.
+        // diferencia de query-service, aquí hay una transacción real (la
+        // abre el TransactionTemplate de revert()), así que no hace falta
+        // el truco del CTE MATERIALIZED.
         // app.user_id lleva el nombre legible (o el PK crudo si no se
         // pudo resolver); app.user_pk lleva SIEMPRE el PK crudo de
         // TUSUARIO, sin pisar ni ser pisado por la resolución de nombre

@@ -64,7 +64,7 @@ public class EurekaReadinessProbe {
     @org.springframework.beans.factory.annotation.Autowired
     public EurekaReadinessProbe(DiscoveryClient discoveryClient,
             @org.springframework.beans.factory.annotation.Value("${SSO_ADMIN_EUREKA_READY_TIMEOUT:45s}") Duration timeout,
-            @org.springframework.beans.factory.annotation.Value("${SSO_ADMIN_EUREKA_pollInterval:1s}") Duration pollInterval) {
+            @org.springframework.beans.factory.annotation.Value("${SSO_ADMIN_EUREKA_POLL_INTERVAL:1s}") Duration pollInterval) {
         this.discoveryClient = discoveryClient;
         this.timeout = timeout;
         this.pollInterval = pollInterval;
