@@ -326,18 +326,12 @@ services:
     restart: unless-stopped
     stop_grace_period: ${JAVA_STOP_GRACE_PERIOD:-40s}
     logging: *default-logging
-    # Subido de 640m a 896m el 2026-09-09. En el servidor de pruebas el
-    # contenedor estaba estable en 583MiB — el 91% de los 640m — y es el
-    # único servicio cuya caída deja a TODO el mundo fuera: es quien
-    # firma los tokens. Un pico de logins lo dejaba a un OOM-kill de
-    # distancia, y `restart: unless-stopped` habría hecho el corte
-    # visible (todas las sesiones en curso fallando el refresh).
-    #
-    # mem_limit no reserva nada: sólo pone el techo del cgroup, así que
-    # subirlo no le quita memoria a nadie mientras auth-center no la
-    # use. Lo que sí reserva es mem_reservation, y por eso sube menos
-    # (512m -> 640m): justo por encima del consumo observado.
-    mem_limit: 896m
+    # Sin mem_limit ni límite de CPU: es quien firma los tokens y su caída
+    # deja a todo el mundo fuera. Con 896m, 10 logins concurrentes
+    # (Argon2id, 19 MiB por hash) llevaban el RSS a 894/896 MiB y el
+    # cgroup lo mataba (benchmark local, 2026-10-13). La concurrencia de
+    # hashes la acota el semáforo de JsonLoginFilter, no el contenedor.
+    # mem_reservation no limita: solo es la reserva blanda bajo presión.
     mem_reservation: 640m
     depends_on:
       flyway:
