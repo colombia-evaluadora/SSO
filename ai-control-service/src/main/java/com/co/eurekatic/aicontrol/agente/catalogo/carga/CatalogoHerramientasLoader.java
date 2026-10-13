@@ -2,6 +2,7 @@ package com.co.eurekatic.aicontrol.agente.catalogo.carga;
 
 import com.co.eurekatic.aicontrol.agente.catalogo.dominio.CatalogoHerramientas;
 import com.co.eurekatic.aicontrol.agente.catalogo.dominio.HerramientaDef;
+import com.co.eurekatic.aicontrol.agente.comun.PoliticaRefresco;
 import com.co.eurekatic.aicontrol.config.agente.AgenteProperties;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -10,7 +11,6 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
 import java.time.Clock;
-import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
@@ -76,13 +76,9 @@ public class CatalogoHerramientasLoader {
     /** Disparo periodico: arranque, reintento con el catalogo vacio y refresco normal. */
     @Scheduled(fixedDelayString = "${sso.ai.agente.catalogo.reintento:PT30S}", initialDelayString = "PT0S")
     public void ciclo() {
-        if (debeRefrescar(actual.get().estaVacio(), ultimaCarga.get(), reloj.instant(), props.refresco())) {
+        if (PoliticaRefresco.toca(actual.get().estaVacio(), ultimaCarga.get(), reloj.instant(), props.refresco())) {
             refrescar();
         }
-    }
-
-    static boolean debeRefrescar(boolean vacio, Instant ultima, Instant ahora, Duration refresco) {
-        return vacio || !ahora.isBefore(ultima.plus(refresco));
     }
 
     /** Mapea y aplica el techo. Una fila que no se puede interpretar o que el techo rechaza se descarta sola. */

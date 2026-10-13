@@ -7,7 +7,6 @@ import org.junit.jupiter.api.Test;
 import org.springframework.dao.DataAccessResourceFailureException;
 
 import java.time.Clock;
-import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
@@ -55,21 +54,6 @@ class CatalogoHerramientasLoaderTest {
         loader.refrescar();
 
         assertThat(loader.catalogo().tamano()).isEqualTo(1);
-    }
-
-    @Test
-    void conCatalogoVacioSeReintentaAunqueNoHayaVencidoElRefresco() {
-        Instant ahora = Instant.parse("2026-10-13T12:00:00Z");
-        assertThat(CatalogoHerramientasLoader.debeRefrescar(true, ahora, ahora, Duration.ofMinutes(5))).isTrue();
-    }
-
-    @Test
-    void conCatalogoCargadoSeRefrescaSoloPasadoElPeriodo() {
-        Instant ultima = Instant.parse("2026-10-13T12:00:00Z");
-        assertThat(CatalogoHerramientasLoader.debeRefrescar(false, ultima, ultima.plusSeconds(60), Duration.ofMinutes(5)))
-                .isFalse();
-        assertThat(CatalogoHerramientasLoader.debeRefrescar(false, ultima, ultima.plusSeconds(300), Duration.ofMinutes(5)))
-                .isTrue();
     }
 
     private static CatalogoHerramientasLoader loader(CatalogoRepository repo) {
