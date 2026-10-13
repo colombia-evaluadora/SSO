@@ -36,18 +36,18 @@ public class AcademicoJdbcRepository {
                 ?::bigint, ?::varchar, ?::bigint, ?::varchar)
             """;
 
-    // V71 — mismo criterio que fn_fun_crear (SQL) usa para decidir si
-    // reutilizar un TUSUARIO en vez de crear uno nuevo: mismo correo
-    // (CUENTA) O mismo (tipo de documento, identificación), solo entre
-    // activos. LIMIT 1 porque TUSUARIO ya tiene UNIQUE en ambos criterios
-    // por separado (fn_usu_crear los valida al crear), así que a lo sumo
-    // hay una fila que matchee.
+    // Mismo criterio que fn_fun_crear (V51) usa para reutilizar un TUSUARIO:
+    // la persona ACTIVA con el mismo (tipo de documento, identificación),
+    // como el autocompletado del front. Antes también bastaba el correo, y un
+    // alta con documento nuevo y el correo de otra persona se pegaba a esa
+    // persona; ahora ese caso no se reutiliza y fn_fun_crear lo rechaza con
+    // un mensaje claro (la transacción se revierte).
     private static final String SQL_FIND_EXISTING_ACCOUNT_EMAIL = """
             SELECT cuenta
               FROM academico_test.tusuario
              WHERE active = TRUE
-               AND (upper(cuenta) = upper(?::varchar)
-                    OR (fk_tlv_tipo_documento = ?::bigint AND identificacion = ?::varchar))
+               AND fk_tlv_tipo_documento = ?::bigint
+               AND identificacion = ?::varchar
              ORDER BY pk_tusuario
              LIMIT 1
             """;
@@ -68,16 +68,16 @@ public class AcademicoJdbcRepository {
      * rector/secretaria a alguien que ya es funcionario en otro
      * establecimiento.
      *
-     * @return la {@code CUENTA} (correo) real con la que esa persona ya
-     *         está registrada — no necesariamente {@code r.email()}, que
-     *         puede venir distinto si el formulario lo dejó desactualizado
-     *         — o {@code null} si no hay ningún TUSUARIO que coincida.
+     * @return la {@code CUENTA} con la que esa persona ya está registrada —
+     *         no necesariamente {@code r.email()}: el correo editado lo
+     *         aplica después el PATCH del front — o {@code null} si no hay un
+     *         TUSUARIO activo con ese documento.
      */
     public String findExistingAccountEmail(RegisterUsuarioRequest r) {
         List<String> rows = jdbc.query(
                 SQL_FIND_EXISTING_ACCOUNT_EMAIL,
                 (rs, rowNum) -> rs.getString("cuenta"),
-                r.email(), r.fkTlvTipoDocumento(), r.identificacion());
+                r.fkTlvTipoDocumento(), r.identificacion());
         return rows.isEmpty() ? null : rows.get(0);
     }
 
