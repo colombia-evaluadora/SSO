@@ -28,6 +28,8 @@ public final class PropiedadesAgenteFixture {
                         new AgenteProperties.Modelo("MiniMax-M3", "{}", 6000)),
                 new AgenteProperties.Limites(15, 5, rateLimitUsuarioPorMin, textoMaxCaracteres, 2),
                 new AgenteProperties.Memoria(30, Duration.ofHours(24)),
-                new AgenteProperties.Acciones(Duration.ofMinutes(10)));
+                new AgenteProperties.Acciones(Duration.ofMinutes(10)),
+                new AgenteProperties.Catalogo(Duration.ofMinutes(5), Duration.ofSeconds(30), Duration.ofSeconds(60),
+                        "/usuarios/permisos-menu", 50, 12_000));
     }
 }

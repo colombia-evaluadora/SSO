@@ -153,6 +153,15 @@ sso:
         ttl: ${AI_AGENTE_MEMORIA_TTL:24h}
       acciones:
         expira: ${AI_AGENTE_ACCION_EXPIRA:10m}
+      catalogo:
+        # Refresco del catalogo cuando todo va bien; reintento si esta vacio o la base no responde.
+        refresco: ${AI_AGENTE_CATALOGO_REFRESCO:PT5M}
+        reintento: ${AI_AGENTE_CATALOGO_REINTENTO:PT30S}
+        menus-ttl: ${AI_AGENTE_MENUS_TTL:60s}
+        # Menus del usuario con codigo y permisos (query-service eval-col).
+        ruta-menus: ${AI_AGENTE_RUTA_MENUS:/usuarios/permisos-menu}
+        max-filas: ${AI_AGENTE_MAX_FILAS:50}
+        max-caracteres: ${AI_AGENTE_MAX_CARACTERES:12000}
   jwt:
     # Solo la publica: este servicio verifica firmas, no emite tokens.
     public-key: ${JWT_PUBLIC_KEY}

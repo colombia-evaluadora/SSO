@@ -15,13 +15,15 @@ import java.util.Objects;
  * @param limites  presupuesto de herramientas por turno y tope de peticiones
  * @param memoria  ventana que ve el modelo y vida de la memoria en Redis
  * @param acciones plazo para confirmar una accion de escritura
+ * @param catalogo catalogo de herramientas: refresco, permisos de menu y tamano de los resultados
  */
 @ConfigurationProperties("sso.ai.agente")
 public record AgenteProperties(
         Modelos modelos,
         @DefaultValue Limites limites,
         @DefaultValue Memoria memoria,
-        @DefaultValue Acciones acciones) {
+        @DefaultValue Acciones acciones,
+        @DefaultValue Catalogo catalogo) {
 
     public AgenteProperties {
         Objects.requireNonNull(modelos, "sso.ai.agente.modelos es obligatorio");
@@ -76,5 +78,28 @@ public record AgenteProperties(
 
     /** @param expira cuanto espera una accion de escritura su confirmacion */
     public record Acciones(@DefaultValue("10m") Duration expira) {
+    }
+
+    /**
+     * @param refresco       cada cuanto se relee el catalogo de la base cuando todo va bien
+     * @param reintento      cada cuanto se reintenta si el catalogo esta vacio o la base no responde
+     * @param menusTtl       vida de los menus del usuario en memoria (por hash del token)
+     * @param rutaMenus      ruta de query-service que devuelve los menus del usuario con su codigo y permisos
+     * @param maxFilas       filas que ve el modelo de un resultado; el resto se corta y se marca
+     * @param maxCaracteres  caracteres que ve el modelo de un resultado serializado
+     */
+    public record Catalogo(
+            @DefaultValue("PT5M") Duration refresco,
+            @DefaultValue("PT30S") Duration reintento,
+            @DefaultValue("60s") Duration menusTtl,
+            @DefaultValue("/usuarios/permisos-menu") String rutaMenus,
+            @DefaultValue("50") int maxFilas,
+            @DefaultValue("12000") int maxCaracteres) {
+
+        public Catalogo {
+            if (maxFilas <= 0 || maxCaracteres <= 0) {
+                throw new IllegalArgumentException("maxFilas y maxCaracteres deben ser positivos");
+            }
+        }
     }
 }
