@@ -128,7 +128,7 @@ RETURNS TABLE (
     grado_siguiente VARCHAR, grado_siguiente_name VARCHAR, tiene_grado_siguiente BOOLEAN,
     total_count BIGINT, codigo INT, codigo_texto VARCHAR
 )
-LANGUAGE plpgsql STABLE AS $$
+LANGUAGE plpgsql STABLE ROWS 20 AS $$
 DECLARE v_col TEXT; v_dir TEXT;
 BEGIN
     v_col := CASE lower(coalesce(p_sort_by, ''))
@@ -306,7 +306,7 @@ CREATE OR REPLACE FUNCTION academico_test.fn_grupo_listar_interno(
 RETURNS TABLE (id BIGINT, codigo VARCHAR, jornada VARCHAR, jornada_name VARCHAR, director_id BIGINT,
                director_name TEXT, metodologia VARCHAR, metodologia_name VARCHAR, cupo NUMERIC, total_count BIGINT,
                jornada_id BIGINT)
-LANGUAGE plpgsql STABLE AS $$
+LANGUAGE plpgsql STABLE ROWS 10 AS $$
 DECLARE v_col TEXT; v_dir TEXT;
 BEGIN
     v_col := CASE lower(coalesce(p_sort_by, ''))
@@ -402,31 +402,45 @@ DECLARE
     v_audit VARCHAR(120) := p_pk_usuario_solicitante::VARCHAR;
     v_skipped INT := 0;
     v_grupo BIGINT; v_asig BIGINT;
+    v_grupos BIGINT[]; v_asigs BIGINT[];
 BEGIN
     IF p_fk_funcionario IS NULL OR p_academic_period_id IS NULL THEN
         RETURN 0;
     END IF;
 
-    UPDATE academico_test.TDOCENTE_ASIGNATURA
+    -- Solo grupos de preescolar: lo demas del docente es asignacion manual.
+    SELECT COALESCE(array_agg(gr.PK_TGRUPO), '{}'), COALESCE(array_agg(ap.FK_TASIGNATURA), '{}')
+      INTO v_grupos, v_asigs
+      FROM academico_test.TGRUPO gr
+      JOIN academico_test.TGRADO g ON g.PK_TGRADO = gr.FK_TGRADO AND g.ACTIVE = TRUE
+           AND g.FK_TPERIODO_ACADEMICO = p_academic_period_id
+      JOIN academico_test.TPLAN pl ON pl.FK_TGRADO = g.PK_TGRADO AND pl.ACTIVE = TRUE
+      JOIN academico_test.TASIGNATURA_PLAN ap ON ap.FK_TPLAN = pl.PK_TPLAN AND ap.ACTIVE = TRUE
+      JOIN academico_test.TASIGNATURA s ON s.PK_TASIGNATURA = ap.FK_TASIGNATURA AND s.ACTIVE = TRUE
+     WHERE gr.FK_TFUNCIONARIO = p_fk_funcionario AND gr.ACTIVE = TRUE
+       AND academico_test.fn_grado_es_preescolar(g.PK_TGRADO)
+       AND (p_excluir_asignatura IS NULL OR ap.FK_TASIGNATURA <> p_excluir_asignatura);
+
+    UPDATE academico_test.TDOCENTE_ASIGNATURA da
        SET ACTIVE = FALSE, MODIFIED_BY = v_audit, MODIFIED_AT = CURRENT_TIMESTAMP
-     WHERE FK_TFUNCIONARIO = p_fk_funcionario
-       AND FK_TPERIODO_ACADEMICO = p_academic_period_id
-       AND ACTIVE = TRUE;
+      FROM academico_test.TGRUPO gr
+     WHERE gr.PK_TGRUPO = da.FK_TGRUPO
+       AND da.FK_TFUNCIONARIO = p_fk_funcionario
+       AND da.FK_TPERIODO_ACADEMICO = p_academic_period_id
+       AND da.ACTIVE = TRUE
+       AND academico_test.fn_grado_es_preescolar(gr.FK_TGRADO)
+       AND NOT EXISTS (SELECT 1 FROM unnest(v_grupos, v_asigs) t(grupo, asig)
+                        WHERE t.grupo = da.FK_TGRUPO AND t.asig = da.FK_TASIGNATURA);
 
     FOR v_grupo, v_asig IN
-        SELECT gr.PK_TGRUPO, ap.FK_TASIGNATURA
-          FROM academico_test.TGRUPO gr
-          JOIN academico_test.TGRADO g ON g.PK_TGRADO = gr.FK_TGRADO AND g.ACTIVE = TRUE
-               AND g.FK_TPERIODO_ACADEMICO = p_academic_period_id
-          JOIN academico_test.TPLAN pl ON pl.FK_TGRADO = g.PK_TGRADO AND pl.ACTIVE = TRUE
-          JOIN academico_test.TASIGNATURA_PLAN ap ON ap.FK_TPLAN = pl.PK_TPLAN AND ap.ACTIVE = TRUE
-          JOIN academico_test.TASIGNATURA s ON s.PK_TASIGNATURA = ap.FK_TASIGNATURA AND s.ACTIVE = TRUE
-         WHERE gr.FK_TFUNCIONARIO = p_fk_funcionario AND gr.ACTIVE = TRUE
-           AND (p_excluir_asignatura IS NULL OR ap.FK_TASIGNATURA <> p_excluir_asignatura)
+        SELECT t.grupo, t.asig FROM unnest(v_grupos, v_asigs) t(grupo, asig)
+         WHERE NOT EXISTS (
+               SELECT 1 FROM academico_test.TDOCENTE_ASIGNATURA da
+                WHERE da.FK_TGRUPO = t.grupo AND da.FK_TASIGNATURA = t.asig
+                  AND da.FK_TFUNCIONARIO = p_fk_funcionario
+                  AND da.FK_TPERIODO_ACADEMICO = p_academic_period_id AND da.ACTIVE = TRUE)
     LOOP
-        -- Conflicto: la pareja grupo+asignatura ya esta activa para OTRO
-        -- funcionario en el periodo (asignacion manual previa). No se
-        -- pisa: se omite y se sigue con el resto.
+        -- La pareja ya activa para OTRO funcionario (asignacion manual) no se pisa.
         IF EXISTS (
             SELECT 1 FROM academico_test.TDOCENTE_ASIGNATURA
              WHERE FK_TGRUPO = v_grupo AND FK_TASIGNATURA = v_asig
@@ -447,10 +461,11 @@ END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_docente_director_grupo_sync IS
-    'Recalcula el conjunto completo de TDOCENTE_ASIGNATURA de un funcionario '
-    '(director de grupo) en todo el periodo, a partir de los grupos que dirige. '
-    'No bloquea por conflicto con un docente manual distinto: omite esa pareja '
-    'y devuelve cuantas se omitieron. Ver V301.';
+    'Sincroniza las TDOCENTE_ASIGNATURA de un funcionario en los grupos de '
+    'PREESCOLAR del periodo: todas las asignaturas del plan de los grupos que '
+    'dirige, y baja de las que ya no le corresponden. No toca sus asignaciones '
+    'de otros niveles ni las filas que siguen vigentes. Omite (y cuenta) la '
+    'pareja ya activa para otro funcionario.';
 
 -- ---------------------------------------------------------------------------
 -- fn_grupo_director_rol_sync_interno: nucleo sin gate (lo llaman fn_grupo_

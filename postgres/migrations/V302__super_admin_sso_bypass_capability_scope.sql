@@ -1,67 +1,14 @@
 -- V302 -- El super admin del SSO (CEVAL-SUPER_ADMINISTRADOR en public.role_users)
 -- llega al nivel 0 sin depender de TSEDE_USUARIO: derivado de filas por sede, se
 -- perdia al borrar sedes y en una instalacion vacia nadie podia crear el primer
--- establecimiento. El bypass sigue siendo el paso 0 de fn_assert_permiso_seccion;
--- aqui solo cambia la fuente (fn_usuario_categoria_rol_nivel y
--- fn_puede_afectar_establecimiento), y el resync deja de retirar ese rol.
+-- establecimiento. fn_es_super_admin_sso y el nivel 0 de
+-- fn_usuario_categoria_rol_nivel viven en V29; aqui la segunda puerta
+-- (fn_puede_afectar_establecimiento) usa la misma fuente y el resync deja de
+-- retirar ese rol.
 -- Seguridad: una fila CEVAL-SUPER_ADMINISTRADOR en public.role_users da poder
 -- total sin respaldo academico; auditar periodicamente quien la tiene.
 
--- 1. TUSUARIO <-> users por cuenta/email, como fn_sincronizar_rol_publico.
-CREATE OR REPLACE FUNCTION academico_test.fn_es_super_admin_sso(p_pk_tusuario BIGINT)
-RETURNS BOOLEAN
-LANGUAGE sql
-STABLE
-AS $function$
-    SELECT CASE
-             WHEN p_pk_tusuario IS NULL THEN FALSE
-             ELSE EXISTS (
-                 SELECT 1
-                   FROM academico_test.TUSUARIO t
-                   JOIN public.users u
-                     ON UPPER(u.email) = UPPER(t.CUENTA)
-                   JOIN public.role_users ru ON ru.user_id = u.id_user
-                   JOIN public.role r        ON r.id_role  = ru.role_id
-                  WHERE t.PK_TUSUARIO = p_pk_tusuario
-                    AND r.name        = 'CEVAL-SUPER_ADMINISTRADOR'
-                    AND u.active      = TRUE
-                    AND u.enabled     = TRUE
-             )
-           END;
-$function$;
-
-COMMENT ON FUNCTION academico_test.fn_es_super_admin_sso(BIGINT) IS
-    'V302 - TRUE si el usuario tiene CEVAL-SUPER_ADMINISTRADOR en public.role_users. Fuente del rol global de super admin, independiente de TSEDE_USUARIO.';
-
--- El alcance de los listados la llama por fila: sin indice, UPPER(email)
--- recorria public.users entera en cada llamada.
-CREATE INDEX IF NOT EXISTS idx_users_email_upper ON public.users (UPPER(email));
-
--- 2. Nivel 0 directo para el super admin del SSO.
-CREATE OR REPLACE FUNCTION academico_test.fn_usuario_categoria_rol_nivel(p_pk_tusuario BIGINT)
-RETURNS INTEGER
-LANGUAGE plpgsql
-STABLE
-AS $function$
-DECLARE
-    v_nivel  INT;
-BEGIN
-    IF academico_test.fn_es_super_admin_sso(p_pk_tusuario) THEN
-        RETURN 0;
-    END IF;
-
-    SELECT MIN(academico_test.fn_rol_categoria_nivel(su.FK_TROL))
-      INTO v_nivel
-      FROM academico_test.TSEDE_USUARIO su
-     WHERE su.FK_TUSUARIO = p_pk_tusuario
-       AND su.ACTIVE      = TRUE;
-
-    -- NULL si el usuario no tiene ningun rol activo (MIN sobre 0 filas).
-    RETURN v_nivel;
-END;
-$function$;
-
--- 3. Segunda puerta (listados): misma fuente; la via por TSEDE_USUARIO sigue.
+-- 1. Segunda puerta (listados): misma fuente (fn_es_super_admin_sso, V29); la via por TSEDE_USUARIO sigue.
 CREATE OR REPLACE FUNCTION academico_test.fn_puede_afectar_establecimiento(p_pk_usuario BIGINT)
 RETURNS BOOLEAN
 LANGUAGE sql
@@ -80,7 +27,7 @@ AS $function$
            END;
 $function$;
 
--- 4. CEVAL-SUPER_ADMINISTRADOR entre los roles que el resync no toca: sin
+-- 2. CEVAL-SUPER_ADMINISTRADOR entre los roles que el resync no toca: sin
 --    respaldo academico, la primera escritura en TSEDE_USUARIO (trigger de
 --    V301) se lo quitaria, y con el el acceso al gateway.
 CREATE OR REPLACE FUNCTION academico_test.fn_sincronizar_rol_publico(p_pk_tusuario BIGINT)

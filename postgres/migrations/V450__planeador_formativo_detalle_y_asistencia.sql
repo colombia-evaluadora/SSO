@@ -100,32 +100,9 @@ COMMENT ON FUNCTION academico_test.fn_actividad_fecha_inicio_asistencia(BIGINT)
 COMMENT ON FUNCTION academico_test.fn_actividad_asistencia_dia(BIGINT, BIGINT)
     IS 'Asistencia tomada (TASISTENCIA) del estudiante en la fecha fin de la actividad si ya llegó y tiene asistencia, o si no en su primer día, agregada por bloques: de la asignatura de la actividad, o de cualquiera si es formativa. Filas de la Vista (ORIGEN ASISTENCIA) predominan sobre la del Planeador. tipo_valor normalizado a 1/2/5; ausente si todos los bloques son No asistió; justificada si algún bloque trae archivo (o 3/6 históricos). Sin filas no devuelve nada. No mira la copia congelada de TACTIVIDAD_NOTA: eso es fn_actividad_asistencia_estudiante (V496.5).';
 
-CREATE OR REPLACE FUNCTION academico_test.fn_actividad_asistencia_fecha_resolver(
-    p_fk_tmatricula BIGINT,
-    p_pk_tactividad BIGINT
-)
-RETURNS DATE
-LANGUAGE sql
-STABLE
-AS $$
-    SELECT d.fecha FROM academico_test.fn_actividad_asistencia_dia(p_fk_tmatricula, p_pk_tactividad) d;
-$$;
-
-COMMENT ON FUNCTION academico_test.fn_actividad_asistencia_fecha_resolver(BIGINT, BIGINT)
-    IS 'Primer día de la actividad (fn_actividad_fecha_asistencia) si ese día se tomó asistencia al estudiante (Vista o Planeador); NULL si no. Lo leen la planilla (fechaAsistencia/tieneAsistencia) y la tabla de calificaciones (fecha_asistencia). La asistencia ya no bloquea por sí sola: bloquea el estado de resultado (V496.5).';
-
 -- Reglas 62/73: la asistencia ya no bloquea observar; la existencia de la
 -- asignación la resuelve fn_actividad_estudiante_actividad (V227).
 DROP FUNCTION IF EXISTS academico_test.fn_actividad_nota_asistencia_assert_preescolar(BIGINT, DATE);
-
-UPDATE public.query q
-   SET detail = q.detail || ' V450 -- La asistencia de una actividad es la de su primer dia (FECHA_INICIO), agregando los bloques de la asignatura (en FORMATIVAS, de cualquier asignatura); la de la Vista Asistencias predomina sobre la tomada en el Planeador. fechaAsistencia/tieneAsistencia (fn_actividad_asistencia_fecha_resolver): ese primer dia si ya se tomo asistencia, NULL si no. Cada fila agrega es_formativa (TRUE = se registra con OBSERVACION, no con nota). OJO: la columna `fecha` sigue siendo el ECO de ?fecha= (default hoy).'
-  FROM public.microservice m
- WHERE m.id_microservice = q.microservice_id
-   AND m.serviceid       = 'eval-col'
-   AND q.path_template   IN ('/planeador/planilla/calificaciones', '/planeador/actividades/:ID/calificaciones')
-   AND q.http_method     = 'GET'
-   AND q.detail NOT LIKE '%V450 --%';
 
 UPDATE public.query q
    SET query = 'SELECT d.*,

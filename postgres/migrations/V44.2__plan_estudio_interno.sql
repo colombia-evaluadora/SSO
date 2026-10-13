@@ -226,7 +226,7 @@ RETURNS TABLE (codigo BIGINT, asignatura_id BIGINT, asignatura VARCHAR, enfasis_
                aprobacion_obligatoria BOOLEAN, formato_calificacion BIGINT, criterio_nota BIGINT,
                personalizado BOOLEAN, total_count BIGINT,
                abreviacion VARCHAR, especialidad_id BIGINT)
-LANGUAGE plpgsql STABLE AS $$
+LANGUAGE plpgsql STABLE ROWS 30 AS $$
 DECLARE v_col TEXT; v_dir TEXT;
 BEGIN
     v_col := CASE lower(coalesce(p_sort_by, ''))

@@ -3,12 +3,11 @@
 -- + categoria de rol. Son los ladrillos de fn_assert_permiso_seccion, de los
 -- gates de funcionarios y de los de Periodo Academico.
 --
--- Viven en otras migraciones: fn_usuario_categoria_rol_nivel (V302; aqui solo
--- se crea si falta, porque V40 y V224 la ejecutan al migrar) y
--- fn_assert_rango_rol / fn_assert_rango_rol_otorgable (V298).
+-- Viven en otras migraciones: fn_assert_rango_rol / fn_assert_rango_rol_otorgable (V298).
 --
--- Depende de: V185 (fn_usuario_permisos_menu, enlazada en tiempo de
--- ejecucion) y V120 (TROL.FK_TLISTA_VALOR_CATEGORIA).
+-- Depende de: V1 (public.users, role, role_users), V22, V185
+-- (fn_usuario_permisos_menu, enlazada en tiempo de ejecucion) y V120
+-- (TROL.FK_TLISTA_VALOR_CATEGORIA).
 -- ===========================================================================
 
 SET search_path TO academico_test, public;
@@ -53,19 +52,49 @@ COMMENT ON FUNCTION academico_test.fn_rol_categoria_nivel(BIGINT)
 -- 2) fn_usuario_categoria_rol_nivel — nivel MAS ALTO (numero MAS BAJO) de
 --    entre las categorias de todos los roles activos del usuario.
 -- ---------------------------------------------------------------------------
-DO $guarda$
-BEGIN
-    IF to_regprocedure('academico_test.fn_usuario_categoria_rol_nivel(bigint)') IS NULL THEN
-        EXECUTE $crear$CREATE OR REPLACE FUNCTION academico_test.fn_usuario_categoria_rol_nivel(
-    p_pk_tusuario  BIGINT
-)
-RETURNS INT
+-- Super admin del SSO (CEVAL-SUPER_ADMINISTRADOR en public.role_users): nivel 0
+-- sin depender de TSEDE_USUARIO, que se pierde al borrar sedes.
+CREATE OR REPLACE FUNCTION academico_test.fn_es_super_admin_sso(p_pk_tusuario BIGINT)
+RETURNS BOOLEAN
+LANGUAGE sql
+STABLE
+AS $function$
+    SELECT CASE
+             WHEN p_pk_tusuario IS NULL THEN FALSE
+             ELSE EXISTS (
+                 SELECT 1
+                   FROM academico_test.TUSUARIO t
+                   JOIN public.users u
+                     ON UPPER(u.email) = UPPER(t.CUENTA)
+                   JOIN public.role_users ru ON ru.user_id = u.id_user
+                   JOIN public.role r        ON r.id_role  = ru.role_id
+                  WHERE t.PK_TUSUARIO = p_pk_tusuario
+                    AND r.name        = 'CEVAL-SUPER_ADMINISTRADOR'
+                    AND u.active      = TRUE
+                    AND u.enabled     = TRUE
+             )
+           END;
+$function$;
+
+COMMENT ON FUNCTION academico_test.fn_es_super_admin_sso(BIGINT) IS
+    'TRUE si el usuario tiene CEVAL-SUPER_ADMINISTRADOR en public.role_users (TUSUARIO.CUENTA = users.email). Fuente del rol global de super admin, independiente de TSEDE_USUARIO.';
+
+-- El alcance de los listados la llama por fila: sin indice, UPPER(email)
+-- recorria public.users entera en cada llamada.
+CREATE INDEX IF NOT EXISTS idx_users_email_upper ON public.users (UPPER(email));
+
+CREATE OR REPLACE FUNCTION academico_test.fn_usuario_categoria_rol_nivel(p_pk_tusuario BIGINT)
+RETURNS INTEGER
 LANGUAGE plpgsql
 STABLE
-AS $fnucrn$
+AS $function$
 DECLARE
     v_nivel  INT;
 BEGIN
+    IF academico_test.fn_es_super_admin_sso(p_pk_tusuario) THEN
+        RETURN 0;
+    END IF;
+
     SELECT MIN(academico_test.fn_rol_categoria_nivel(su.FK_TROL))
       INTO v_nivel
       FROM academico_test.TSEDE_USUARIO su
@@ -75,14 +104,10 @@ BEGIN
     -- NULL si el usuario no tiene ningun rol activo (MIN sobre 0 filas).
     RETURN v_nivel;
 END;
-$fnucrn$
-$crear$;
-    END IF;
-END
-$guarda$;
+$function$;
 
 COMMENT ON FUNCTION academico_test.fn_usuario_categoria_rol_nivel(BIGINT)
-    IS 'Nivel jerarquico (0 = mas alto) de la categoria de rol MAS ALTA que tiene el usuario entre sus TSEDE_USUARIO ACTIVE (multi-rol -> MIN del nivel). Devuelve NULL si el usuario no tiene ningun rol activo. Mismo criterio "solo ACTIVE" que fn_usuario_permisos_menu (V185), sin filtrar ademas por TLV_ESTADO. 0 = SUPER_ADMIN (bypass), 1 = territorial (todos los EE), 2 = establecimiento, 3 = sedes (sede+jornada), 4 = estudiantes/familia.';
+    IS 'Nivel jerarquico (0 = mas alto) de la categoria de rol MAS ALTA que tiene el usuario entre sus TSEDE_USUARIO ACTIVE (multi-rol -> MIN del nivel); 0 directo si fn_es_super_admin_sso. Devuelve NULL si el usuario no tiene ningun rol activo. Mismo criterio "solo ACTIVE" que fn_usuario_permisos_menu (V185), sin filtrar ademas por TLV_ESTADO. 0 = SUPER_ADMIN (bypass), 1 = territorial (todos los EE), 2 = establecimiento, 3 = sedes (sede+jornada), 4 = estudiantes/familia.';
 
 -- ---------------------------------------------------------------------------
 -- 2.b) fn_usuario_es_docente_puro — el usuario no administra nada, asi que
@@ -656,56 +681,62 @@ COMMENT ON FUNCTION academico_test.fn_periodo_gate_escritura(BIGINT, BIGINT, BIG
 -- listados/reportes propios del modulo Periodo Academico (V37 a V46, V135,
 -- V186-V190); fn_periodo_usuario_puede_ver NO se toca ni se elimina, porque
 -- la siguen usando Matricula (V162) y otros modulos fuera de este alcance.
+CREATE OR REPLACE FUNCTION academico_test.fn_periodo_visibles(
+    p_pk_usuario  BIGINT,
+    p_periodos    BIGINT[] DEFAULT NULL
+)
+RETURNS TABLE (periodo_id BIGINT) LANGUAGE plpgsql STABLE AS $$
+DECLARE
+    v_nivel INT;
+BEGIN
+    IF p_pk_usuario IS NOT NULL THEN
+        v_nivel := COALESCE(academico_test.fn_usuario_categoria_rol_nivel(p_pk_usuario), 99);
+        -- SUPER_ADMIN no necesita el menu; el resto, VER sobre PERIODOS_ACADEMICOS.
+        IF v_nivel <> 0
+           AND NOT academico_test.fn_usuario_puede_en_menu(p_pk_usuario, 'PERIODOS_ACADEMICOS', 'VER') THEN
+            RETURN;
+        END IF;
+    END IF;
+
+    -- Sin usuario, super admin o territorial: todo lo pedido, exista o no.
+    IF p_pk_usuario IS NULL OR v_nivel IN (0, 1) THEN
+        IF p_periodos IS NOT NULL THEN
+            RETURN QUERY SELECT unnest(p_periodos);
+        ELSE
+            RETURN QUERY SELECT pa.PK_TPERIODO_ACADEMICO FROM academico_test.TPERIODO_ACADEMICO pa;
+        END IF;
+    ELSIF v_nivel = 2 THEN
+        RETURN QUERY
+        SELECT pa.PK_TPERIODO_ACADEMICO
+          FROM academico_test.TPERIODO_ACADEMICO pa
+          JOIN academico_test.TSEDE s ON s.PK_TSEDE = pa.FK_TSEDE
+         WHERE (p_periodos IS NULL OR pa.PK_TPERIODO_ACADEMICO = ANY(p_periodos))
+           AND s.FK_TESTABLECIMIENTO IN (
+                   SELECT establecimiento_id
+                     FROM academico_test.fn_usuario_ee_accesibles(p_pk_usuario));
+    ELSIF v_nivel = 3 THEN
+        -- Sede+jornada: exige AMBAS coordenadas del periodo, igual que el scope de escritura.
+        RETURN QUERY
+        SELECT pa.PK_TPERIODO_ACADEMICO
+          FROM academico_test.TPERIODO_ACADEMICO pa
+         WHERE (p_periodos IS NULL OR pa.PK_TPERIODO_ACADEMICO = ANY(p_periodos))
+           AND (pa.FK_TSEDE, pa.FK_TLV_JORNADA) IN (
+                   SELECT sj.sede_id, sj.jornada_id
+                     FROM academico_test.fn_usuario_sedes_jornadas_accesibles(p_pk_usuario) sj);
+    END IF;
+    -- Nivel 4 (estudiantes/familia) o sin categoria: fail-closed.
+END;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_periodo_visibles(BIGINT, BIGINT[])
+    IS 'Periodos academicos que el usuario puede VER en la cascada de Periodo Academico, entre p_periodos (NULL = todos). Resuelve nivel y capability una vez: los listados la usan en vez de llamar a fn_periodo_puede_ver por periodo, y fn_periodo_puede_ver se apoya en ella.';
+
 CREATE OR REPLACE FUNCTION academico_test.fn_periodo_puede_ver(
     p_pk_usuario  BIGINT,
     p_fk_periodo  BIGINT
 )
-RETURNS BOOLEAN LANGUAGE plpgsql STABLE AS $$
-DECLARE
-    v_nivel INT;
-    v_est   BIGINT;
-BEGIN
-    -- Llamada interna (p.ej. reportes en modo administrador) sin usuario que
-    -- scopear: pasa. Mismo criterio que fn_matricula_puede_ver.
-    IF p_pk_usuario IS NULL THEN
-        RETURN TRUE;
-    END IF;
-
-    v_nivel := COALESCE(academico_test.fn_usuario_categoria_rol_nivel(p_pk_usuario), 99);
-
-    -- SUPER_ADMIN: bypass total, no se le exige ni capability ni scope.
-    IF v_nivel = 0 THEN
-        RETURN TRUE;
-    END IF;
-
-    -- Capability: sin el menu PERIODOS_ACADEMICOS en modo VER (por TROL_MENU
-    -- o recortado por TUSUARIO_ROL_PERMISO), no ve nada de la cascada.
-    IF NOT academico_test.fn_usuario_puede_en_menu(p_pk_usuario, 'PERIODOS_ACADEMICOS', 'VER') THEN
-        RETURN FALSE;
-    END IF;
-
-    IF v_nivel = 1 THEN
-        -- Territorial: todos los EE.
-        RETURN TRUE;
-    ELSIF v_nivel = 2 THEN
-        v_est := academico_test.fn_periodo_establecimiento(p_fk_periodo);
-        RETURN v_est IS NOT NULL AND v_est IN (
-            SELECT establecimiento_id
-              FROM academico_test.fn_usuario_ee_accesibles(p_pk_usuario)
-        );
-    ELSIF v_nivel = 3 THEN
-        -- Nivel sede+jornada (coordinador/docente/etc.): exige AMBAS
-        -- coordenadas del periodo, igual que el scope de escritura.
-        RETURN (academico_test.fn_periodo_sede(p_fk_periodo), academico_test.fn_periodo_jornada(p_fk_periodo))
-               IN (
-                   SELECT sj.sede_id, sj.jornada_id
-                     FROM academico_test.fn_usuario_sedes_jornadas_accesibles(p_pk_usuario) sj
-               );
-    END IF;
-
-    -- Nivel 4 (estudiantes/familia) o sin categoria: fail-closed.
-    RETURN FALSE;
-END;
+RETURNS BOOLEAN LANGUAGE sql STABLE AS $$
+    SELECT EXISTS (SELECT 1 FROM academico_test.fn_periodo_visibles(p_pk_usuario, ARRAY[p_fk_periodo]));
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_periodo_puede_ver(BIGINT, BIGINT)

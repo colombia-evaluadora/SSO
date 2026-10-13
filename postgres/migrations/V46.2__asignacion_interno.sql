@@ -106,9 +106,17 @@ LANGUAGE sql STABLE AS $$
       JOIN academico_test.TASIGNATURA s          ON s.PK_TASIGNATURA = da.FK_TASIGNATURA
       JOIN academico_test.TFUNCIONARIO f         ON f.PK_TFUNCIONARIO = da.FK_TFUNCIONARIO
       JOIN academico_test.TUSUARIO u             ON u.PK_TUSUARIO = f.FK_TUSUARIO
- LEFT JOIN academico_test.TSEDE_USUARIO su        ON su.FK_TUSUARIO = u.PK_TUSUARIO
-                                                  AND su.FK_TSEDE = pa.FK_TSEDE
-                                                  AND su.FK_TROL = 14 AND su.ACTIVE = TRUE
+ -- Un docente puede tener rol en varias jornadas de la sede: una fila por
+ -- asignacion, con el estado de la jornada del grupo si existe.
+ LEFT JOIN LATERAL (
+       SELECT su0.TLV_ESTADO
+         FROM academico_test.TSEDE_USUARIO su0
+        WHERE su0.FK_TUSUARIO = u.PK_TUSUARIO
+          AND su0.FK_TSEDE = pa.FK_TSEDE
+          AND su0.FK_TROL = 14 AND su0.ACTIVE = TRUE
+        ORDER BY (su0.FK_TLV_JORNADA = gr.FK_TLV_JORNADA) DESC, su0.PK_TSEDE_USUARIO
+        LIMIT 1
+ ) su ON TRUE
      WHERE da.FK_TPERIODO_ACADEMICO = p_fk_periodo AND da.ACTIVE = TRUE
        AND (p_fk_funcionario IS NULL OR CARDINALITY(p_fk_funcionario) = 0 OR f.PK_TFUNCIONARIO = ANY(p_fk_funcionario))
        AND (p_fk_grado       IS NULL OR CARDINALITY(p_fk_grado)       = 0 OR g.PK_TGRADO       = ANY(p_fk_grado))
