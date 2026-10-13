@@ -6,6 +6,7 @@ import com.co.eurekatic.aicontrol.agente.nucleo.respuesta.AccionUi;
 import com.co.eurekatic.aicontrol.agente.nucleo.respuesta.RespuestaAgente;
 import com.co.eurekatic.aicontrol.agente.seguridad.CapaSeguridad;
 import com.co.eurekatic.aicontrol.agente.seguridad.eventos.EventoSeguridadService;
+import com.co.eurekatic.aicontrol.agente.seguridad.seudonimos.TablaSeudonimos;
 import com.co.eurekatic.aicontrol.agente.ui.UiFixture;
 import com.co.eurekatic.aicontrol.agente.ui.registro.RegistroUiLoader;
 import org.junit.jupiter.api.BeforeEach;
@@ -37,7 +38,7 @@ class AccionUiHerramientaTest {
     @BeforeEach
     void setUp() {
         when(registro.registro()).thenReturn(UiFixture.REGISTRO);
-        turno = new TurnoContexto(List.of(), UiFixture.CONTEXTO, UiFixture.MENUS_DOCENTE);
+        turno = new TurnoContexto(List.of(), UiFixture.CONTEXTO, UiFixture.MENUS_DOCENTE, TablaSeudonimos.vacia());
         ContextoInvocacion invocacion = new ContextoInvocacion(7L, "token", UUID.randomUUID().toString(), 1L,
                 "llena el formulario", propuesta -> {
                 });

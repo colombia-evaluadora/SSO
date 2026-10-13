@@ -7,6 +7,7 @@ import com.co.eurekatic.aicontrol.agente.catalogo.invocacion.ResultadoHerramient
 import com.co.eurekatic.aicontrol.agente.catalogo.invocacion.ResultadoHerramienta.RequiereConfirmacion;
 import com.co.eurekatic.aicontrol.agente.catalogo.turno.AccesoMenu;
 import com.co.eurekatic.aicontrol.agente.nucleo.respuesta.RespuestaAgente;
+import com.co.eurekatic.aicontrol.agente.seguridad.seudonimos.TablaSeudonimos;
 import com.co.eurekatic.aicontrol.agente.ui.contexto.ContextoUi;
 import org.springframework.ai.chat.model.ToolContext;
 
@@ -34,16 +35,24 @@ public final class TurnoContexto implements ObservadorResultados {
     private final List<RespuestaAgente> directas = new CopyOnWriteArrayList<>();
     private final List<RequiereConfirmacion> propuestas = new CopyOnWriteArrayList<>();
     private final AtomicReference<TablaAnalitica> analitica = new AtomicReference<>();
+    private final TablaSeudonimos seudonimos;
 
-    public TurnoContexto(List<HerramientaDef> herramientas, ContextoUi contextoUi, Map<String, AccesoMenu> menus) {
+    public TurnoContexto(List<HerramientaDef> herramientas, ContextoUi contextoUi, Map<String, AccesoMenu> menus,
+                         TablaSeudonimos seudonimos) {
         this.herramientas = List.copyOf(herramientas);
         this.contextoUi = Objects.requireNonNull(contextoUi, "contextoUi");
         this.menus = Map.copyOf(menus);
+        this.seudonimos = Objects.requireNonNull(seudonimos, "seudonimos");
     }
 
-    /** Turno sin pantalla ni menus: lo usan las herramientas que no dependen de la UI. */
+    /** Turno sin pantalla, menus ni seudonimos previos: lo usan las herramientas que no dependen de la UI. */
     public TurnoContexto(List<HerramientaDef> herramientas) {
-        this(herramientas, ContextoUi.vacio(), Map.of());
+        this(herramientas, ContextoUi.vacio(), Map.of(), TablaSeudonimos.vacia());
+    }
+
+    /** Alias de los nombres de persona de la conversacion; viaja al {@code ToolContext} del turno. */
+    public TablaSeudonimos seudonimos() {
+        return seudonimos;
     }
 
     /** Lo que el front dice de la pantalla; dato no confiable. */

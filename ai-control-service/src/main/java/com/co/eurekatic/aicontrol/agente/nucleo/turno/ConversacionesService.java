@@ -7,6 +7,8 @@ import com.co.eurekatic.aicontrol.agente.persistencia.conversacion.ConversacionS
 import com.co.eurekatic.aicontrol.agente.persistencia.conversacion.EstadoConversacion;
 import com.co.eurekatic.aicontrol.agente.persistencia.mensaje.MensajeStore;
 import com.co.eurekatic.aicontrol.agente.persistencia.mensaje.MensajeStore.Mensaje;
+import com.co.eurekatic.aicontrol.agente.seguridad.seudonimos.AlmacenSeudonimos;
+import com.co.eurekatic.aicontrol.agente.seguridad.seudonimos.TablaSeudonimos;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
@@ -23,10 +25,12 @@ public class ConversacionesService {
 
     private final ConversacionStore conversaciones;
     private final MensajeStore mensajes;
+    private final AlmacenSeudonimos seudonimos;
 
-    public ConversacionesService(ConversacionStore conversaciones, MensajeStore mensajes) {
+    public ConversacionesService(ConversacionStore conversaciones, MensajeStore mensajes, AlmacenSeudonimos seudonimos) {
         this.conversaciones = conversaciones;
         this.mensajes = mensajes;
+        this.seudonimos = seudonimos;
     }
 
     public UUID crear(UsuarioAgente usuario) {
@@ -37,9 +41,19 @@ public class ConversacionesService {
         return conversaciones.listar(usuario.userId(), pagina, tamano);
     }
 
+    /**
+     * El historial se guarda con seudonimos; la persona lo ve con los nombres reales mientras la tabla de la
+     * conversacion siga viva (dura lo mismo que la memoria). Despues, los alias quedan tal cual.
+     */
     public Detalle detalle(UUID id, UsuarioAgente usuario) {
         Conversacion conversacion = propia(id, usuario);
-        return new Detalle(conversacion, mensajes.listar(id));
+        TablaSeudonimos tabla = seudonimos.cargar(id);
+        List<Mensaje> reales = mensajes.listar(id).stream()
+                .map(m -> new Mensaje(m.id(), m.conversacionId(), m.secuencia(), m.rol(),
+                        m.contenido() == null ? null : tabla.revelar(m.contenido()), m.tipoRespuesta(),
+                        m.accionesUi() == null ? null : tabla.revelar(m.accionesUi()), m.createdAt()))
+                .toList();
+        return new Detalle(conversacion, reales);
     }
 
     public void archivar(UUID id, UsuarioAgente usuario) {

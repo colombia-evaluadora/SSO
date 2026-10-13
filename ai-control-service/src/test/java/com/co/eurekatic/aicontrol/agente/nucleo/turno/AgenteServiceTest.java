@@ -17,6 +17,8 @@ import org.junit.jupiter.api.Test;
 
 import java.time.LocalDateTime;
 import com.co.eurekatic.aicontrol.agente.persistencia.analitica.ConsultaAnaliticaStore;
+import com.co.eurekatic.aicontrol.agente.seguridad.seudonimos.AlmacenSeudonimos;
+import com.co.eurekatic.aicontrol.agente.seguridad.seudonimos.TablaSeudonimos;
 
 import java.util.List;
 import java.util.Map;
@@ -49,10 +51,13 @@ class AgenteServiceTest {
     private BucleAgente bucle;
     private AccionesService acciones;
     private SalidaTurno salida;
+    private AlmacenSeudonimos seudonimos;
     private AgenteService servicio;
 
     @BeforeEach
     void setUp() {
+        seudonimos = mock(AlmacenSeudonimos.class);
+        when(seudonimos.cargar(any())).thenReturn(TablaSeudonimos.vacia());
         conversaciones = mock(ConversacionesService.class);
         preparador = mock(PreparadorTurno.class);
         registrador = mock(RegistradorTurno.class);
@@ -65,7 +70,7 @@ class AgenteServiceTest {
                 new PromptTurno(new org.springframework.core.io.ClassPathResource("prompts/agente-sistema.st"),
                         PropiedadesAgenteFixture.propiedades().limites().textoMaxCaracteres()),
                 bucle, acciones, salida,
-                new PresentadorAnalitica(mock(ConsultaAnaliticaStore.class)), new TurnosEnCurso());
+                new PresentadorAnalitica(mock(ConsultaAnaliticaStore.class)), new TurnosEnCurso(), seudonimos);
     }
 
     @Test
@@ -121,6 +126,21 @@ class AgenteServiceTest {
 
         assertThat(respuesta).isInstanceOfSatisfying(RespuestaAgente.Confirmacion.class,
                 c -> assertThat(c.accion()).isEqualTo(accion));
+    }
+
+    @Test
+    void elModeloTrabajaConSeudonimosYLaPersonaRecibeLosNombres() {
+        when(seudonimos.cargar(CONVERSACION)).thenReturn(TablaSeudonimos.desde(Map.of("Persona_1", "Ana Pérez")));
+        Preparacion.Listo listo = listo(TipoIntencion.CONSULTA, List.of(LECTURA));
+        when(preparador.preparar(CONVERSACION, USUARIO, "¿qué nota tiene Persona_1?")).thenReturn(listo);
+        when(bucle.ejecutar(any())).thenReturn(new ResultadoBucle.Final(
+                new RespuestaAgente.Respuesta("Persona_1 tiene 4.5"), Uso.NINGUNO, "MiniMax-M3"));
+
+        RespuestaAgente respuesta = servicio.procesar(CONVERSACION, USUARIO, "¿qué nota tiene Ana Pérez?", "");
+
+        assertThat(respuesta.texto()).isEqualTo("Ana Pérez tiene 4.5");
+        verify(registrador).registrar(eq(CONVERSACION),
+                org.mockito.ArgumentMatchers.argThat(r -> r.texto().equals("Persona_1 tiene 4.5")), any(Consumo.class));
     }
 
     private static Preparacion.Listo listo(TipoIntencion tipo, List<HerramientaDef> herramientas) {

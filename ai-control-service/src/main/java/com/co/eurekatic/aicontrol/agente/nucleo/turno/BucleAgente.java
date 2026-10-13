@@ -3,6 +3,7 @@ package com.co.eurekatic.aicontrol.agente.nucleo.turno;
 import com.co.eurekatic.aicontrol.agente.catalogo.dominio.HerramientaDef;
 import com.co.eurekatic.aicontrol.agente.catalogo.invocacion.ContextoInvocacion;
 import com.co.eurekatic.aicontrol.agente.catalogo.invocacion.ObservadorResultados;
+import com.co.eurekatic.aicontrol.agente.seguridad.seudonimos.TablaSeudonimos;
 import com.co.eurekatic.aicontrol.agente.catalogo.invocacion.ResultadoHerramienta.RequiereConfirmacion;
 import com.co.eurekatic.aicontrol.agente.comun.UsuarioAgente;
 import com.co.eurekatic.aicontrol.agente.nucleo.TurnoContexto;
@@ -156,7 +157,7 @@ public class BucleAgente {
                 entrada.textoUsuario(),
                 entrada.contexto()::registrarPropuesta);
         return Map.of(ContextoInvocacion.CLAVE, contexto, TurnoContexto.CLAVE, entrada.contexto(),
-                ObservadorResultados.CLAVE, entrada.contexto());
+                ObservadorResultados.CLAVE, entrada.contexto(), TablaSeudonimos.CLAVE, entrada.contexto().seudonimos());
     }
 
     private static ToolCallingChatOptions opciones(List<ToolCallback> callbacks, Map<String, Object> ambito) {

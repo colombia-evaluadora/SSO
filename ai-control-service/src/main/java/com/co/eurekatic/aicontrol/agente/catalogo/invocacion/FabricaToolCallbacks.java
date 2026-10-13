@@ -4,6 +4,7 @@ import com.co.eurekatic.aicontrol.agente.catalogo.dominio.HerramientaDef;
 import com.co.eurekatic.aicontrol.agente.catalogo.dominio.Restriccion;
 import com.co.eurekatic.aicontrol.agente.catalogo.dominio.RutaQuery;
 import com.co.eurekatic.aicontrol.agente.catalogo.esquema.JsonSchemaBuilder;
+import com.co.eurekatic.aicontrol.agente.seguridad.seudonimos.TablaSeudonimos;
 import org.springframework.ai.chat.model.ToolContext;
 import org.springframework.ai.tool.ToolCallback;
 import org.springframework.ai.tool.function.FunctionToolCallback;
@@ -12,8 +13,10 @@ import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.stereotype.Component;
 
 import java.util.Collection;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 /**
  * Convierte herramientas del catalogo en {@link ToolCallback} de Spring AI. Cada callback
@@ -71,10 +74,32 @@ public class FabricaToolCallbacks {
                 .build();
     }
 
-    /** Invoca, avisa al observador del turno si lo hay y formatea para el modelo. */
+    /**
+     * Invoca con los nombres reales, avisa al observador del turno con el resultado real (la tabla que ve
+     * la persona) y formatea para el modelo con los nombres cambiados por sus seudonimos.
+     */
     private String ejecutar(HerramientaDef herramienta, Map<String, Object> argumentos, ToolContext contexto) {
-        ResultadoHerramienta resultado = invocador.invocar(herramienta, argumentos, ContextoInvocacion.de(contexto));
+        Optional<TablaSeudonimos> seudonimos = TablaSeudonimos.de(contexto);
+        Map<String, Object> reales = seudonimos.map(t -> revelar(t, argumentos)).orElse(argumentos);
+        ResultadoHerramienta resultado = invocador.invocar(herramienta, reales, ContextoInvocacion.de(contexto));
         ObservadorResultados.de(contexto).ifPresent(o -> o.alObtener(herramienta, resultado));
-        return formateador.paraModelo(herramienta, resultado);
+        ResultadoHerramienta paraModelo = seudonimos.map(t -> ocultar(t, resultado)).orElse(resultado);
+        return formateador.paraModelo(herramienta, paraModelo);
+    }
+
+    private static Map<String, Object> revelar(TablaSeudonimos tabla, Map<String, Object> argumentos) {
+        Map<String, Object> reales = new LinkedHashMap<>();
+        argumentos.forEach((clave, valor) -> reales.put(clave, tabla.revelarValor(valor)));
+        return reales;
+    }
+
+    static ResultadoHerramienta ocultar(TablaSeudonimos tabla, ResultadoHerramienta resultado) {
+        return switch (resultado) {
+            case ResultadoHerramienta.Datos datos ->
+                    new ResultadoHerramienta.Datos(tabla.ocultarFilas(datos.filas()), datos.truncado());
+            case ResultadoHerramienta.ErrorParaModelo error -> new ResultadoHerramienta.ErrorParaModelo(tabla.ocultar(error.texto()));
+            case ResultadoHerramienta.RequiereConfirmacion confirmacion -> new ResultadoHerramienta.RequiereConfirmacion(
+                    confirmacion.argumentos(), tabla.ocultar(confirmacion.resumen()));
+        };
     }
 }

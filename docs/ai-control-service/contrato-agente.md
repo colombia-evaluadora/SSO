@@ -19,6 +19,10 @@ token, así que el asistente nunca puede hacer más que la persona desde la pant
 
 Una conversación o acción de otra persona responde `404`, igual que una que no existe.
 
+Los nombres de personas viajan al proveedor del modelo como seudónimos (`Persona_7`) y el front los recibe
+ya con el nombre real. El historial se guarda con seudónimos: `GET /conversaciones/{id}` los traduce mientras
+la conversación siga viva (24 h desde el último mensaje); después pueden aparecer como `Persona_N`.
+
 ## `contextoUi`: lo que la pantalla le cuenta al asistente
 
 Opcional en cada mensaje. Es **dato**, nunca autoriza nada: el backend lo valida todo.

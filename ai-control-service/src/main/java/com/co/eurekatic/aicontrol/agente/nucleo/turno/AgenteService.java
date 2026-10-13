@@ -7,6 +7,8 @@ import com.co.eurekatic.aicontrol.agente.nucleo.acciones.AccionesService;
 import com.co.eurekatic.aicontrol.agente.nucleo.intencion.Intencion;
 import com.co.eurekatic.aicontrol.agente.nucleo.intencion.TipoIntencion;
 import com.co.eurekatic.aicontrol.agente.nucleo.respuesta.RespuestaAgente;
+import com.co.eurekatic.aicontrol.agente.seguridad.seudonimos.AlmacenSeudonimos;
+import com.co.eurekatic.aicontrol.agente.seguridad.seudonimos.TablaSeudonimos;
 import com.co.eurekatic.aicontrol.agente.ui.contexto.LectorContextoUi;
 import org.springframework.stereotype.Service;
 
@@ -33,10 +35,11 @@ public class AgenteService {
     private final SalidaTurno salida;
     private final PresentadorAnalitica analitica;
     private final TurnosEnCurso enCurso;
+    private final AlmacenSeudonimos almacenSeudonimos;
 
     public AgenteService(ConversacionesService conversaciones, PreparadorTurno preparador, RegistradorTurno registrador,
                          PromptTurno prompts, BucleAgente bucle, AccionesService acciones, SalidaTurno salida,
-                         PresentadorAnalitica analitica, TurnosEnCurso enCurso) {
+                         PresentadorAnalitica analitica, TurnosEnCurso enCurso, AlmacenSeudonimos almacenSeudonimos) {
         this.conversaciones = conversaciones;
         this.preparador = preparador;
         this.registrador = registrador;
@@ -46,6 +49,7 @@ public class AgenteService {
         this.salida = salida;
         this.analitica = analitica;
         this.enCurso = enCurso;
+        this.almacenSeudonimos = almacenSeudonimos;
     }
 
     /**
@@ -74,29 +78,32 @@ public class AgenteService {
         TrazaTurno traza = TrazaTurno.iniciar(conversacionId, observador);
         conversaciones.activa(conversacionId, usuario);
         traza.pasar(EstadoTurno.VALIDADO);
-        Preparacion preparacion = preparador.preparar(conversacionId, usuario, texto);
+        // Desde aqui todo lo que va al proveedor del modelo lleva los nombres conocidos como seudonimos.
+        TablaSeudonimos seudonimos = almacenSeudonimos.cargar(conversacionId);
+        Preparacion preparacion = preparador.preparar(conversacionId, usuario, seudonimos.ocultar(texto));
         return switch (preparacion) {
             case Preparacion.Bloqueada bloqueada -> {
                 traza.pasar(EstadoTurno.BLOQUEADO);
                 traza.cerrar();
                 yield bloqueada.respuesta();
             }
-            case Preparacion.Listo listo -> turno(conversacionId, usuario, listo, contextoUiJson, traza, inicio);
+            case Preparacion.Listo listo ->
+                    turno(conversacionId, usuario, listo, contextoUiJson, seudonimos, traza, inicio);
         };
     }
 
     private RespuestaAgente turno(UUID conversacionId, UsuarioAgente usuario, Preparacion.Listo listo,
-                                  String contextoUiJson, TrazaTurno traza, long inicio) {
+                                  String contextoUiJson, TablaSeudonimos seudonimos, TrazaTurno traza, long inicio) {
         traza.pasar(EstadoTurno.INTENCION);
         RegistradorTurno.Inicio arranque = registrador.iniciar(conversacionId, listo.textoNormalizado());
         if (sinHerramientaDeEscritura(listo.intencion(), listo)) {
             return cerrar(conversacionId, usuario, new RespuestaAgente.SinPermiso(MENSAJE_SIN_PERMISO),
-                    Consumo.NINGUNO, traza);
+                    Consumo.NINGUNO, seudonimos, traza);
         }
         traza.pasar(EstadoTurno.PERMISO_OK);
         traza.pasar(EstadoTurno.RECOLECTANDO);
         TurnoContexto contexto = new TurnoContexto(listo.herramientas(), LectorContextoUi.leer(contextoUiJson),
-                listo.menus());
+                listo.menus(), seudonimos);
         ResultadoBucle resultado = bucle.ejecutar(new BucleAgente.Entrada(
                 usuario,
                 conversacionId,
@@ -110,7 +117,7 @@ public class AgenteService {
             case ResultadoBucle.Final fin -> analitica.presentar(fin.respuesta(), contexto, arranque.mensajeId());
             case ResultadoBucle.Propuesta propuesta -> confirmacion(conversacionId, usuario, propuesta);
         };
-        return cerrar(conversacionId, usuario, respuesta, consumo, traza);
+        return cerrar(conversacionId, usuario, respuesta, consumo, seudonimos, traza);
     }
 
     /** Accion sin ninguna herramienta de escritura disponible: no hay nada que proponer. */
@@ -125,14 +132,19 @@ public class AgenteService {
         return new RespuestaAgente.Confirmacion(TEXTO_CONFIRMACION.formatted(accion.resumen()), accion);
     }
 
-    /** Pasa la respuesta por la salida segura, la guarda y cierra el recorrido. */
+    /**
+     * Pasa la respuesta por la salida segura, la guarda con seudonimos (memoria e historial vuelven al
+     * modelo) y la devuelve a la persona con los nombres reales.
+     */
     private RespuestaAgente cerrar(UUID conversacionId, UsuarioAgente usuario, RespuestaAgente respuesta,
-                                   Consumo consumo, TrazaTurno traza) {
-        RespuestaAgente revisada = salida.revisar(respuesta, conversacionId, usuario.userId());
+                                   Consumo consumo, TablaSeudonimos seudonimos, TrazaTurno traza) {
+        RespuestaAgente revisada = SeudonimosRespuesta.ocultar(
+                salida.revisar(respuesta, conversacionId, usuario.userId()), seudonimos);
         traza.pasar(EstadoTurno.de(revisada.tipo()));
         registrador.registrar(conversacionId, revisada, consumo);
+        almacenSeudonimos.guardar(conversacionId, seudonimos);
         traza.cerrar();
-        return revisada;
+        return SeudonimosRespuesta.revelar(revisada, seudonimos);
     }
 
     private static long milisegundosDesde(long inicioNanos) {
