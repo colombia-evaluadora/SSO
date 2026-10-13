@@ -77,6 +77,7 @@ def compact(model: dict) -> dict:
         "lintv": (model.get("lint") or {}).get("por_version", {}),
         "lintsev": {r: d["severidad"] for r, d in
                     ((model.get("lint") or {}).get("reglas") or {}).items()},
+        "lintall": (model.get("lint") or {}).get("todos", []),
     }
 
 
@@ -104,7 +105,16 @@ def compact_authors(a: dict) -> dict:
         return {"names": [], "people": [], "byv": {}}
     names = [pr["name"] for pr in a["people"]]
     idx = {n: i for i, n in enumerate(names)}
+    # blame: [[persona, lineas], ...] por migracion, con los mismos indices que
+    # people (las lineas sin commitear entran como una persona mas, sin fila).
+    bnames = a.get("blame_names") or []
+    for n in bnames:
+        if n not in idx:
+            idx[n] = len(names)
+            names.append(n)
+    bl = {v: [[idx[bnames[i]], n] for i, n in runs] for v, runs in (a.get("blame") or {}).items()}
     return {
+        "bl": bl,
         "names": names,
         "people": [{"i": idx[pr["name"]], "cr": pr["created"], "ed": pr["edited"],
                     "rt": pr["retouched"], "c": pr["commits"],
@@ -404,6 +414,43 @@ kbd{font-family:var(--mono);font-size:10.5px;border:1px solid var(--rule);border
 .f-cr{fill:var(--accent)} .f-ed{fill:var(--resid)} .f-rt{fill:var(--faint)}
 .lg-cr{background:var(--accent)} .lg-ed{background:var(--resid)} .lg-rt{background:var(--faint)}
 tr.person{cursor:pointer}
+.austack{display:flex;border-radius:4px;overflow:hidden;background:var(--sunk);margin:4px 0}
+.austack span{display:block;height:100%;min-width:1px}
+.aucards{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:10px;margin:12px 0 16px}
+.aucard{appearance:none;font:inherit;text-align:left;color:var(--ink);cursor:pointer;
+ background:var(--panel);border:1px solid var(--rule);border-radius:6px;padding:10px 12px;
+ box-shadow:var(--shadow)}
+.aucard:hover{border-color:var(--faint)}
+.aucard.sel{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent)}
+.aucard .top{display:flex;align-items:center;gap:8px;margin-bottom:4px}
+.aucard .big{font-family:var(--mono);font-size:20px;font-weight:600;color:var(--live)}
+.aucard .big span{font-family:var(--sans);font-size:11.5px;font-weight:400;color:var(--muted)}
+.aucard .s{font-size:11.5px;color:var(--muted)}
+.autl{width:100%;height:auto;display:block}
+.autl-grid{stroke:var(--rule);stroke-width:1;stroke-dasharray:2 3}
+.autl-lane{stroke:var(--rule);stroke-width:1}
+.autl-dot{stroke:var(--panel);stroke-width:1;cursor:pointer;opacity:.95}
+.autl-dot.autl-off{opacity:.28}
+.autl-name{cursor:pointer;font-size:13px}
+.auhead{display:flex;align-items:center;gap:10px;margin:22px 0 6px;flex-wrap:wrap}
+.auhead h2{margin:0}
+.aucols{grid-template-columns:repeat(auto-fit,minmax(380px,1fr))}
+.au-wide{grid-column:1 / -1}
+.aurow{display:grid;grid-template-columns:auto minmax(0,1fr) 22% auto auto;gap:8px;align-items:center;
+ padding:3px 0;border-bottom:1px solid var(--rule);font-size:12px}
+.aurow .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted)}
+.aurow .bar{height:8px;background:var(--sunk);border-radius:4px;overflow:hidden}
+.aurow .bar i{display:block;height:100%}
+.aurow .num{font-family:var(--mono);text-align:right}
+.auweeks{width:100%;height:auto;max-height:190px;display:block}
+.auwho{padding:6px 0;border-bottom:1px solid var(--rule);font-size:12.5px}
+.aucommits{max-height:420px;overflow:auto}
+.aucommit{display:grid;grid-template-columns:90px minmax(0,1fr) 110px minmax(0,34%);gap:10px;
+ align-items:center;padding:4px 0;border-bottom:1px solid var(--rule);font-size:12px}
+.aucommit .subj{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.aucommit .chain{gap:3px;flex-wrap:wrap}
+@media (max-width:900px){.aucommit{grid-template-columns:1fr}.aurow{grid-template-columns:auto 1fr auto}
+ .aurow .bar{display:none}}
 .statgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(118px,1fr));gap:9px;
  margin:0 0 14px}
 .stat{background:var(--sunk);border-radius:5px;padding:9px 11px}
@@ -1254,129 +1301,303 @@ $('#lnsort').addEventListener('change', () => { renderRank(); renderLnTable(); }
 $('#lntop').addEventListener('change', renderRank);
 $('#lnrc').addEventListener('change', () => { renderRank(); renderLnTable(); });
 
-/* ---------- autoría ---------- */
+/* ---------- autoría ----------
+   Dos fuentes que se cruzan aquí: `git log` (quién creó, editó o reeditó cada
+   migración y cuándo) y `git blame` (quién escribió cada línea que HOY tiene el
+   fichero). Cruzando el blame con el mapa de líneas de cada migración sale lo
+   que de cada persona sigue vigente, lo que quedó sin efecto y su comentario. */
 let selPerson = null;
+const AU_ST = ['l', 'n', 'd', 'c', 'o', 'b'];
+const AU_KEY = {l: 'vigente', n: 'sin efecto, se conserva', d: 'recortable', c: 'comentario',
+  o: 'sin encadenar', b: 'en blanco'};
+const auZero = () => ({l: 0, n: 0, d: 0, c: 0, o: 0, b: 0});
+const auSum = st => AU_ST.reduce((a, k) => a + st[k], 0);
+const auCode = st => st.l + st.n + st.d + st.o;   // sin comentario ni blanco
+
+/* Una pasada por todas las líneas: persona x estado, por migración y por categoría. */
+const AU = (() => {
+  const per = new Map();
+  const P = i => {
+    if (!per.has(i)) per.set(i, {st: auZero(), mig: new Map(), cat: new Map(), lint: {}, lintN: [0, 0],
+                                 commits: new Map(), total: 0});
+    return per.get(i);
+  };
+  const team = auZero();
+  const lineOwner = new Map();   // v -> array persona por línea (para el lint)
+  D.migs.forEach(m => {
+    const runs = A.bl?.[m.v];
+    if (!runs) return;
+    const cells = [];
+    parseMap(m.map).forEach(([c, n]) => { for (let k = 0; k < n; k++) cells.push(c); });
+    const owner = [];
+    runs.forEach(([i, n]) => { for (let k = 0; k < n; k++) owner.push(i); });
+    lineOwner.set(m.v, owner);
+    const cat = catOfMig(m.v);
+    owner.forEach((i, k) => {
+      const c = cells[k] || 'o';
+      const p = P(i);
+      p.st[c]++; team[c]++;
+      if (!p.mig.has(m.v)) p.mig.set(m.v, auZero());
+      p.mig.get(m.v)[c]++;
+      if (!p.cat.has(cat)) p.cat.set(cat, {st: auZero(), cr: 0, tc: new Set(), last: ''});
+      p.cat.get(cat).st[c]++;
+    });
+  });
+  // Las reglas de fichero (cabecera, % de comentario) son de quien creó la
+  // migración, no de quien escribió su primera línea.
+  const DE_FICHERO = new Set(['CABECERA', 'COMENTARIOS']);
+  (D.lintall || []).forEach(([v, line, rule, sev]) => {
+    const i = DE_FICHERO.has(rule) ? ownerOf(v) : lineOwner.get(v)?.[line - 1];
+    if (i == null) return;
+    const p = P(i);
+    p.lint[rule] = p.lint[rule] || {n: 0, sev, vs: new Set()};
+    p.lint[rule].n++;
+    p.lint[rule].vs.add(v);
+    p.lintN[sev === 'error' ? 0 : 1]++;
+  });
+  Object.entries(A.byv).forEach(([v, [owner, ts]]) => {
+    const cat = catOfMig(v);
+    ts.forEach((t, k) => {
+      const [sha, i, when, subj, add, del] = t;
+      const p = P(i);
+      if (!p.commits.has(sha)) p.commits.set(sha, {sha, when, subj, add: 0, del: 0, vs: [], cats: new Set()});
+      const c = p.commits.get(sha);
+      c.add += add; c.del += del; c.vs.push(v); c.cats.add(cat);
+      if (!p.cat.has(cat)) p.cat.set(cat, {st: auZero(), cr: 0, tc: new Set(), last: ''});
+      const pc = p.cat.get(cat);
+      if (k === 0) pc.cr++;
+      pc.tc.add(v);
+      if (when > pc.last) pc.last = when;
+    });
+  });
+  per.forEach(p => { p.total = auSum(p.st); });
+  return {per, team, get: i => per.get(i) || P(i)};
+})();
+
+function auStack(st, h = 12) {
+  const tot = auSum(st) || 1;
+  return `<div class="austack" style="height:${h}px">${AU_ST.filter(k => st[k]).map(k =>
+    `<span class="lg-${k}" style="width:${100 * st[k] / tot}%"
+      title="${AU_KEY[k]}: ${fmt(st[k])} líneas (${pct(st[k], tot)}%)"></span>`).join('')}</div>`;
+}
+const auLegend = st => `<div class="maplegend">${AU_ST.filter(k => st[k]).map(k =>
+  `<span><i class="lg-${k}"></i>${AU_KEY[k]} <b>${fmt(st[k])}</b></span>`).join('')}</div>`;
+
+/* Línea de tiempo del equipo: una fila por persona, un punto por commit
+   (tamaño = líneas, color = categoría principal del commit). */
+function auTimeline() {
+  const people = A.people.filter(p => AU.per.has(p.i));
+  const all = people.flatMap(p => [...AU.get(p.i).commits.values()]);
+  if (!all.length) return '<div class="empty">sin historial de git</div>';
+  const t = s => Date.parse(s);
+  const lo = Math.min(...all.map(c => t(c.when))), hi = Math.max(...all.map(c => t(c.when)));
+  const W = 1400, LW = 150, RH = 34, TOP = 22, H = TOP + people.length * RH + 8;
+  const X = d => LW + (W - LW - 16) * ((t(d) - lo) / Math.max(1, hi - lo));
+  const out = [`<svg viewBox="0 0 ${W} ${H}" class="autl" role="img" aria-label="Commits de cada persona en el tiempo">`];
+  // meses
+  const d0 = new Date(lo); d0.setDate(1);
+  for (let d = new Date(d0); t(d.toISOString()) <= hi; d.setMonth(d.getMonth() + 1)) {
+    const x = X(d.toISOString());
+    if (x < LW) continue;
+    out.push(`<line x1="${x}" x2="${x}" y1="${TOP - 6}" y2="${H}" class="autl-grid"/>
+      <text x="${x + 3}" y="${TOP - 9}" class="f-lbl">${d.toISOString().slice(0, 7)}</text>`);
+  }
+  people.forEach((p, r) => {
+    const y = TOP + r * RH + RH / 2;
+    out.push(`<text x="0" y="${y + 4}" class="f-lbl autl-name" data-aup="${p.i}">${esc(shortName(p.i))}</text>
+      <line x1="${LW}" x2="${W - 8}" y1="${y}" y2="${y}" class="autl-lane"/>`);
+    [...AU.get(p.i).commits.values()].sort((a, b) => a.when.localeCompare(b.when)).forEach(c => {
+      const cat = [...c.cats][0];
+      const rr = Math.min(11, 2.5 + Math.sqrt(c.add + c.del) / 9);
+      out.push(`<circle cx="${X(c.when)}" cy="${y}" r="${rr}" fill="${catColor(cat)}"
+        class="autl-dot ${selPerson === p.i ? '' : 'autl-off'}" data-aup="${p.i}"><title>${esc(whoName(p.i))} · ${c.when.slice(0, 10)}
+${esc(c.subj)}
++${c.add} −${c.del} · ${c.vs.length} migración(es): ${c.vs.slice(0, 6).map(v => 'V' + v).join(', ')}</title></circle>`);
+    });
+  });
+  out.push('</svg>');
+  return out.join('');
+}
 
 function renderAuthors() {
   if (!A.people.length) {
-    $('#aubody').innerHTML = '<tr><td colspan="8" class="empty">git no disponible</td></tr>';
+    $('#aucards').innerHTML = '<div class="empty">git no disponible</div>';
     return;
   }
-  const max = Math.max(...A.people.map(p => p.cr.length + p.ed.length + p.rt.length));
-  const W = 1000, RH = 30, LW = 190, TOP = 26;
-  const H = TOP + A.people.length * RH + 6;
-  const plot = W - LW - 120;
-  const out = [`<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Aportes por persona:
-    migraciones creadas, editadas de otros y reeditadas.">`];
-  A.people.forEach((p, i) => {
-    const y = TOP + i * RH;
-    const segs = [[p.cr.length, 'f-cr', 'creó'], [p.ed.length, 'f-ed', 'editó de otros'],
-                  [p.rt.length, 'f-rt', 'reeditó propias']];
-    let x = LW;
-    out.push(`<text x="0" y="${y + 15}" class="f-lbl">${esc(shortName(p.i))}</text>`);
-    segs.forEach(([n, cls, lbl]) => {
-      const w = (n / max) * plot;
-      if (n) out.push(`<rect x="${x}" y="${y + 4}" width="${Math.max(0, w - 2)}" height="16"
-        rx="3" class="${cls}"><title>${esc(whoName(p.i))}: ${n} ${lbl}</title></rect>`);
-      if (w > 26) out.push(`<text x="${x + 5}" y="${y + 16}" class="f-val"
-        style="fill:var(--panel)">${n}</text>`);
-      x += w;
-    });
-    out.push(`<text x="${x + 7}" y="${y + 16}" class="f-lbl">${p.cr.length} · ${p.ed.length}
-      · ${p.rt.length}</text>`);
-  });
-  out.push('</svg>');
-  $('#auchart').innerHTML = out.join('');
-
-  $('#aubody').innerHTML = A.people.map(p => `
-    <tr class="person ${selPerson === p.i ? 'sel' : ''}" data-p="${p.i}">
+  const team = AU.team, teamCode = auCode(team) || 1;
+  $('#auteam').innerHTML = `${auStack(team, 16)}${auLegend(team)}`;
+  $('#aucards').innerHTML = A.people.map(p => {
+    const a = AU.get(p.i);
+    return `<button class="aucard ${selPerson === p.i ? 'sel' : ''}" data-aup="${p.i}">
+      <div class="top">${ini(p.i)}<b>${esc(whoName(p.i))}</b></div>
+      <div class="big">${fmt(a.st.l)} <span>líneas vigentes</span></div>
+      <div class="s">${pct(a.st.l, team.l)}% del código vigente del repo · creó ${p.cr.length} · ${p.c} commits</div>
+      ${auStack(a.st)}
+      <div class="s dim">${p.f} → ${p.l}</div>
+    </button>`;
+  }).join('');
+  $('#autimeline').innerHTML = auTimeline();
+  $('#aubody').innerHTML = A.people.map(p => {
+    const a = AU.get(p.i);
+    return `<tr class="person ${selPerson === p.i ? 'sel' : ''}" data-p="${p.i}">
       <td>${ini(p.i)} ${esc(whoName(p.i))}</td>
       <td class="num">${p.cr.length}</td>
       <td class="num">${p.ed.length || ''}</td>
       <td class="num dim">${p.rt.length || ''}</td>
       <td class="num dim">${p.c}</td>
+      <td class="num st-live">${fmt(a.st.l)}</td>
+      <td class="num st-dead">${fmt(a.st.d) || ''}</td>
+      <td class="num st-keep">${fmt(a.st.n) || ''}</td>
+      <td class="num">${pct(a.st.c, a.total)}%</td>
       <td class="num add">+${fmt(p.a)}</td>
-      <td class="num ${p.d?'del':'dim'}">${minus(p.d)}</td>
-      <td class="m dim">${p.f} → ${p.l}</td>
-    </tr>`).join('');
-  $$('#aubody tr[data-p]').forEach(tr =>
-    tr.addEventListener('click', () => selectPerson(+tr.dataset.p)));
+      <td class="num ${p.d ? 'del' : 'dim'}">${minus(p.d)}</td>
+      <td class="num ${a.lintN[0] ? 'st-dead' : 'dim'}">${a.lintN[0] || ''}${a.lintN[1] ? ` <span class="dim">/ ${a.lintN[1]}</span>` : ''}</td>
+    </tr>`;
+  }).join('');
+  $$('#aubody tr[data-p]').forEach(tr => tr.addEventListener('click', () => selectPerson(+tr.dataset.p)));
+  $$('#aucards [data-aup], #autimeline [data-aup]').forEach(el =>
+    el.addEventListener('click', () => selectPerson(+el.dataset.aup)));
   if (selPerson == null) selectPerson(A.people[0].i);
 }
 
-/* Estadísticas de una persona: qué creó, en qué estado quedó y qué tocó de
-   otros. Todo se deriva de las migraciones, no de un recuento aparte. */
+/* Todo lo de una persona a ancho completo: su código de hoy, en qué
+   funcionalidades trabajó, cuándo, dónde quedó lo muerto y lo comentado. */
 function selectPerson(i) {
   selPerson = i;
-  $$('#aubody tr[data-p]').forEach(tr =>
-    tr.classList.toggle('sel', +tr.dataset.p === i));
+  $$('#aubody tr[data-p]').forEach(tr => tr.classList.toggle('sel', +tr.dataset.p === i));
+  $$('#aucards .aucard').forEach(b => b.classList.toggle('sel', +b.dataset.aup === i));
+  $$('#autimeline .autl-dot').forEach(c => c.classList.toggle('autl-off', +c.dataset.aup !== i));
   const p = A.people.find(x => x.i === i);
+  const a = AU.get(i);
+  if (!p) return;
+  const link = v => { const m = byV(v); return `<button class="node n-${m?.vd === 'obsoleta' ? 'dead' : 'live'}"
+    data-goto="${v}" title="${esc(m?.n || '')}">V${v}</button>`; };
   const mine = p.cr.map(byV).filter(Boolean);
-  const sum = (a, f) => a.reduce((n, m) => n + f(m), 0);
-  const lines = sum(mine, m => m.l), dead = sum(mine, m => m.dl);
-  const cl = sum(mine, m => m.cl);
   const vd = {};
   mine.forEach(m => { vd[m.vd] = (vd[m.vd] || 0) + 1; });
-  const objs = {};
-  mine.forEach(m => m.w.forEach(w => {
-    if (['bind','data','dynamic','scratch','query_bulk'].includes(w[0])) return;
-    objs[w[0]] = (objs[w[0]] || 0) + 1;
-  }));
-  const months = {};
-  Object.entries(A.byv).forEach(([v, [, ts]]) => ts.forEach(t => {
-    if (t[1] === i) months[t[2].slice(0, 7)] = (months[t[2].slice(0, 7)] || 0) + 1;
-  }));
-  const mk = Object.keys(months).sort();
+  const code = auCode(a.st);
 
-  const link = v => `<button class="node n-${byV(v).vd==='obsoleta'?'dead':'live'}"
-    data-goto="${v}">V${v}</button>`;
+  // por categoría
+  const cats = [...a.cat.entries()].map(([c, x]) => ({c, ...x}))
+    .sort((x, y) => auSum(y.st) - auSum(x.st) || y.tc.size - x.tc.size);
+  const maxCat = Math.max(1, ...cats.map(x => auSum(x.st)));
+  const catRows = cats.map(x => `<tr class="${x.c != null ? 'clickable' : ''}" ${x.c != null ? `data-gocat="${x.c}"` : ''}>
+      <td style="white-space:nowrap">${catDot(x.c)}${esc(C.defs[x.c]?.label || 'sin categoría')}</td>
+      <td class="num">${x.cr || ''}</td><td class="num dim">${x.tc.size}</td>
+      <td class="num st-live">${fmt(x.st.l) || ''}</td>
+      <td class="num st-dead">${fmt(x.st.d + x.st.n) || ''}</td>
+      <td class="num">${pct(x.st.c, auSum(x.st))}%</td>
+      <td style="width:28%"><div style="width:${Math.max(4, 100 * auSum(x.st) / maxCat)}%">${auStack(x.st, 9)}</div></td>
+      <td class="m dim">${(x.last || '').slice(0, 10)}</td></tr>`).join('');
 
-  $('#audetail').innerHTML = `
-    <h4>${ini(i)} ${esc(whoName(i))}</h4>
-    <div class="sub">${p.c} commits sobre migraciones · ${p.f} → ${p.l}</div>
-    <div class="statgrid">
-      <div class="stat"><div class="k">Creó</div><div class="n">${p.cr.length}</div>
-        <div class="s">${fmt(lines)} líneas</div></div>
-      <div class="stat"><div class="k">Sin efecto</div>
-        <div class="n st-dead">${pct(dead, lines)}%</div>
-        <div class="s">${fmt(dead)} de sus líneas</div></div>
-      <div class="stat"><div class="k">Comentario</div><div class="n">${pct(cl, lines)}%</div>
-        <div class="s">${fmt(cl)} líneas</div></div>
-      <div class="stat"><div class="k">Editó de otros</div><div class="n">${p.ed.length}</div>
+  // dónde está su código muerto y dónde comenta de más
+  const migs = [...a.mig.entries()].map(([v, st]) => ({v, st, m: byV(v)}));
+  const muertas = migs.filter(x => x.st.d + x.st.n).sort((x, y) => (y.st.d + y.st.n) - (x.st.d + x.st.n)).slice(0, 14);
+  const maxD = Math.max(1, ...muertas.map(x => x.st.d + x.st.n));
+  const coment = migs.filter(x => x.st.c >= 10).map(x => ({...x, cp: x.st.c / Math.max(1, auSum(x.st))}))
+    .sort((x, y) => y.cp - x.cp || y.st.c - x.st.c).slice(0, 14);
+  const rowM = (x, val, frac, cls, extra) => `<div class="aurow">${link(x.v)}
+    <span class="nm" title="${esc(x.m?.n || '')}">${esc(x.m?.n || '')}</span>
+    <span class="bar"><i class="${cls}" style="width:${100 * frac}%"></i></span>
+    <span class="num">${val}</span>${extra || ''}</div>`;
+
+  // actividad semanal por categoría
+  const commits = [...a.commits.values()].sort((x, y) => y.when.localeCompare(x.when));
+  const weeks = new Map();
+  commits.forEach(c => {
+    const d = new Date(c.when); d.setDate(d.getDate() - ((d.getDay() + 6) % 7));
+    const k = d.toISOString().slice(0, 10);
+    if (!weeks.has(k)) weeks.set(k, new Map());
+    const w = weeks.get(k);
+    c.cats.forEach(cat => w.set(cat, (w.get(cat) || 0) + 1));
+  });
+  const wk = [...weeks.keys()].sort();
+  const maxW = Math.max(1, ...[...weeks.values()].map(w => [...w.values()].reduce((s, n) => s + n, 0)));
+  const BW = Math.max(26, Math.floor(1400 / Math.max(1, wk.length))), WH = 120;
+  const weekSvg = wk.length ? `<svg viewBox="0 0 ${wk.length * BW + 10} ${WH + 24}" class="auweeks"
+      role="img" aria-label="Commits por semana y categoría">${wk.map((k, j) => {
+      let y = WH;
+      const bars = [...weeks.get(k).entries()].map(([cat, n]) => {
+        const h = (n / maxW) * (WH - 8);
+        y -= h;
+        return `<rect x="${j * BW + 4}" y="${y}" width="${BW - 6}" height="${h}" fill="${catColor(cat)}">
+          <title>semana del ${k} · ${esc(C.defs[cat]?.label || 'sin categoría')}: ${n}</title></rect>`;
+      }).join('');
+      return bars + (j % 2 === 0 ? `<text x="${j * BW + 4}" y="${WH + 16}" class="f-lbl">${k.slice(5)}</text>` : '');
+    }).join('')}</svg>` : '<div class="empty">sin commits</div>';
+
+  // colaboración
+  const otros = new Map();
+  p.cr.forEach(v => touchesOf(v).forEach(t => { if (t[1] !== i) {
+    const o = otros.get(t[1]) || {suyas: new Set(), deotros: new Set()}; o.suyas.add(v); otros.set(t[1], o); } }));
+  p.ed.forEach(v => { const ow = ownerOf(v); if (ow != null && ow !== i) {
+    const o = otros.get(ow) || {suyas: new Set(), deotros: new Set()}; o.deotros.add(v); otros.set(ow, o); } });
+
+  const lint = Object.entries(a.lint).sort((x, y) => (y[1].sev === 'error') - (x[1].sev === 'error') || y[1].n - x[1].n);
+
+  $('#auperson').innerHTML = `
+    <div class="auhead">${ini(i)}<h2>${esc(whoName(i))}</h2>
+      <span class="dim m">${p.c} commits sobre migraciones · ${p.f} → ${p.l}</span></div>
+    <div class="catkpis">
+      <div><div class="k">Vigente hoy</div><div class="n st-live">${fmt(a.st.l)}</div>
+        <div class="s">${pct(a.st.l, code)}% de su código · ${pct(a.st.l, AU.team.l)}% del repo</div></div>
+      <div><div class="k">Sin efecto hoy</div><div class="n st-dead">${fmt(a.st.d + a.st.n)}</div>
+        <div class="s">${fmt(a.st.d)} recortables · ${fmt(a.st.n)} se conservan</div></div>
+      <div><div class="k">Comentario</div><div class="n">${pct(a.st.c, a.total)}%</div>
+        <div class="s">${fmt(a.st.c)} de sus ${fmt(a.total)} líneas actuales</div></div>
+      <div><div class="k">Creó</div><div class="n">${p.cr.length}</div>
+        <div class="s">${VERD.filter(v => vd[v]).map(v => `${vd[v]} ${v}`).join(' · ')}</div></div>
+      <div><div class="k">Editó de otros</div><div class="n">${p.ed.length}</div>
         <div class="s">reeditó ${p.rt.length} propias</div></div>
-      <div class="stat"><div class="k">Líneas escritas</div>
-        <div class="n add">+${fmt(p.a)}</div><div class="s">${minus(p.d)} borradas</div></div>
+      <div><div class="k">Escribió / borró</div><div class="n add">+${fmt(p.a)}</div>
+        <div class="s">${minus(p.d)} · queda ${pct(a.total, p.a)}% de lo escrito</div></div>
+      <div title="Incluye la deuda congelada en la baseline"><div class="k">Lint en sus líneas</div><div class="n ${a.lintN[0] ? 'st-dead' : ''}">${a.lintN[0]}</div>
+        <div class="s">errores · ${a.lintN[1]} avisos, deuda incluida</div></div>
     </div>
-    <h3>Cómo quedó lo que creó</h3>
-    <div class="chain" style="gap:6px">${VERD.filter(v => vd[v]).map(v =>
-      `<span class="pill p-${v}">${v} ${vd[v]}</span>`).join('')}</div>
-    <h3>Objetos que creó</h3>
-    <div class="chain" style="gap:6px">${Object.entries(objs)
-      .sort((a, b) => b[1] - a[1]).map(([t, n]) =>
-      `<span class="pill" style="color:var(--muted)">${TYPE_ES[t] || t} ${n}</span>`)
-      .join('') || '<span class="dim">ninguno</span>'}</div>
-    ${mk.length > 1 ? `<h3>Actividad por mes</h3>
-      <svg viewBox="0 0 ${mk.length * 34} 56" class="fig" style="background:none;border:0;
-        box-shadow:none;padding:0;height:56px;width:100%" role="img"
-        aria-label="Commits sobre migraciones por mes">${(() => {
-        const mx = Math.max(...Object.values(months));
-        return mk.map((k, j) => {
-          const h = (months[k] / mx) * 32;
-          return `<rect x="${j * 34 + 4}" y="${38 - h}" width="24" height="${h}" rx="2"
-            class="f-cr"><title>${k}: ${months[k]} commits</title></rect>
-            <text x="${j * 34 + 16}" y="${52}" class="f-lbl" text-anchor="middle"
-            >${k.slice(5)}</text>`;
-        }).join('');
-      })()}</svg>` : ''}
-    <h3 class="sect">Migraciones que creó <span class="n">${p.cr.length}</span></h3>
-    <div class="chain">${p.cr.slice(-60).reverse().map(link).join('')}
-      ${p.cr.length > 60 ? '<span class="dim">… las 60 más recientes</span>' : ''}</div>
-    ${p.ed.length ? `<h3 class="sect">Editó de otros <span class="n">${p.ed.length}</span></h3>
-      <div class="chain">${p.ed.map(v => `${link(v)}<span class="dim" style="font-size:11px"
-        >de ${esc(shortName(ownerOf(v)))}</span>`).join(' ')}</div>` : ''}
-    ${p.rt.length ? `<h3 class="sect">Volvió sobre propias <span class="n">${p.rt.length}</span></h3>
-      <div class="chain">${p.rt.map(link).join('')}</div>` : ''}`;
-  wireGoto($('#audetail'));
+    <h3>Su código hoy en las migraciones <span class="dim" style="text-transform:none;letter-spacing:0">
+      (quién escribió cada línea según git blame, cruzado con el estado de esa línea)</span></h3>
+    ${auStack(a.st, 18)}${auLegend(a.st)}
+    <div class="catcols aucols">
+      <div class="catbox au-wide"><h3>Funcionalidades en las que trabajó</h3>
+        <table><thead><tr><th>Categoría</th><th style="text-align:right" title="Migraciones que creó">Creó</th>
+          <th style="text-align:right" title="Migraciones de la categoría que tocó">Tocó</th>
+          <th style="text-align:right">Vigente</th><th style="text-align:right">Sin efecto</th>
+          <th style="text-align:right">Coment.</th><th>Sus líneas hoy</th><th>Último</th></tr></thead>
+        <tbody>${catRows || '<tr><td colspan="8" class="empty">ninguna</td></tr>'}</tbody></table></div>
+      <div class="catbox au-wide"><h3>Commits por semana, por categoría</h3>${weekSvg}</div>
+      <div class="catbox"><h3>Dónde está su código sin efecto <span class="n">${muertas.length}</span></h3>
+        ${muertas.map(x => rowM(x, fmt(x.st.d + x.st.n), (x.st.d + x.st.n) / maxD, 'lg-d',
+          x.st.n ? `<span class="dim" title="se conservan">${fmt(x.st.n)} cons.</span>` : '')).join('')
+          || '<div class="empty">nada sin efecto</div>'}</div>
+      <div class="catbox"><h3>Migraciones con más comentario suyo <span class="n">${coment.length}</span></h3>
+        ${coment.map(x => rowM(x, Math.round(100 * x.cp) + '%', x.cp, x.cp > .2 ? 'lg-d' : 'lg-c',
+          `<span class="dim">${fmt(x.st.c)} lín.</span>`)).join('') || '<div class="empty">ninguna con 10+ líneas de comentario</div>'}
+        <p class="note" style="font-size:11.5px">% de comentario sobre sus líneas en esa migración; rojo = sobre el 20% del presupuesto.</p></div>
+      <div class="catbox"><h3>Lint en las líneas que escribió <span class="dim" style="text-transform:none;letter-spacing:0">(deuda incluida)</span></h3>
+        ${lint.length ? `<div class="uselist">${lint.map(([r, x]) => `<div class="use"><span class="who">
+          <span class="pill ${x.sev === 'error' ? 'p-obsoleta' : 'p-parcial'}">${esc(r)}</span>
+          ${[...x.vs].slice(0, 6).map(link).join('')}</span><span class="at">${x.n}</span></div>`).join('')}</div>`
+          : '<div class="empty">ningún hallazgo en sus líneas</div>'}</div>
+      <div class="catbox"><h3>Con quién comparte migraciones</h3>
+        ${otros.size ? `<div class="uselist">${[...otros.entries()].map(([o, x]) => `<div class="auwho">
+          <div>${ini(o)} <b>${esc(whoName(o))}</b></div>
+          <div class="dim">editó ${x.suyas.size} migraciones suyas · tocó ${x.deotros.size} de esa persona</div></div>`).join('')}</div>`
+          : '<div class="empty">nadie más tocó sus migraciones</div>'}</div>
+      <div class="catbox au-wide"><h3>Historial de commits <span class="n">${commits.length}</span></h3>
+        <div class="aucommits">${commits.slice(0, 60).map(c => `<div class="aucommit">
+          <span class="m dim">${c.when.slice(0, 10)}</span>
+          <span class="subj">${[...c.cats].slice(0, 3).map(catDot).join('')}${esc(c.subj)}</span>
+          <span class="delta"><span class="add">+${fmt(c.add)}</span> <span class="del">${minus(c.del)}</span></span>
+          <span class="chain">${c.vs.slice(0, 8).map(link).join('')}${c.vs.length > 8 ? `<span class="dim">+${c.vs.length - 8}</span>` : ''}</span>
+          </div>`).join('')}${commits.length > 60 ? '<div class="dim">… los 60 más recientes</div>' : ''}</div></div>
+      <div class="catbox au-wide"><h3>Migraciones que creó <span class="n">${p.cr.length}</span></h3>
+        <div class="catmigs">${p.cr.slice().reverse().map(link).join('')}</div>
+        ${p.ed.length ? `<h3 style="margin-top:12px">Editó de otros <span class="n">${p.ed.length}</span></h3>
+          <div class="catmigs">${p.ed.map(link).join('')}</div>` : ''}
+        ${p.rt.length ? `<h3 style="margin-top:12px">Volvió sobre propias <span class="n">${p.rt.length}</span></h3>
+          <div class="catmigs">${p.rt.map(link).join('')}</div>` : ''}</div>
+    </div>`;
+  wireGoto($('#auperson'));
 }
 
 /* ---------- grafo de dependencias (Cytoscape) ----------
@@ -2202,45 +2423,46 @@ no mata lo anterior, lo modifica. Regenerá esta página con
 </section>
 
 <section class="panel" id="p-autoria" role="tabpanel" hidden>
-  <p class="note">De quién es cada migración —quien hizo el <b>primer</b> commit que la
-  creó— y quién la tocó después. Las identidades se unifican con <code>.mailmap</code>:
-  las mismas {n_people} personas firmaron con ocho pares nombre/correo distintos, y sin
-  eso «Jorge Sanchez» y «Jorge Luis Sanchez» contarían como dos.
-  {multi_hands} migraciones pasaron por más de una mano; ahí es donde un checksum
-  cambiado sorprende a otro servidor.</p>
-  <p class="note"><b>Límite del dato:</b> sale de <code>git log</code> sobre la rama actual.
-  Una rama integrada con <i>squash</i> deja un solo commit, así que quien lo firmó figura
-  como autor aunque el trabajo fuese de otro; y un rebase reescribe las fechas. Para lo
-  fino, <code>git log --follow</code> sobre el archivo.</p>
+  <h2>Autoría</h2>
+  <p class="note">Dos fuentes cruzadas. <code>git log</code> dice quién <b>creó</b> cada migración
+  (su primer commit), quién la <b>editó</b> siendo de otro y quién <b>volvió</b> sobre la suya.
+  <code>git blame</code> dice quién escribió cada línea que el fichero tiene <b>hoy</b>; cruzado con
+  el mapa de líneas sale cuánto de lo de cada persona sigue vigente, cuánto quedó sin efecto y
+  cuánto es comentario. Las identidades se unifican con <code>.mailmap</code> ({n_people}
+  personas); {multi_hands} migraciones pasaron por más de una mano.</p>
+  <p class="note"><b>Límite del dato:</b> sale de la rama actual. Una rama integrada con
+  <i>squash</i> deja un solo commit y figura como autor quien lo firmó; un rebase reescribe las
+  fechas. El blame ignora los cambios de solo espacios (<code>-w</code>).</p>
+
+  <h3>El código de hoy, por estado</h3>
+  <div id="auteam"></div>
+  <div class="aucards" id="aucards"></div>
 
   <figure class="fig">
-    <figcaption><b>Aportes por persona.</b> Crear una migración, editar la de otro y volver
-    sobre la propia son tres cosas distintas: la segunda es la que obliga a un
-    <code>flyway repair</code> donde ya se había aplicado.</figcaption>
-    <div class="maplegend" style="margin:0 0 8px">
-      <span><i class="lg-cr"></i>creó</span>
-      <span><i class="lg-ed"></i>editó de otros</span>
-      <span><i class="lg-rt"></i>reeditó propias</span>
-    </div>
-    <div id="auchart"></div>
+    <figcaption><b>Línea de tiempo.</b> Un punto por commit sobre <code>postgres/migrations/</code>:
+    tamaño = líneas tocadas, color = categoría. Clic en una fila o un punto elige a la persona.</figcaption>
+    <div id="autimeline"></div>
   </figure>
 
-  <div class="split">
-    <div class="tablewrap"><table><thead><tr>
-      <th>Persona</th><th style="text-align:right">Creó</th>
-      <th style="text-align:right" title="Migraciones de otra persona que tocó">De otros</th>
-      <th style="text-align:right" title="Migraciones propias que volvió a editar">Reeditó</th>
-      <th style="text-align:right">Commits</th>
-      <th style="text-align:right">Líneas +</th><th style="text-align:right">Líneas −</th>
-      <th>Actividad</th>
-    </tr></thead><tbody id="aubody"></tbody></table></div>
-    <aside class="detail" id="audetail"></aside>
-  </div>
-  <p class="note" style="margin-top:12px">Las líneas <code>+</code>/<code>−</code> son las
-  del <code>git log --numstat</code> sobre <code>postgres/migrations/</code>, así que una
-  migración reescrita entera cuenta dos veces: una al crearla y otra al reemplazarla.
-  «Creó» sí es exclusivo —una migración tiene un solo primer commit—, y por eso las cinco
-  cifras de «creó» suman las {n_migs} migraciones del repo.</p>
+  <div id="auperson"></div>
+
+  <h3>Comparativa</h3>
+  <div class="tablewrap"><table><thead><tr>
+    <th>Persona</th><th style="text-align:right">Creó</th>
+    <th style="text-align:right" title="Migraciones de otra persona que tocó">De otros</th>
+    <th style="text-align:right" title="Migraciones propias que volvió a editar">Reeditó</th>
+    <th style="text-align:right">Commits</th>
+    <th style="text-align:right" title="Líneas suyas que hoy están vigentes (git blame)">Vigente hoy</th>
+    <th style="text-align:right" title="Líneas suyas recortables">Recortable</th>
+    <th style="text-align:right" title="Líneas suyas sin efecto que se conservan">Se conserva</th>
+    <th style="text-align:right">Coment.</th>
+    <th style="text-align:right">Líneas +</th><th style="text-align:right">Líneas −</th>
+    <th style="text-align:right" title="Errores / avisos del lint en líneas que escribió">Lint</th>
+  </tr></thead><tbody id="aubody"></tbody></table></div>
+  <p class="note" style="margin-top:12px">Las líneas <code>+</code>/<code>−</code> son las del
+  <code>git log --numstat</code>: una migración reescrita entera cuenta dos veces. «Vigente hoy»
+  no: cada línea actual tiene un solo autor. «Creó» también es exclusivo, y por eso las cifras de
+  «creó» suman las {n_migs} migraciones del repo.</p>
 </section>
 
 <section class="panel" id="p-matriz" role="tabpanel" hidden>

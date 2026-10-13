@@ -166,7 +166,10 @@ def resolver(ctx: Ctx, needle: str) -> tuple[list[str], bool]:
     if n in {k.lower() for k in chains}:
         return [k for k in chains if k.lower() == n], True
     pool = [k for k in chains if n.startswith(SECUNDARIOS) or not k.startswith(SECUNDARIOS)]
-    exactas = [k for k in pool if n in _nombres(k)]
+    # Una fila de public.query se nombra por cualquiera de sus alias: la ruta de
+    # un INSERT con uuid propio vive solo como alias de la cadena por uuid.
+    exactas = [k for k in pool if n in (set().union(*map(_nombres, ctx.grupo(k)))
+                                         if k.startswith("query:") else _nombres(k))]
     if exactas:
         return sorted(_un_representante(ctx, exactas), key=lambda k: (not k.startswith("function:"), k)), True
     return _un_representante(ctx, [k for k in pool if n in k.lower()]), False
@@ -180,8 +183,9 @@ def _un_representante(ctx: Ctx, keys: list[str]) -> list[str]:
         if g in vistos:
             continue
         vistos.add(g)
-        elegidas.append(min(g, key=lambda a: (not a.startswith("query:route:"), "|?|" in a or ":?|" in a,
-                                              ctx.duena(a) is None, a)) if k.startswith("query:") else k)
+        elegidas.append(min(g, key=lambda a: (a not in ctx.model["chains"], not a.startswith("query:route:"),
+                                              "|?|" in a or ":?|" in a, ctx.duena(a) is None, a))
+                        if k.startswith("query:") else k)
     return elegidas
 
 

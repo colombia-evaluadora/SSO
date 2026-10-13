@@ -69,11 +69,11 @@ Cada carpeta es un paquete; `__main__.py` es el CLI.
 |---|---|---|
 | `base/` | `sqlscan`, `nucleo`, `modelo` | Splitter de SQL y máscara de lo que no se ejecuta; tipos (`Write`, `Migration`), orden de versiones (`vkey`, `vnum`) y rutas; acceso cacheado al modelo (`modelo.cargar`). |
 | `lectura/` | `extraccion`, `consultas` | `LectorMigracion` lee un archivo: `EXTRACTORES_DDL` (una clase por familia de DDL) y `_DML` por tabla destino; `Registro` resuelve esquemas como Postgres. Filas de `public.query` y destinos de los binds. |
-| `analisis/` | `construir`, `grafo`, `usos`, `historia`, `poda`, `categories`, `calidad`, `relaciones` | `construir()` arma el modelo; un `Resolutor` por tipo de objeto decide qué vive; usos y firmas; autoría y números libres (git); recorte con `precision.py`; la única agregación por categoría. |
+| `analisis/` | `construir`, `grafo`, `usos`, `historia`, `poda`, `precision`, `categories`, `calidad`, `relaciones` | `construir()` arma el modelo; un `Resolutor` por tipo de objeto decide qué vive; usos y firmas; autoría y números libres (git); recorte con `precision.py`; la única agregación por categoría. |
 | `vista/` | `render`, `render_categories`, `render_calidad` | El HTML: solo pinta el modelo, no recalcula ninguna cifra. |
 | `comandos/` | `informe`, `lint`, `orden`, `mapa`, `oraculo` | Un módulo por subcomando, con su `main(argv)` y sus datos al lado (`lint-baseline.json`, `catalogo.sql`). |
 
-Solo `base/`, `lectura/` y `analisis/` (más `precision.py`) entran en la huella
+Solo `base/`, `lectura/` y `analisis/` entran en la huella
 del caché: cambiar la vista o un comando no obliga a recalcular el modelo.
 
 **Extender**: un tipo de DDL nuevo es una subclase de `ExtractorDDL` en
@@ -91,7 +91,7 @@ categoría) → JSON / HTML / consumidores. Una cifra se calcula en un solo siti
 `lint.py` (y su hook), `orden.py`, `migration-reapply-set.py`,
 `migration-analysis mapa` (y el hook Stop) y `limpiando-migraciones/propuesta.py`.
 El modelo se cachea en `%TEMP%/sso-migrations-model.json` con la huella de
-todas las migraciones y del código del analizador (incluido `precision.py`):
+todas las migraciones y del código del analizador:
 si cambia un `.sql` o una regla se reconstruye solo, y nadie necesita
 `--refresh` ni correr el analizador dos veces. Generar el informe completo
 también deja ese caché al día.
@@ -186,8 +186,7 @@ que toca varios objetos, basta uno vigente para conservarlo.
 ## Qué se puede recortar
 
 El modelo empareja funciones por nombre y aridad, así que "sin efecto" engaña
-en los dos sentidos. Si existe `.claude/skills/next-migration-number/precision.py`,
-`apply_precision()` relee cada migración por **firma exacta** y contexto de uso
+en los dos sentidos. `analisis/precision.py` (`apply_precision()` en `poda.py`) relee cada migración por **firma exacta** y contexto de uso
 (`version_findings`, lo mismo que imprime `deps.py --version <n>`) y:
 
 - pasa a *se conservan* (`n` en el mapa del archivo) las sentencias sin efecto
@@ -204,8 +203,13 @@ en los dos sentidos. Si existe `.claude/skills/next-migration-number/precision.p
 Recortar un fichero ya aplicado cambia su checksum: el deploy hace `repair` y
 lo re-ejecuta entero, así que lo que queda tiene que poder correr otra vez sin
 revertir nada. El procedimiento, con banco de pruebas, es la skill
-`limpiando-migraciones`. Sin `precision.py` el informe usa la cuenta del modelo
-y lo marca como `sin-precision`.
+`limpiando-migraciones`.
+
+`precision.py` vive aquí y no en la skill porque el modelo depende de él; la
+skill `next-migration-number` lo reexporta (es el mismo objeto de módulo) para
+`deps.py` y `limpiando-migraciones`. Trocea con `sqlscan` y enmascara con
+`mask_inert`, ambos cacheados por contenido: lo que el modelo ya leyó no se
+vuelve a procesar.
 
 ## Presupuesto de comentarios
 
@@ -223,10 +227,24 @@ La pestaña **Autoría** dice de quién es cada migración —quien hizo el **pr
 commit que la creó— y quién la tocó después, en orden, con `+`/`−` líneas por
 commit. Distingue tres aportes que no conviene mezclar: **crear**, **editar la
 de otro** (lo que obliga a `flyway repair` donde ya se había aplicado) y
-**volver sobre la propia**. Al elegir una persona se ven sus aportes: qué creó,
-en qué estado quedó (veredictos), qué objetos, su % de comentario, su actividad
-por mes y la lista de lo que editó de otros. El selector de la pestaña
-Migraciones filtra por persona.
+**volver sobre la propia**. El selector de la pestaña Migraciones filtra por persona.
+
+**Código de hoy por persona.** `historia.blame()` corre `git blame -w` sobre
+cada migración (cacheado por fichero en `%TEMP%/sso-blame-cache.json`, con el
+blob de HEAD y el contenido como clave: 14 s en frío, nada si no cambió) y lo
+guarda en `authors.blame` por tramos. La vista lo cruza línea a línea con el
+mapa de líneas: cuánto de lo que escribió cada persona sigue **vigente**, cuánto
+quedó **sin efecto** (recortable o conservado) y cuánto es **comentario**, por
+migración y por categoría. Así se ve dónde está su código muerto y qué
+migraciones comenta de más, cosa que los `+`/`−` del `git log` no dicen (una
+reescritura entera cuenta dos veces). Los hallazgos del lint
+(`lint.resumen()["todos"]`) se atribuyen a quien escribió su línea; los de
+fichero (cabecera, % de comentario), a quien creó la migración.
+
+La pestaña muestra el código de hoy del equipo por estado, una tarjeta por
+persona, una línea de tiempo con un punto por commit y, para la persona elegida,
+sus funcionalidades, commits por semana, código sin efecto, comentario, lint,
+con quién comparte migraciones y su historial de commits.
 
 Las identidades se unifican con `.mailmap`, en la raíz del repo: las mismas
 cinco personas firmaron con ocho pares nombre/correo distintos, y sin eso

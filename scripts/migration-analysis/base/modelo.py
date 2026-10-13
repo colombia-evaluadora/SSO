@@ -25,7 +25,6 @@ from pathlib import Path
 RAIZ = Path(__file__).resolve().parents[1]
 REPO = RAIZ.parents[1]
 MIGRATIONS = REPO / "postgres" / "migrations"
-PRECISION = REPO / ".claude" / "skills" / "next-migration-number" / "precision.py"
 CACHE = Path(tempfile.gettempdir()) / "sso-migrations-model.json"
 
 # Solo estos paquetes calculan el modelo: cambiar como se pinta (vista) o un
@@ -44,7 +43,7 @@ def huella() -> str:
         h.update(p.name.encode())
         h.update(p.read_bytes())
     fuentes = [p for pkg in _PAQUETES_DEL_MODELO for p in sorted((RAIZ / pkg).glob("*.py"))]
-    for p in fuentes + [PRECISION]:
+    for p in fuentes:
         if p.exists():
             h.update(p.relative_to(REPO).as_posix().encode())
             h.update(p.read_bytes())

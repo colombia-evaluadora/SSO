@@ -101,23 +101,17 @@ def query_row_keys(stmt: str) -> tuple[list[str], dict]:
     """
     cols = extract_columns_and_values(stmt)
 
-    uuids = find_all_values(stmt, "uuid")
-    if "uuid" in cols:
-        u = unquote(cols["uuid"])
-        if u:
-            uuids.append(u)
+    def valores(col: str) -> list[str]:
+        # En un INSERT ... SELECT que clona una fila hermana (V404, V228) el
+        # WHERE nombra la fila ORIGEN: si el INSERT fija la columna con un
+        # literal, ese es el de la fila nueva y el WHERE no cuenta. Si la copia
+        # (`q.path_template`), el valor del WHERE si es el de la fila nueva.
+        lit = unquote(cols[col]) if col in cols else None
+        return [lit] if lit else find_all_values(stmt, col)
 
-    paths = find_all_values(stmt, "path_template")
-    if "path_template" in cols:
-        p = unquote(cols["path_template"])
-        if p:
-            paths.append(p)
-
-    methods = find_all_values(stmt, "http_method")
-    if "http_method" in cols:
-        h = unquote(cols["http_method"])
-        if h:
-            methods.append(h)
+    uuids = valores("uuid")
+    paths = valores("path_template")
+    methods = valores("http_method")
     if not methods:
         # un verbo suelto de la sentencia, nunca uno de adentro de un cuerpo $$
         methods = [l for l in literals(mask_inert(stmt, strings=False))
@@ -132,8 +126,9 @@ def query_row_keys(stmt: str) -> tuple[list[str], dict]:
 
     keys: list[str] = [f"query:uuid:{u}" for u in uuids]
     route_keys: list[str] = []
-    pairs = [(a or d, (b or c).upper())
-             for a, b, c, d in RE_PATH_METHOD.findall(mask_inert(stmt, strings=False))]
+    propia = "path_template" in cols and unquote(cols["path_template"])
+    pairs = [] if propia else [(a or d, (b or c).upper())
+                               for a, b, c, d in RE_PATH_METHOD.findall(mask_inert(stmt, strings=False))]
     if pairs and {p for p, _ in pairs} >= set(paths):
         route_keys = [f"query:route:{svc}|{p}|{h}" for svc in (services or ["?"])
                       for p, h in dict.fromkeys(pairs)]

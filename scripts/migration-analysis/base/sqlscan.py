@@ -259,6 +259,7 @@ def find_top_level(text: str, pattern: str) -> int:
     return -1
 
 
+@lru_cache(maxsize=16384)
 def mask_inert(sql: str, strings: bool = True, dollar: bool = True) -> str:
     """
     Misma longitud y mismos saltos de linea, con lo que NO se ejecuta al migrar

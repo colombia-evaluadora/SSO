@@ -580,13 +580,16 @@ def resumen(model: dict) -> dict:
             reglas[regla.codigo]["doc"] = (regla.__doc__ or "").strip().split("\n")[0]
     vivas = {f.fingerprint() for f in findings}
     por_version: dict[str, dict[str, int]] = {}
-    for f in findings:  # todo, deuda incluida: la pestana Categorias lo agrega por categoria
+    todos: list[list] = []
+    for f in findings:  # todo, deuda incluida: Categorias lo agrega por categoria y Autoria por linea
         v = re.match(r"V(\d+(?:\.\d+)*)", f.path.name)
         if v:
             r = por_version.setdefault(v.group(1), {})
             r[f.rule] = r.get(f.rule, 0) + 1
+            todos.append([v.group(1), f.line, f.rule, f.severity])
     return {"reglas": dict(sorted(reglas.items(), key=lambda kv: (-kv[1]["nuevos"], kv[0]))),
             "por_version": por_version,
+            "todos": todos,
             "nuevos": sorted(nuevos, key=lambda d: (d["severity"] != "error", d["file"],
                                                     d["line"]))[:400],
             "total_nuevos": len(nuevos),
