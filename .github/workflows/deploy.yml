@@ -655,7 +655,30 @@ jobs:
             RECREATE="$(filter_active $CHANGED_SERVICES)"
             if [ -n "$RECREATE" ]; then
               echo "Recreando: $RECREATE"
-              ./scripts/sso-stack.sh up -d --no-deps --remove-orphans $RECREATE
+              # Por capas y esperando a que cada una quede sana (--wait):
+              # eurekaserver primero, luego el resto, y el api-gateway al
+              # final, para que nunca enrute hacia servicios que aún
+              # arrancan. Sin healthcheck (cdc-capture, cdc-worker) --wait
+              # sólo exige que estén "running", no falla por eso.
+              LAYER_EUREKA=""; LAYER_MID=""; LAYER_GATEWAY=""
+              for s in $RECREATE; do
+                case "$s" in
+                  eurekaserver) LAYER_EUREKA="$s" ;;
+                  api-gateway)  LAYER_GATEWAY="$s" ;;
+                  *)            LAYER_MID="${LAYER_MID:+$LAYER_MID }$s" ;;
+                esac
+              done
+              ORPHANS_FLAG="--remove-orphans"
+              for LAYER in "$LAYER_EUREKA" "$LAYER_MID" "$LAYER_GATEWAY"; do
+                [ -n "$LAYER" ] || continue
+                echo "=== capa: $LAYER ==="
+                if ! ./scripts/sso-stack.sh up -d --no-deps $ORPHANS_FLAG --wait --wait-timeout 300 $LAYER; then
+                  echo "=== recreación de '$LAYER' no quedó sana ==="
+                  dump_logs
+                  exit 1
+                fi
+                ORPHANS_FLAG=""
+              done
             else
               echo "Ningún servicio de aplicación cambió de imagen; nada que recrear."
             fi
