@@ -14,6 +14,7 @@ import org.springframework.stereotype.Service;
 
 import java.security.MessageDigest;
 import java.time.Duration;
+import java.util.HexFormat;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -229,11 +230,7 @@ public class CatalogResultCacheService {
         try {
             byte[] digest = MessageDigest.getInstance("SHA-256")
                     .digest(raw.getBytes(java.nio.charset.StandardCharsets.UTF_8));
-            StringBuilder sb = new StringBuilder(digest.length * 2);
-            for (byte b : digest) {
-                sb.append(String.format("%02x", b));
-            }
-            return sb.toString();
+            return HexFormat.of().formatHex(digest);
         } catch (java.security.NoSuchAlgorithmException e) {
             // SHA-256 is guaranteed present on every JVM (JLS/JCA
             // mandatory algorithm) — this branch is unreachable in
