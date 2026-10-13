@@ -3,6 +3,7 @@ package com.co.eurekatic.common.security;
 import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.JwtException;
 import io.jsonwebtoken.Jws;
+import io.jsonwebtoken.JwtParser;
 import io.jsonwebtoken.Jwts;
 import io.jsonwebtoken.security.Keys;
 
@@ -88,6 +89,13 @@ public class JwtTokenService {
      */
     private final SecretKey hmacKey;
     private final PrivateKey rsaPrivateKey;
+    /**
+     * Parsers built once: jjwt 0.12 {@link JwtParser} is immutable and
+     * thread-safe, so re-parsing the PEM per request is pure waste. Null
+     * iff the service has no verification key (checked in parseInternal).
+     */
+    private final JwtParser parser;
+    private final JwtParser issuerParser;
 
     public JwtTokenService(JwtProperties props) {
         this.props = props;
@@ -112,6 +120,32 @@ public class JwtTokenService {
             // Parse eagerly so a broken PEM fails at startup.
             readRsaPublicKey(props.publicKey());
         }
+        Key verifyKey = null;
+        if (hmacKey != null) {
+            verifyKey = hmacKey;
+        } else if (props.publicKey() != null && !props.publicKey().isBlank()) {
+            verifyKey = readRsaPublicKey(props.publicKey());
+        }
+        if (verifyKey == null) {
+            this.parser = null;
+            this.issuerParser = null;
+        } else {
+            this.parser = buildParser(verifyKey, null);
+            this.issuerParser = buildParser(verifyKey, props.issuer());
+        }
+    }
+
+    private static JwtParser buildParser(Key verifyKey, String requiredIssuer) {
+        var builder = Jwts.parser();
+        if (verifyKey instanceof SecretKey sk) {
+            builder.verifyWith(sk);
+        } else {
+            builder.verifyWith((java.security.PublicKey) verifyKey);
+        }
+        if (requiredIssuer != null) {
+            builder.requireIssuer(requiredIssuer);
+        }
+        return builder.build();
     }
 
     /** The key used to sign new tokens — null iff this service is verifier-only. */
@@ -377,20 +411,13 @@ public class JwtTokenService {
         // tokens verify with the configured public key (a
         // verifier-only service uses publicKey alone — no
         // signingKey is required for verification).
-        var parserBuilder = Jwts.parser();
-        if (hmacKey != null) {
-            parserBuilder.verifyWith(hmacKey);
-        } else if (props.publicKey() != null && !props.publicKey().isBlank()) {
-            parserBuilder.verifyWith(readRsaPublicKey(props.publicKey()));
-        } else {
+        JwtParser selected = requireIssuerMatch ? issuerParser : parser;
+        if (selected == null) {
             throw new IllegalStateException(
                 "JwtTokenService has neither sso.jwt.secret nor sso.jwt.public-key "
                     + "configured; cannot verify tokens. Set one in .env.");
         }
-        if (requireIssuerMatch) {
-            parserBuilder.requireIssuer(props.issuer());
-        }
-        Jws<Claims> jws = parserBuilder.build().parseSignedClaims(token);
+        Jws<Claims> jws = selected.parseSignedClaims(token);
         Claims claims = jws.getPayload();
 
         Set<String> roles = new LinkedHashSet<>();
