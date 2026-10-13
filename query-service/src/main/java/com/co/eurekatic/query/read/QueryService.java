@@ -52,6 +52,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.regex.Pattern;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 /**
@@ -100,8 +101,19 @@ public class QueryService {
     // still bounded; Spring overrides them from application.yml.
     @Value("${query.execution.timeout-seconds:15}")
     private int timeoutSeconds = 15;
-    @Value("${query.execution.report-timeout-seconds:180}")
-    private int reportTimeoutSeconds = 180;
+    @Value("${query.execution.report-timeout-seconds:170}")
+    private int reportTimeoutSeconds = 170;
+    // Rutas del catálogo que el front llama directo (exportar, importar,
+    // borrados y calificaciones en lote) y que legítimamente tardan más
+    // que una consulta de pantalla: reciben el timeout largo sin cabecera.
+    static final String DEFAULT_LONG_PATH_PATTERN =
+            "(?i).*(export|exportar|importar|reporte|boletin|bulk|masivo|masiva|lote).*";
+    private Pattern longPathPattern = Pattern.compile(DEFAULT_LONG_PATH_PATTERN);
+
+    @Value("${query.execution.long-path-pattern:" + DEFAULT_LONG_PATH_PATTERN + "}")
+    void setLongPathPattern(String regex) {
+        this.longPathPattern = regex == null || regex.isBlank() ? null : Pattern.compile(regex);
+    }
     @Value("${query.execution.max-rows:50001}")
     private int maxRows = 50001;
     @Value("${query.execution.fetch-size:500}")
@@ -231,7 +243,8 @@ public class QueryService {
                     "La consulta no es pública");
         }
 
-        NamedParameterJdbcTemplate jdbc = withStatementLimits(registry.resolve(def.type()));
+        NamedParameterJdbcTemplate jdbc = withStatementLimits(registry.resolve(def.type()),
+                def.pathTemplate());
 
         // Caller params + CONTEXT.* from the JWT/request. Keys are NOT
         // re-cased here: Spring JDBC binds case-sensitively against the
@@ -388,19 +401,25 @@ public class QueryService {
      * profile header, so the shared template must not be mutated). It is
      * cheap: same DataSource and the same exception translator, no new pool.
      */
-    private NamedParameterJdbcTemplate withStatementLimits(NamedParameterJdbcTemplate shared) {
+    private NamedParameterJdbcTemplate withStatementLimits(NamedParameterJdbcTemplate shared,
+                                                          String pathTemplate) {
         JdbcTemplate base = shared.getJdbcTemplate();
         JdbcTemplate t = new JdbcTemplate(base.getDataSource());
         t.setExceptionTranslator(base.getExceptionTranslator());
-        t.setQueryTimeout(resolveTimeoutSeconds());
+        t.setQueryTimeout(resolveTimeoutSeconds(pathTemplate));
         if (maxRows > 0) t.setMaxRows(maxRows);
         if (fetchSize > 0) t.setFetchSize(fetchSize);
         return new NamedParameterJdbcTemplate(t);
     }
 
-    private int resolveTimeoutSeconds() {
+    /** Timeout largo para reportes (cabecera) y para las rutas de operaciones en lote. */
+    int resolveTimeoutSeconds(String pathTemplate) {
         if (RequestContextHolder.getRequestAttributes() instanceof ServletRequestAttributes sra
                 && "report".equalsIgnoreCase(sra.getRequest().getHeader(TIMEOUT_PROFILE_HEADER))) {
+            return reportTimeoutSeconds;
+        }
+        if (pathTemplate != null && longPathPattern != null
+                && longPathPattern.matcher(pathTemplate).matches()) {
             return reportTimeoutSeconds;
         }
         return timeoutSeconds;
