@@ -12,7 +12,10 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.MeterRegistry;
 import jakarta.servlet.http.HttpServletResponse;
+import jakarta.validation.Validator;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpHeaders;
@@ -32,6 +35,8 @@ import java.time.Instant;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.Semaphore;
+import java.util.concurrent.TimeUnit;
 
 /**
  * Servlet filter that handles {@code POST /login} by reading a JSON body,
@@ -60,7 +65,20 @@ public class JsonLoginFilter extends AbstractAuthenticationProcessingFilter {
     private final EffectiveRolesResolver effectiveRoles;
     private final SessionTrackingService sessionTracking;
     private final EstablishmentResolver establishmentResolver;
+    private final Validator validator;
+    private final Semaphore loginPermits;
+    private final long acquireTimeoutMs;
+    private final Counter throttled;
 
+    /** Tope del cuerpo de /login: un LoginRequest legitimo pesa unos cientos de bytes. */
+    static final int MAX_BODY_BYTES = 8 * 1024;
+
+    /**
+     * @param maxConcurrentLogins verificaciones de contrasena simultaneas
+     *        permitidas (el hash es costoso en CPU y memoria); 0 o menos =
+     *        2 x procesadores.
+     * @param acquireTimeoutMs espera maxima por un permiso antes de 429.
+     */
     public JsonLoginFilter(AuthenticationManager authenticationManager,
                            JwtTokenService jwt,
                            ObjectMapper mapper,
@@ -68,7 +86,11 @@ public class JsonLoginFilter extends AbstractAuthenticationProcessingFilter {
                            RefreshTokenStore refreshTokenStore,
                            EffectiveRolesResolver effectiveRoles,
                            SessionTrackingService sessionTracking,
-                           EstablishmentResolver establishmentResolver) {
+                           EstablishmentResolver establishmentResolver,
+                           Validator validator,
+                           MeterRegistry meters,
+                           int maxConcurrentLogins,
+                           long acquireTimeoutMs) {
         // Spring Security 7 migration: AntPathRequestMatcher (from
         // spring-security-web 6.x) was removed. The replacement is
         // PathPatternRequestMatcher, built from Spring's PathPatternParser
@@ -85,6 +107,15 @@ public class JsonLoginFilter extends AbstractAuthenticationProcessingFilter {
         this.effectiveRoles = effectiveRoles;
         this.sessionTracking = sessionTracking;
         this.establishmentResolver = establishmentResolver;
+        this.validator = validator;
+        int permits = maxConcurrentLogins > 0
+                ? maxConcurrentLogins
+                : 2 * Runtime.getRuntime().availableProcessors();
+        this.loginPermits = new Semaphore(permits);
+        this.acquireTimeoutMs = acquireTimeoutMs;
+        this.throttled = Counter.builder("auth.login.throttled")
+                .description("Logins rechazados con 429 por exceder el limite de verificaciones concurrentes")
+                .register(meters);
         // We are stateless; do not create or persist HttpSession-bound
         // security contexts across requests.
         setSecurityContextRepository(new org.springframework.security.web.context.NullSecurityContextRepository());
@@ -94,14 +125,39 @@ public class JsonLoginFilter extends AbstractAuthenticationProcessingFilter {
     public Authentication attemptAuthentication(HttpServletRequest request,
                                                 HttpServletResponse response)
             throws AuthenticationException {
+        LoginRequest body;
         try {
-            LoginRequest body = mapper.readValue(request.getInputStream(), LoginRequest.class);
-            UsernamePasswordAuthenticationToken token =
-                    UsernamePasswordAuthenticationToken.unauthenticated(body.email(), body.password());
-            token.setDetails(authenticationDetailsSource.buildDetails(request));
-            return getAuthenticationManager().authenticate(token);
+            byte[] raw = request.getInputStream().readNBytes(MAX_BODY_BYTES + 1);
+            if (raw.length > MAX_BODY_BYTES) {
+                throw new BadLoginRequestException("Cuerpo de la petición de login demasiado grande");
+            }
+            body = mapper.readValue(raw, LoginRequest.class);
         } catch (IOException e) {
             throw new BadLoginRequestException("Cuerpo de la petición de login mal formado: " + e.getMessage());
+        }
+        // Antes de hashear: un password de MB no debe llegar al encoder.
+        if (body == null || !validator.validate(body).isEmpty()) {
+            throw new BadLoginRequestException("Credenciales de login ausentes o con formato inválido");
+        }
+        UsernamePasswordAuthenticationToken token =
+                UsernamePasswordAuthenticationToken.unauthenticated(body.email(), body.password());
+        token.setDetails(authenticationDetailsSource.buildDetails(request));
+
+        boolean acquired;
+        try {
+            acquired = loginPermits.tryAcquire(acquireTimeoutMs, TimeUnit.MILLISECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            acquired = false;
+        }
+        if (!acquired) {
+            throttled.increment();
+            throw new LoginThrottledException();
+        }
+        try {
+            return getAuthenticationManager().authenticate(token);
+        } finally {
+            loginPermits.release();
         }
     }
 
@@ -305,12 +361,28 @@ public class JsonLoginFilter extends AbstractAuthenticationProcessingFilter {
                                               HttpServletResponse response,
                                               AuthenticationException failed)
             throws IOException, ServletException {
-        response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
+        if (failed instanceof LoginThrottledException) {
+            response.setStatus(429);
+            response.setHeader(HttpHeaders.RETRY_AFTER, "1");
+            response.setContentType(MediaType.APPLICATION_JSON_VALUE);
+            response.setCharacterEncoding("UTF-8");
+            mapper.writeValue(response.getOutputStream(), Map.of(
+                    "timestamp", Instant.now().toString(),
+                    "status", 429,
+                    "error", "too_many_requests",
+                    "message", "Demasiados intentos de inicio de sesión simultáneos, reintenta en un momento"
+            ));
+            return;
+        }
+        boolean badRequest = failed instanceof BadLoginRequestException;
+        response.setStatus(badRequest
+                ? HttpServletResponse.SC_BAD_REQUEST
+                : HttpServletResponse.SC_UNAUTHORIZED);
         response.setContentType(MediaType.APPLICATION_JSON_VALUE);
         response.setCharacterEncoding("UTF-8");
         mapper.writeValue(response.getOutputStream(), Map.of(
                 "timestamp", Instant.now().toString(),
-                "status", 401,
+                "status", badRequest ? 400 : 401,
                 // Código aparte para el estado de la cuenta: el
                 // admin-ui muestra el `message` tal cual, pero un
                 // código distinguible deja la puerta abierta a que
@@ -318,7 +390,8 @@ public class JsonLoginFilter extends AbstractAuthenticationProcessingFilter {
                 // distinta (ofrecer reenviar la activación, por
                 // ejemplo) sin tener que comparar textos.
                 // Ver AccountStatusChecker.
-                "error", failed instanceof AccountStatusException
+                "error", badRequest ? "bad_request"
+                        : failed instanceof AccountStatusException
                         ? "account_not_available"
                         : "authentication_failed",
                 "message", messageFor(failed)
@@ -358,12 +431,20 @@ public class JsonLoginFilter extends AbstractAuthenticationProcessingFilter {
     }
 
     /**
-     * Marker exception so the global entry point can return 400 instead
-     * of 401 when the JSON body is malformed (vs. bad credentials).
+     * Cuerpo malformado, demasiado grande o que no pasa la validacion de
+     * LoginRequest: {@link #unsuccessfulAuthentication} lo responde 400
+     * (no 401, que es de credenciales malas).
      */
     public static class BadLoginRequestException extends AuthenticationException {
         public BadLoginRequestException(String msg) {
             super(msg);
+        }
+    }
+
+    /** Sin permiso para verificar la contrasena dentro de la espera: se responde 429. */
+    public static class LoginThrottledException extends AuthenticationException {
+        public LoginThrottledException() {
+            super("Demasiados intentos de inicio de sesión simultáneos");
         }
     }
 }
