@@ -208,7 +208,7 @@ BEGIN
     SELECT * INTO v_alc
       FROM academico_test.fn_planeador_alcance_docente(p_pk_usuario_solicitante, p_fk_tfuncionario, p_fk_sede, p_fk_periodo);
 
-    IF v_alc.fk_tfuncionario IS NULL AND (v_alc.solo_propias OR v_alc.alcance_total) THEN
+    IF v_alc.fk_tfuncionario IS NULL AND v_alc.solo_propias THEN
         RETURN;
     END IF;
 
@@ -222,4 +222,4 @@ END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_actividad_calendario_docente(BIGINT, DATE, DATE, BIGINT, BIGINT, BIGINT, INT, VARCHAR[], BIGINT, BIGINT, BIGINT)
-    IS 'Grilla mensual del tablero del Planeador: mismas columnas y reglas que fn_actividad_calendario, acotada al docente que resuelve fn_planeador_alcance_docente. Docente puro: el suyo (ignora p_fk_tfuncionario; sin funcionario, 0 filas). Otros con p_fk_tfuncionario (?funcionario=): ese docente, 42501 si no dicta nada en su alcance. Otros sin él: todo su alcance (nivel 3: pares sede+jornada); alcance total sin docente elegido: 0 filas. p_grado_asignatura_pares (V528): acota a una pestaña de Rotulo de Ejecucion, mismo contrato que fn_actividad_listar_docente (V526/V527). Gate VER sobre PLANEADOR. V251/V528.';
+    IS 'Grilla mensual del tablero del Planeador: mismas columnas y reglas que fn_actividad_calendario, acotada al docente que resuelve fn_planeador_alcance_docente. Docente puro: el suyo (ignora p_fk_tfuncionario; sin funcionario, 0 filas). Otros con p_fk_tfuncionario (?funcionario=): ese docente, 42501 si no dicta nada en su alcance. Otros sin él: todo su alcance (nivel 3: pares sede+jornada; alcance total: todas las sedes, el rango de fechas lo acota). p_grado_asignatura_pares (V528): acota a una pestaña de Rotulo de Ejecucion, mismo contrato que fn_actividad_listar_docente (V526/V527). Gate VER sobre PLANEADOR. V251/V528.';
