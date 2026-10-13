@@ -9,6 +9,14 @@ spring:
     name: sso-admin
   main:
     banner-mode: off
+  # Hilos virtuales para Tomcat: el alta de un microservicio espera en
+  # EurekaReadinessProbe (Thread.sleep, hasta 45s) y otras rutas esperan
+  # HTTP a auth-center o ClickHouse; con hilos virtuales esa espera no
+  # ocupa un hilo de plataforma. El pool Hikari (10, connection-timeout 5s)
+  # sigue acotando el acceso a la base.
+  threads:
+    virtual:
+      enabled: ${SSO_ADMIN_VIRTUAL_THREADS:true}
 
   datasource:
     # The localhost default assumes the operator is running
