@@ -34,6 +34,25 @@ Instrucciones para trabajar en este repo. Prevalecen sobre el comportamiento por
 - Las convenciones por área viven en `.claude/rules/*.md` y se cargan solas al
   tocar ficheros de su `paths:`. Una regla nueva **siempre** lleva `paths:`.
 
+## Subagentes
+
+- **Buscar** (barrer muchos ficheros cuando solo importa la conclusión):
+  `Explore`. Para "quién define X" o "qué migración toca", antes `deps.py` o
+  `docs/MAPA.md`: suelen responder sin subagente.
+- **Escribir migraciones:** `flyway-migration-author` (ya precarga
+  `next-migration-number` y `definiendo-permisos`). **Un solo escritor por
+  conjunto de migraciones, y los `V<n>` los fija la sesión principal antes de
+  delegar:** dos escritores en paralelo eligen el mismo número o redefinen la
+  misma función (PIGSE V256-V259, colisión V523).
+- **Auditar:** `migration-reviewer` (y `sso-admin-common-reviewer` para Java)
+  en contexto limpio, después de escribir y nunca el mismo agente que escribió.
+  Solo leen; los hallazgos los aplica la sesión principal.
+- **En paralelo, solo lo que no escribe** (búsquedas, revisiones). Si dos
+  escritores tienen que ir en paralelo, cada uno con `isolation: worktree` y su
+  propio rango de `V<n>`.
+- **Lo que reporta un subagente no es evidencia:** verificar lint, orden y
+  tests en la sesión principal antes de darlo por bueno.
+
 ## Invariantes del dominio
 
 Reglas que se violan en silencio: el SQL aplica sin error y el fallo aparece en
@@ -89,20 +108,20 @@ Antes de buscar con grep:
   (no solo la rama actual) para determinar el siguiente `V<n>` realmente libre.
 - **Reutilización primero:** priorizar reutilizar código de migraciones ya definidas.
 - **Editar, no duplicar:** si el cambio solicitado corresponde a una migración existente concreta,
-  **editar esa migración** en lugar de crear una nueva. Ver la skill `flyway-migrations`.
+  **editar esa migración** en lugar de crear una nueva. Ver la skill `next-migration-number`.
 - **Presupuesto de comentarios:** cabecera de ≤ 12 líneas (qué hace / por qué aquí /
   depende de) y ≤ 20% de líneas de comentario. La narración de la investigación
   (alternativas descartadas, qué pasó en el servidor) va al mensaje de commit o a la
   descripción del PR: dentro del `.sql` queda mintiendo en cuanto se edite.
 - **Informe de análisis:** `/migration-analysis` regenera `docs/auditoria/migraciones-analisis.html`
   (local, gitignored) con obsoletas, firmas cambiadas, llamadores desalineados y el siguiente
-  `V<n>` libre. Correrlo tras crear o editar migraciones; el agente
-  `migration-analysis-reporter` lo ejecuta y resume el resultado.
+  `V<n>` libre. Correrlo tras crear o editar migraciones; corre en un subagente
+  y devuelve solo el resumen.
 
 ## Servicios Java
 
 - Al tocar cualquier servicio Java, apoyarse en la **documentación más actualizada**
-  (skills `java-spring-boot` / `java-springboot` / `spring-cloud-basics`, y búsqueda web si hace falta).
+  (skills `java-spring-boot` / `spring-cloud-basics`, y búsqueda web si hace falta).
 
 ## Variables de entorno y docker-compose
 
@@ -117,8 +136,7 @@ Antes de buscar con grep:
   campo, y cualquier otro apartado que ayude a clarificar los requisitos.
 - Al finalizar, dejar una **colección Postman** que documente el uso del endpoint:
   skill `documentando-con-postman` para la convención de este repo (login que
-  encadena el token, corrida que queda en cero), `postman-collection-generator`
-  para generarla desde rutas.
+  encadena el token, corrida que queda en cero).
 
 ## Cambios o análisis del servidor
 

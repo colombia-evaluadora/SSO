@@ -31,7 +31,7 @@ Herramientas de esta skill (todas locales, nunca contra un servidor):
 Y las del repo: `scripts/migration-analysis/analisis/construir.py` (modelo),
 `.claude/skills/next-migration-number/deps.py` (+ `precision.py`),
 `scripts/migration-reapply-set.py`, `scripts/migration-analysis/comandos/orden.py`,
-`scripts/migration-analysis/comandos/lint.py`, `scripts/migration-analysis/comandos/mapa.py`, `scan.sh`.
+`scripts/migration-analysis/comandos/lint.py`, `scripts/migration-analysis/comandos/mapa.py`, `scripts/migration-analysis/comandos/hueco.py`.
 
 ## 0. Rama
 
@@ -75,7 +75,7 @@ Usos (`deps.py <funcion>`): `migracion` y `sql-body` atan el orden; `plpgsql`
   la reescribe hace `CREATE OR REPLACE` sin `DROP`, una base limpia falla ->
   `drop_si_retorno_viejo` con una columna que solo tenga la version nueva.
 - **COMMENT**: el `COMMENT ON FUNCTION` vivo de una funcion quitada va a
-  `mover_comment` (migracion nueva, numero con `scan.sh`). Los dinamicos por OID
+  `mover_comment` (migracion nueva, numero con `migration-analysis hueco`). Los dinamicos por OID
   (V111) pisan los anteriores: esos no se mueven. `COMMENT ON TRIGGER/INDEX`
   sigue a su objeto.
 - **Binds y datos**: `INSERT`/`UPDATE` en `public.query`, `role_*`, `route`,

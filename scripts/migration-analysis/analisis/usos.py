@@ -7,8 +7,10 @@ llamadas a funciones que ya no existen.
 
 from __future__ import annotations
 
+import os
 import re
 from collections import defaultdict
+from pathlib import Path
 
 from base.sqlscan import count_call_args, match_paren, split_statements, split_top_level, strip_comments
 from base.nucleo import Migration, REPO, Write, vnum
@@ -206,11 +208,23 @@ def element_uses(callsites: list[dict], refs: list[dict]) -> list[dict]:
     return out
 
 
+# Directorios que nunca tienen Java fuente propio. `rglob` los recorria enteros
+# (node_modules, .git, worktrees): ~3 s de los ~36 del modelo.
+_SIN_JAVA = {"target", "node_modules", ".git", "build", "dist", ".idea", ".vscode",
+             "__pycache__", ".claude", ".agents", "worktrees", "docs"}
+
+
+def _ficheros_java() -> list[Path]:
+    out = []
+    for raiz, dirs, ficheros in os.walk(REPO):
+        dirs[:] = sorted(d for d in dirs if d not in _SIN_JAVA)
+        out.extend(Path(raiz) / f for f in sorted(ficheros) if f.endswith(".java"))
+    return out
+
+
 def collect_java_callsites() -> list[dict]:
     sites = []
-    for jf in REPO.rglob("*.java"):
-        if "/target/" in jf.as_posix() or "\\target\\" in str(jf):
-            continue
+    for jf in _ficheros_java():
         try:
             text = jf.read_text(encoding="utf-8", errors="replace")
         except OSError:

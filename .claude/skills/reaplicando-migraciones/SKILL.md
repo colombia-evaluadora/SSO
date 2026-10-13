@@ -44,8 +44,8 @@ python .claude/skills/next-migration-number/deps.py --version 29
 python .claude/skills/next-migration-number/deps.py fn_x
 ```
 
-`deps.py` imprime **DEFINIDO HOY POR V\<n\>** y el historial completo con las
-versiones "muerta por". Toda versión posterior a la editada que aparezca
+`deps.py <objeto> --historial` imprime **EDITAR V\<n\>** (la dueña de hoy) y el
+historial completo con las versiones "muerta por". Toda versión posterior a la editada que aparezca
 definiendo uno de esos objetos entra en el set.
 
 Regla de oro: **si `deps.py` dice que el objeto lo define hoy una migración

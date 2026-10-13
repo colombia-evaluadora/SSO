@@ -27,8 +27,7 @@ Solo si el diff toca `postgres/migrations/`:
 
 ```bash
 python scripts/migration-analysis lint --all
-python scripts/migration-analysis informe
-bash .claude/skills/next-migration-number/scan.sh
+python scripts/migration-analysis hueco --panorama          # el V<n> sigue libre y sin colisiones
 ```
 
 - El lint debe salir sin **errores** nuevos.
@@ -66,7 +65,7 @@ agente `sso-admin-common-reviewer`.
 ## 5. Postman
 
 Si añadiste o cambiaste un endpoint, la colección en `docs/<dominio>/` es
-obligatoria (skill `postman-collection-generator`). Un endpoint sin colección
+obligatoria (skill `documentando-con-postman`). Un endpoint sin colección
 no está terminado.
 
 ## 6. Plan de commits
