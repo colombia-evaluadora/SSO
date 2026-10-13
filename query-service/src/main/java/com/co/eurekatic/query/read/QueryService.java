@@ -6,7 +6,7 @@ import com.co.eurekatic.common.query.ParamConstraintValidator;
 import com.co.eurekatic.common.query.ParamNamespace;
 import com.co.eurekatic.common.query.ParamTypes;
 import com.co.eurekatic.common.query.SqlRewriter;
-import com.co.eurekatic.query.catalog.CatalogClient;
+import com.co.eurekatic.query.catalog.CatalogDefinitionCache;
 import com.co.eurekatic.query.catalog.QueryDefinition;
 import com.co.eurekatic.query.config.JdbcTemplateRegistry;
 import com.co.eurekatic.query.exception.ParamConstraintViolationException;
@@ -85,7 +85,7 @@ public class QueryService {
 
     private static final Logger log = LoggerFactory.getLogger(QueryService.class);
 
-    private final CatalogClient catalog;
+    private final CatalogDefinitionCache catalog;
     private final JdbcTemplateRegistry registry;
     private final QueryMetrics metrics;
     private final QueryResilience resilience;
@@ -107,7 +107,7 @@ public class QueryService {
     @Value("${query.execution.fetch-size:500}")
     private int fetchSize = 500;
 
-    public QueryService(CatalogClient catalog, JdbcTemplateRegistry registry,
+    public QueryService(CatalogDefinitionCache catalog, JdbcTemplateRegistry registry,
                          QueryMetrics metrics, QueryResilience resilience,
                          ObjectMapper objectMapper,
                          CatalogResultCacheService resultCache) {
@@ -181,7 +181,7 @@ public class QueryService {
         // Anonymous callers forward an empty bearer: the catalog has
         // no roles to intersect, so only publicEnd=true rows survive.
         String bearer = auth == null ? "" : bearerToken(auth);
-        QueryDefinition def = catalog.fetchQuery(bearer, req.uuid());
+        QueryDefinition def = catalog.query(auth, bearer, req.uuid());
 
         String mode = def.executionMode() == null
                 ? "SELECT"

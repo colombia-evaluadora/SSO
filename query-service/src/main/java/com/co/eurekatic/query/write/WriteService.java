@@ -2,7 +2,7 @@ package com.co.eurekatic.query.write;
 
 import com.co.eurekatic.common.query.SqlIdentifiers;
 import com.co.eurekatic.common.security.AuthPrincipal;
-import com.co.eurekatic.query.catalog.CatalogClient;
+import com.co.eurekatic.query.catalog.CatalogDefinitionCache;
 import com.co.eurekatic.query.catalog.WriteDefinition;
 import com.co.eurekatic.query.config.JdbcTemplateRegistry;
 import com.co.eurekatic.query.exception.PostgresErrorMapper;
@@ -66,13 +66,13 @@ public class WriteService {
 
     private static final Logger log = LoggerFactory.getLogger(WriteService.class);
 
-    private final CatalogClient catalog;
+    private final CatalogDefinitionCache catalog;
     private final JdbcTemplateRegistry registry;
     private final CatalogResultCacheService resultCache;
     private final QueryResilience resilience;
     private final QueryMetrics metrics;
 
-    public WriteService(CatalogClient catalog, JdbcTemplateRegistry registry,
+    public WriteService(CatalogDefinitionCache catalog, JdbcTemplateRegistry registry,
                         CatalogResultCacheService resultCache,
                         QueryResilience resilience, QueryMetrics metrics) {
         this.catalog = catalog;
@@ -107,7 +107,7 @@ public class WriteService {
 
     private int doExecute(WriteRequest req) {
         Authentication auth = currentAuthentication();
-        WriteDefinition def = catalog.fetchWrite(bearerToken(auth), req.uuid());
+        WriteDefinition def = catalog.write(auth, bearerToken(auth), req.uuid());
 
         // 1. Shape check — every declared column must be present
         //    (case-insensitive: the catalog may declare it in

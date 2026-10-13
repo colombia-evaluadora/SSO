@@ -126,6 +126,12 @@ query:
     internal-token: ${QUERY_CATALOG_INTERNAL_TOKEN:}
     read-timeout: 3s
     connect-timeout: 2s
+    # Cache local de /getQuery y /getWrite por (email, uuid). Un cambio de
+    # roles tarda hasta el TTL en reflejarse; el catálogo la vacía entero.
+    cache:
+      enabled: ${QUERY_CATALOG_CACHE_ENABLED:true}
+      ttl-seconds: ${QUERY_CATALOG_CACHE_TTL_SECONDS:60}
+      max-size: ${QUERY_CATALOG_CACHE_MAX:50000}
   # V27/V30 — controls the path-template in-memory registry
   # refresh cadence. Default 60s; the registry's first
   # load happens at boot via @Scheduled initialDelay=0 so
