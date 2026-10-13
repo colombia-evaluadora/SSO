@@ -149,7 +149,7 @@ query:
   # @TestPropertySource — see ResilienceIntegrationTest.
   resilience:
     bulkhead:
-      max-concurrent: ${QUERY_BULKHEAD_MAX_CONCURRENT:20}
+      max-concurrent: ${QUERY_BULKHEAD_MAX_CONCURRENT:8}
     rate-limit:
       rps: ${QUERY_RATE_LIMIT_RPS:100}
       window: ${QUERY_RATE_LIMIT_WINDOW:1s}

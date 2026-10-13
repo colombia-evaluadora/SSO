@@ -4,6 +4,7 @@ import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Component;
 import org.springframework.web.server.ResponseStatusException;
 
+import java.util.Locale;
 import java.util.Map;
 
 import static org.springframework.http.HttpStatus.BAD_GATEWAY;
@@ -30,12 +31,23 @@ import static org.springframework.http.HttpStatus.NOT_FOUND;
 @Component
 public class JdbcTemplateRegistry {
 
+    private static final String DEFAULT_DIALECT = "postgres";
+
     private final Map<String, NamedParameterJdbcTemplate> templates;
 
     public JdbcTemplateRegistry(
             @org.springframework.beans.factory.annotation.Qualifier("queryJdbcTemplates")
                     Map<String, NamedParameterJdbcTemplate> templates) {
         this.templates = templates;
+    }
+
+    /**
+     * Normalized dialect key for a catalog {@code TYPE} (lower-case,
+     * {@code null}/blank = the default dialect). Shared with the bulkhead
+     * so reads and writes against the same dialect use the same key.
+     */
+    public static String dialectKey(String type) {
+        return (type == null || type.isBlank()) ? DEFAULT_DIALECT : type.toLowerCase(Locale.ROOT);
     }
 
     /**
@@ -50,7 +62,7 @@ public class JdbcTemplateRegistry {
      *             before the TYPE column was mandatory.
      */
     public NamedParameterJdbcTemplate resolve(String type) {
-        String key = (type == null || type.isBlank()) ? "postgres" : type.toLowerCase();
+        String key = dialectKey(type);
         NamedParameterJdbcTemplate t = templates.get(key);
         if (t == null) {
             throw new ResponseStatusException(BAD_GATEWAY,

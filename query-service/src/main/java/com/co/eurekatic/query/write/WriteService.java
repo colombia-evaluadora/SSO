@@ -166,7 +166,7 @@ public class WriteService {
         // TYPE column), so they share that dialect's bulkhead with the reads
         // that target it — which is the point: they compete for the same
         // Hikari pool.
-        var bulkhead = resilience.bulkheadFor("default");
+        var bulkhead = resilience.bulkheadFor(JdbcTemplateRegistry.dialectKey(null));
         if (!bulkhead.tryAcquirePermission()) {
             throw BulkheadFullException.createBulkheadFullException(bulkhead);
         }

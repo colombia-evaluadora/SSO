@@ -295,8 +295,7 @@ public class QueryService {
 
         // Per-dialect bulkhead; fail fast (no wait) is the right call
         // for a sync MVC controller — execute() maps it to 503.
-        var bulkhead = resilience.bulkheadFor(def.type() == null
-                ? "default" : def.type());
+        var bulkhead = resilience.bulkheadFor(JdbcTemplateRegistry.dialectKey(def.type()));
         if (!bulkhead.tryAcquirePermission()) {
             throw BulkheadFullException.createBulkheadFullException(bulkhead);
         }

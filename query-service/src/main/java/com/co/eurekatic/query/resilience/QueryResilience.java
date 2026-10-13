@@ -21,7 +21,9 @@ import org.springframework.stereotype.Component;
 
 import java.time.Duration;
 import java.util.LinkedHashMap;
+import java.util.Locale;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Programmatic Resilience4j wiring for the query path.
@@ -33,7 +35,8 @@ import java.util.Map;
  *       cannot starve the HikariCP pool for every other
  *       dialect. Configured via
  *       {@code query.resilience.bulkhead.*} properties;
- *       default 20 concurrent / 50 queued.</li>
+ *       default 8 concurrent (below the Hikari pool) and fail-fast:
+ *       there is no queue, an over-cap call is rejected at once.</li>
  *   <li><b>RateLimiter</b> — caps RPS per principal
  *       (email). A runaway client cannot overwhelm the
  *       service; overflow returns 429 with a Retry-After.
@@ -69,9 +72,9 @@ public class QueryResilience {
     private final int rateLimitRps;
     private final Duration rateLimitWindow;
 
-    /** One Bulkhead per dialect (postgres / oracle / sqlserver).
-     *  Built lazily on first access. */
-    private final Map<String, Bulkhead> bulkheads = new LinkedHashMap<>();
+    /** One Bulkhead per dialect (postgres / oracle / sqlserver), keyed
+     *  lower-case like JdbcTemplateRegistry. Built lazily on first access. */
+    private final Map<String, Bulkhead> bulkheads = new ConcurrentHashMap<>();
 
     /** One RateLimiter per principal (email). Built lazily; old
      *  entries are pruned when they age out (see Refresh). */
@@ -79,7 +82,7 @@ public class QueryResilience {
 
     public QueryResilience(
             MeterRegistry meters,
-            @Value("${query.resilience.bulkhead.max-concurrent:20}") int bulkheadMaxConcurrent,
+            @Value("${query.resilience.bulkhead.max-concurrent:8}") int bulkheadMaxConcurrent,
             @Value("${query.resilience.rate-limit.rps:100}") int rateLimitRps,
             @Value("${query.resilience.rate-limit.window:1s}") Duration rateLimitWindow) {
         this.meters = meters;
@@ -102,8 +105,8 @@ public class QueryResilience {
      * on each dialect lands) so we don't pre-register
      * unused meters.
      */
-    public synchronized Bulkhead bulkheadFor(String dialect) {
-        return bulkheads.computeIfAbsent(dialect, this::buildBulkhead);
+    public Bulkhead bulkheadFor(String dialect) {
+        return bulkheads.computeIfAbsent(dialect.toLowerCase(Locale.ROOT), this::buildBulkhead);
     }
 
     private Bulkhead buildBulkhead(String dialect) {
