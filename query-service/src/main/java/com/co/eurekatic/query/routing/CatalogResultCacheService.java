@@ -7,8 +7,6 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.data.redis.core.Cursor;
-import org.springframework.data.redis.core.ScanOptions;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
@@ -16,7 +14,6 @@ import org.springframework.stereotype.Service;
 
 import java.security.MessageDigest;
 import java.time.Duration;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -104,17 +101,18 @@ public class CatalogResultCacheService {
     private static final String UNKNOWN_RESOURCE = "_unknown";
 
     /**
-     * Number of keys fetched per {@code SCAN} round-trip when
-     * walking the keyspace for {@link #invalidateAll()} /
-     * {@link #invalidateForResource}. {@code SCAN} (not {@code KEYS})
-     * is deliberate: {@code KEYS} blocks the whole Redis instance for
-     * the duration of the call, which would stall {@code sso:refresh:*}
-     * and {@code sso:session:*} traffic from auth-center sharing the
-     * same Redis. {@code SCAN} yields control back between batches —
-     * the standard non-blocking way to walk a pattern in production
-     * Redis.
+     * Tag of the global generation counter ({@code query:catalog-gen:<scope>:__all__}).
+     * Invalidation is by generation, not by deleting keys: every entry key
+     * embeds the current resource generation and the global one, so an
+     * {@code INCR} orphans every older entry in O(1) and Redis expires them
+     * by their own TTL. (The previous SCAN+DEL walked the whole keyspace
+     * synchronously on every write.)
      */
-    private static final int SCAN_BATCH_SIZE = 200;
+    private static final String ALL_TAG = "__all__";
+
+    /** Serializes the query params into the key: sorted map to JSON, so
+     *  values containing the separators cannot collide. */
+    private static final ObjectMapper KEY_MAPPER = new ObjectMapper();
 
     private final StringRedisTemplate redis;
     private final ObjectMapper objectMapper;
@@ -130,6 +128,7 @@ public class CatalogResultCacheService {
      */
     private final String scope;
     private final String keyPrefix;
+    private final String genPrefix;
 
     public CatalogResultCacheService(StringRedisTemplate redis, ObjectMapper objectMapper,
                                      QueryCacheProperties props,
@@ -139,6 +138,7 @@ public class CatalogResultCacheService {
         this.props = props;
         this.scope = (instanceName == null || instanceName.isBlank()) ? "global" : instanceName;
         this.keyPrefix = "query:catalog-get:" + scope + ":";
+        this.genPrefix = "query:catalog-gen:" + scope + ":";
     }
 
     /**
@@ -192,7 +192,13 @@ public class CatalogResultCacheService {
                                 Authentication auth) {
         SortedMap<String, String> sortedParams = new TreeMap<>(queryParams == null ? Map.of() : queryParams);
         String caller = callerIdentity(auth);
-        String raw = uuid + '|' + fullPath + '|' + sortedParams + '|' + caller;
+        String paramsJson;
+        try {
+            paramsJson = KEY_MAPPER.writeValueAsString(sortedParams);
+        } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
+            throw new IllegalStateException(e);
+        }
+        String raw = uuid + '|' + fullPath + '|' + paramsJson + '|' + caller;
         return resourceTag(fullPath) + ':' + sha256Hex(raw);
     }
 
@@ -237,12 +243,31 @@ public class CatalogResultCacheService {
         }
     }
 
+
+    /**
+     * The entry's real Redis key: the generations are part of it, so
+     * bumping either counter orphans the entry without deleting it.
+     * {@code cacheKey} is {@code <resourceTag>:<hash>} as built by
+     * {@link #keyFor}; anything without a tag is filed under
+     * {@link #UNKNOWN_RESOURCE}. One {@code MGET} reads both counters;
+     * a missing counter is generation 0.
+     */
+    private String entryKey(String cacheKey) {
+        int colon = cacheKey.indexOf(':');
+        String tag = colon < 0 ? UNKNOWN_RESOURCE : cacheKey.substring(0, colon);
+        String rest = colon < 0 ? cacheKey : cacheKey.substring(colon + 1);
+        List<String> gens = redis.opsForValue().multiGet(List.of(genPrefix + tag, genPrefix + ALL_TAG));
+        String resourceGen = gens == null || gens.get(0) == null ? "0" : gens.get(0);
+        String globalGen = gens == null || gens.get(1) == null ? "0" : gens.get(1);
+        return keyPrefix + tag + ":g" + resourceGen + "." + globalGen + ":" + rest;
+    }
+
     public Optional<Map<String, Object>> get(String cacheKey) {
         if (!props.isCatalogEnabled()) {
             return Optional.empty();
         }
         try {
-            String raw = redis.opsForValue().get(keyPrefix + cacheKey);
+            String raw = redis.opsForValue().get(entryKey(cacheKey));
             if (raw == null) {
                 return Optional.empty();
             }
@@ -261,7 +286,7 @@ public class CatalogResultCacheService {
         }
         try {
             String json = objectMapper.writeValueAsString(result);
-            redis.opsForValue().set(keyPrefix + cacheKey, json, Duration.ofSeconds(ttlSeconds));
+            redis.opsForValue().set(entryKey(cacheKey), json, Duration.ofSeconds(ttlSeconds));
         } catch (Exception e) {
             // Fail open — see class javadoc. The caller already has
             // a correct response to return; a cache-write failure
@@ -276,75 +301,50 @@ public class CatalogResultCacheService {
      * carries a {@code pathTemplate} (path-dispatch {@code POST}/
      * {@code PUT}/{@code PATCH}, or a legacy {@code /query} row that
      * happens to have one). Only cache entries under the SAME
-     * resource ({@link #resourceTag}) are removed — a write on
+     * resource ({@link #resourceTag}) are orphaned — a write on
      * {@code /menus/**} never touches {@code /roles/**}'s cached
      * GETs. Falls back to {@link #invalidateAll()} when
      * {@code writePathTemplate} is {@code null}/blank: with no path
      * to derive a tag from, "invalidate everything in this instance"
      * is the only safe option.
      *
-     * @return number of cache entries removed.
+     * <p>It is a single {@code INCR} of the resource's generation; the
+     * orphaned entries expire by their own TTL.
      */
-    public long invalidateForResource(String writePathTemplate) {
+    public void invalidateForResource(String writePathTemplate) {
         if (writePathTemplate == null || writePathTemplate.isBlank()) {
-            return invalidateAll();
+            invalidateAll();
+            return;
         }
-        String tag = resourceTag(writePathTemplate);
-        return deleteMatching(keyPrefix + tag + ":*", tag);
+        bump(resourceTag(writePathTemplate));
     }
 
     /**
-     * The blunt, always-correct fallback: drop every cached GET this
-     * instance holds, regardless of resource. See class javadoc for
-     * when this is used instead of {@link #invalidateForResource}
-     * (writes with no path template — the legacy {@code /write}
-     * endpoint's {@code WriteDefinition} has no path-template
-     * concept at all, so {@code WriteService} always calls this one
-     * directly).
-     *
-     * @return number of cache entries removed.
+     * The blunt, always-correct fallback: orphan every cached GET this
+     * instance holds, regardless of resource, by bumping the global
+     * generation. See class javadoc for when this is used instead of
+     * {@link #invalidateForResource} (writes with no path template — the
+     * legacy {@code /write} endpoint's {@code WriteDefinition} has no
+     * path-template concept at all, so {@code WriteService} always calls
+     * this one directly).
      */
-    public long invalidateAll() {
-        return deleteMatching(keyPrefix + "*", "*");
+    public void invalidateAll() {
+        bump(ALL_TAG);
     }
 
-    /**
-     * Shared {@code SCAN}-then-{@code DEL} walk behind both
-     * invalidation entry points — the only difference between them
-     * is the glob pattern.
-     */
-    private long deleteMatching(String pattern, String tagForLogging) {
+    private void bump(String tag) {
         if (!props.isCatalogEnabled()) {
-            return 0;
+            return;
         }
         try {
-            List<String> toDelete = new ArrayList<>();
-            ScanOptions options = ScanOptions.scanOptions()
-                    .match(pattern)
-                    .count(SCAN_BATCH_SIZE)
-                    .build();
-            try (Cursor<String> cursor = redis.scan(options)) {
-                while (cursor.hasNext()) {
-                    toDelete.add(cursor.next());
-                }
-            }
-            if (toDelete.isEmpty()) {
-                return 0;
-            }
-            Long removed = redis.delete(toDelete);
-            long count = removed == null ? 0 : removed;
-            log.debug("catalog-get cache invalidated: {} entries removed (scope={}, resource={})",
-                    count, scope, tagForLogging);
-            return count;
+            redis.opsForValue().increment(genPrefix + tag);
         } catch (Exception e) {
             // Fail open — see class javadoc. A write already
-            // committed to Postgres; failing to clear Redis just
-            // means the OLD ttl-bounded staleness window applies
-            // again instead of "always current" — degraded, not
-            // broken.
+            // committed to Postgres; failing to bump just means the
+            // OLD ttl-bounded staleness window applies again instead
+            // of "always current" — degraded, not broken.
             log.warn("catalog-get cache invalidation failed (scope={}, resource={}, entries may be stale until TTL): {}",
-                    scope, tagForLogging, e.getMessage());
-            return 0;
+                    scope, tag, e.getMessage());
         }
     }
 }
