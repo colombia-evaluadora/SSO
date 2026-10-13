@@ -9,6 +9,13 @@ import org.springframework.web.context.request.RequestContextHolder;
 import org.springframework.web.context.request.ServletRequestAttributes;
 
 import java.time.Duration;
+import java.util.OptionalInt;
+
+import com.co.eurekatic.query.config.JdbcTemplateRegistry;
+import org.springframework.beans.factory.ObjectProvider;
+
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -52,5 +59,19 @@ class QueryResilienceTest {
         resilience.enforceRateLimit();
         assertThrows(RequestNotPermitted.class, resilience::enforceRateLimit);
         assertEquals(1.0, meters.get("query.resilience.rate_limit.rejected").counter().count());
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void bulkheadSeAcotaAlPoolDelDialecto() {
+        JdbcTemplateRegistry registry = mock(JdbcTemplateRegistry.class);
+        when(registry.maxPoolSize("postgres")).thenReturn(OptionalInt.of(5));
+        when(registry.maxPoolSize("oracle")).thenReturn(OptionalInt.of(20));
+        ObjectProvider<JdbcTemplateRegistry> provider = mock(ObjectProvider.class);
+        when(provider.getIfAvailable()).thenReturn(registry);
+        resilience.setRegistry(provider);
+
+        assertEquals(5, resilience.bulkheadFor("postgres").getBulkheadConfig().getMaxConcurrentCalls());
+        assertEquals(8, resilience.bulkheadFor("oracle").getBulkheadConfig().getMaxConcurrentCalls());
     }
 }

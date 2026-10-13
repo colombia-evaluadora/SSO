@@ -1,11 +1,13 @@
 package com.co.eurekatic.query.config;
 
+import com.zaxxer.hikari.HikariDataSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Component;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.util.Locale;
 import java.util.Map;
+import java.util.OptionalInt;
 
 import static org.springframework.http.HttpStatus.BAD_GATEWAY;
 import static org.springframework.http.HttpStatus.NOT_FOUND;
@@ -61,6 +63,20 @@ public class JdbcTemplateRegistry {
      *             compatibility with catalog rows created
      *             before the TYPE column was mandatory.
      */
+    /**
+     * Tamaño máximo del pool Hikari del dialecto, o vacío si no está
+     * configurado o no es Hikari. El bulkhead se acota a este valor: más
+     * permisos que conexiones solo convierten el 503 inmediato en una
+     * espera por conexión.
+     */
+    public OptionalInt maxPoolSize(String type) {
+        NamedParameterJdbcTemplate t = templates.get(dialectKey(type));
+        if (t != null && t.getJdbcTemplate().getDataSource() instanceof HikariDataSource h) {
+            return OptionalInt.of(h.getMaximumPoolSize());
+        }
+        return OptionalInt.empty();
+    }
+
     public NamedParameterJdbcTemplate resolve(String type) {
         String key = dialectKey(type);
         NamedParameterJdbcTemplate t = templates.get(key);

@@ -8,6 +8,7 @@ import io.github.resilience4j.ratelimiter.RateLimiterConfig;
 import io.github.resilience4j.ratelimiter.RateLimiterRegistry;
 import io.github.resilience4j.ratelimiter.RequestNotPermitted;
 import com.co.eurekatic.common.security.AuthPrincipal;
+import com.co.eurekatic.query.config.JdbcTemplateRegistry;
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 import io.micrometer.core.instrument.Counter;
@@ -16,6 +17,8 @@ import io.micrometer.core.instrument.Tags;
 import jakarta.annotation.PostConstruct;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
@@ -26,6 +29,7 @@ import org.springframework.web.context.request.ServletRequestAttributes;
 import java.time.Duration;
 import java.util.Locale;
 import java.util.Map;
+import java.util.OptionalInt;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
@@ -122,6 +126,29 @@ public class QueryResilience {
         return bulkheads.computeIfAbsent(dialect.toLowerCase(Locale.ROOT), this::buildBulkhead);
     }
 
+    /** Pool por dialecto; opcional para poder construir la clase en tests sin Spring. */
+    private ObjectProvider<JdbcTemplateRegistry> registry;
+
+    @Autowired(required = false)
+    void setRegistry(ObjectProvider<JdbcTemplateRegistry> registry) {
+        this.registry = registry;
+    }
+
+    /**
+     * Permisos efectivos del dialecto: el configurado, pero nunca más que
+     * las conexiones de su pool (las instancias aprovisionadas pueden
+     * nacer con un pool menor que el default del bulkhead).
+     */
+    int effectiveMaxConcurrent(String dialect) {
+        JdbcTemplateRegistry r = registry == null ? null : registry.getIfAvailable();
+        if (r == null) {
+            return bulkheadMaxConcurrent;
+        }
+        OptionalInt pool = r.maxPoolSize(dialect);
+        return pool.isPresent() ? Math.max(1, Math.min(bulkheadMaxConcurrent, pool.getAsInt()))
+                : bulkheadMaxConcurrent;
+    }
+
     private Bulkhead buildBulkhead(String dialect) {
         // SEMAPHORE bulkhead — the right choice for a synchronous MVC
         // controller, since there is no thread handoff.
@@ -132,8 +159,13 @@ public class QueryResilience {
         // service — a caller that has to queue for a JDBC permit is better
         // told 503 + Retry-After immediately than left holding a Tomcat
         // thread hoping one frees up.
+        int maxConcurrent = effectiveMaxConcurrent(dialect);
+        if (maxConcurrent != bulkheadMaxConcurrent) {
+            log.info("QueryResilience: bulkhead {} acotado a {} por el pool del dialecto",
+                    dialect, maxConcurrent);
+        }
         BulkheadConfig config = BulkheadConfig.custom()
-                .maxConcurrentCalls(bulkheadMaxConcurrent)
+                .maxConcurrentCalls(maxConcurrent)
                 .build();
         Bulkhead bh = BulkheadRegistry.of(config).bulkhead("query-" + dialect, config);
         registerBulkheadMeters(bh, dialect);
