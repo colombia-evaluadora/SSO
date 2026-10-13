@@ -1,13 +1,10 @@
--- V556.1 -- Utilidades del agente: catalogo de herramientas y menus del usuario
+-- V557.1 -- Utilidades del agente: catalogo de herramientas y menus del usuario
 -- Que hace: ai.fn_herramienta_catalogo_interno devuelve cada herramienta activa con su
 --   ruta de eval-col (uuid y microservicio), restricciones y roles. ai.fn_menus_usuario_interno
 --   devuelve los permisos por menu del usuario reutilizando academico_test.fn_usuario_permisos_menu.
 -- Por que aqui: el servicio construye sus tools desde la allowlist ai.herramienta; los menus
 --   se filtran en el agente solo como UX. Sin gate: la autoridad es el gate de cada ruta.
--- Depende de: V556 (ai.herramienta), V303 (fn_usuario_permisos_menu), V299 (fn_get_academico_usuario_id).
-
--- La firma cambia (columna id nueva): CREATE OR REPLACE no puede cambiar el RETURNS TABLE.
-DROP FUNCTION IF EXISTS ai.fn_herramienta_catalogo_interno();
+-- Depende de: V557 (ai.herramienta), V303 (fn_usuario_permisos_menu), V299 (fn_get_academico_usuario_id).
 
 CREATE OR REPLACE FUNCTION ai.fn_herramienta_catalogo_interno()
 RETURNS TABLE (
@@ -17,6 +14,7 @@ RETURNS TABLE (
     descripcion_modelo    TEXT,
     parametros            JSONB,
     requiere_confirmacion BOOLEAN,
+    aviso_confirmacion    TEXT,
     ejemplos              JSONB,
     version               INTEGER,
     menu_codigo           VARCHAR,
@@ -35,6 +33,7 @@ AS $$
            h.descripcion_modelo,
            h.parametros,
            h.requiere_confirmacion,
+           h.aviso_confirmacion,
            h.ejemplos,
            h.version,
            h.menu_codigo::VARCHAR,

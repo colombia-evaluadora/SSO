@@ -1,4 +1,4 @@
--- V556.3 -- Endpoints del agente en el catalogo: /ai/agente/** (ai-control-service)
+-- V557.3 -- Endpoints del agente en el catalogo: /ai/agente/** (ai-control-service)
 -- Que hace: registra 8 endpoints en public.endpoint, su microservicio y sus roles.
 --   Roles: todos los CEVAL-<TROL.CODIGO> con al menos un menu activo, por consulta.
 -- Por que aqui: patron de V487. No hay DELETE de conversaciones: se archivan.

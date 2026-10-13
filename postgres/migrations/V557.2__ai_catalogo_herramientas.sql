@@ -1,11 +1,11 @@
--- V556.2 -- Semillas del agente: herramientas, rutas de UI y formularios
+-- V557.2 -- Semillas del agente: herramientas, rutas de UI y formularios
 -- Que hace: 6 herramientas de control, 25 de escritura, 24 de lectura y 1 analitica.
 --   Las de datos resuelven public.query por (metodo, path) en eval-col al aplicar; si
 --   una ruta no existe no se inserta. Luego 22 rutas de menu y 4 formularios.
 -- Por que aqui: ON CONFLICT DO UPDATE para que editar una descripcion la actualice.
 --   parametros = allowlist: el invocador solo acepta las claves de param_types que estan aqui
 --   (sin baja, sin FILE, sin flags de quitar).
--- Depende de: V556 y V556.1 (ai.*), public.query y public.microservice (eval-col).
+-- Depende de: V557 y V557.1 (ai.*), public.query y public.microservice (eval-col).
 
 -- ---------------------------------------------------------------------------
 -- 1. Control (sin ruta): las ejecuta el propio agente.
@@ -59,7 +59,7 @@ SELECT DISTINCT ON (v.codigo)
     -- ===== ESCRITURA (requiere confirmacion) =====
     ('editar_funcionario', 'ESCRITURA', 'PATCH', '/establecimientos/funcionarios/:ID', 'FUNCIONARIOS',
      'Edita datos de un funcionario existente: nombre, documento, contacto, cargo y vinculacion. No cambia su estado ni su foto. Requiere confirmacion.',
-     '{"PARAM.ID":{"descripcion":"Pk del funcionario","resuelve_con":"funcionarios_listar","inferible":false},"BODY.PERSON.FIRSTNAME":{"descripcion":"Primer nombre","resuelve_con":null,"inferible":false},"BODY.PERSON.MIDDLENAME":{"descripcion":"Segundo nombre","resuelve_con":null,"inferible":false},"BODY.PERSON.LASTNAME":{"descripcion":"Primer apellido","resuelve_con":null,"inferible":false},"BODY.PERSON.SECONDLASTNAME":{"descripcion":"Segundo apellido","resuelve_con":null,"inferible":false},"BODY.PERSON.IDENTIFICATION":{"descripcion":"Numero de documento","resuelve_con":null,"inferible":false},"BODY.PERSON.DOCUMENTTYPE.ID":{"descripcion":"Tipo de documento (pk de catalogo)","resuelve_con":"catalogo_valores","inferible":false},"BODY.PERSON.BIRTHDATE":{"descripcion":"Fecha de nacimiento AAAA-MM-DD","resuelve_con":null,"inferible":false},"BODY.PERSON.GENDER.ID":{"descripcion":"Genero (pk de catalogo)","resuelve_con":"catalogo_valores","inferible":false},"BODY.PERSON.EMAIL":{"descripcion":"Correo electronico","resuelve_con":null,"inferible":false},"BODY.PERSON.PHONE":{"descripcion":"Telefono de contacto","resuelve_con":null,"inferible":false},"BODY.ADDRESS":{"descripcion":"Direccion","resuelve_con":null,"inferible":false},"BODY.GRADE.ID":{"descripcion":"Grado de escalafon (pk de catalogo)","resuelve_con":"catalogo_valores","inferible":false},"BODY.EMPLOYEECLASS.ID":{"descripcion":"Clase de funcionario (pk de catalogo)","resuelve_con":"catalogo_valores","inferible":false},"BODY.FUNDINGSOURCE.ID":{"descripcion":"Fuente de recurso (pk de catalogo)","resuelve_con":"catalogo_valores","inferible":false},"BODY.EDUCATIONLEVEL.ID":{"descripcion":"Nivel educativo (pk de catalogo)","resuelve_con":"catalogo_valores","inferible":false},"BODY.EMPLOYMENTTYPE.ID":{"descripcion":"Tipo de vinculacion (pk de catalogo)","resuelve_con":"catalogo_valores","inferible":false},"BODY.FUNCTIONALPOSITION.ID":{"descripcion":"Cargo (pk de catalogo)","resuelve_con":"catalogo_valores","inferible":false},"BODY.HIGHESTEDUCATIONLEVEL.ID":{"descripcion":"Nivel de educacion mas alto (pk de catalogo)","resuelve_con":"catalogo_valores","inferible":false}}',
+     '{"PARAM.ID":{"descripcion":"Pk del funcionario","resuelve_con":"funcionarios_listar","inferible":false},"BODY.PERSON.FIRSTNAME":{"descripcion":"Primer nombre","resuelve_con":null,"inferible":false},"BODY.PERSON.MIDDLENAME":{"descripcion":"Segundo nombre","resuelve_con":null,"inferible":false},"BODY.PERSON.LASTNAME":{"descripcion":"Primer apellido","resuelve_con":null,"inferible":false},"BODY.PERSON.SECONDLASTNAME":{"descripcion":"Segundo apellido","resuelve_con":null,"inferible":false},"BODY.PERSON.IDENTIFICATION":{"descripcion":"Numero de documento","resuelve_con":null,"inferible":false},"BODY.PERSON.DOCUMENTTYPE.ID":{"descripcion":"Tipo de documento (pk de catalogo)","resuelve_con":"catalogo_valores","inferible":false},"BODY.PERSON.BIRTHDATE":{"descripcion":"Fecha de nacimiento AAAA-MM-DD","resuelve_con":null,"inferible":false},"BODY.PERSON.GENDER.ID":{"descripcion":"Genero (pk de catalogo)","resuelve_con":"catalogo_valores","inferible":false},"BODY.PERSON.PHONE":{"descripcion":"Telefono de contacto","resuelve_con":null,"inferible":false},"BODY.ADDRESS":{"descripcion":"Direccion","resuelve_con":null,"inferible":false},"BODY.GRADE.ID":{"descripcion":"Grado de escalafon (pk de catalogo)","resuelve_con":"catalogo_valores","inferible":false},"BODY.EMPLOYEECLASS.ID":{"descripcion":"Clase de funcionario (pk de catalogo)","resuelve_con":"catalogo_valores","inferible":false},"BODY.FUNDINGSOURCE.ID":{"descripcion":"Fuente de recurso (pk de catalogo)","resuelve_con":"catalogo_valores","inferible":false},"BODY.EDUCATIONLEVEL.ID":{"descripcion":"Nivel educativo (pk de catalogo)","resuelve_con":"catalogo_valores","inferible":false},"BODY.EMPLOYMENTTYPE.ID":{"descripcion":"Tipo de vinculacion (pk de catalogo)","resuelve_con":"catalogo_valores","inferible":false},"BODY.FUNCTIONALPOSITION.ID":{"descripcion":"Cargo (pk de catalogo)","resuelve_con":"catalogo_valores","inferible":false},"BODY.HIGHESTEDUCATIONLEVEL.ID":{"descripcion":"Nivel de educacion mas alto (pk de catalogo)","resuelve_con":"catalogo_valores","inferible":false}}',
      TRUE),
     ('crear_actividad_planeador', 'ESCRITURA', 'POST', '/planeador/actividades', 'PLANEADOR',
      'Crea una actividad del planeador dentro de una unidad, para un grupo y una asignatura del docente. Pregunta titulo, fechas y grupo si no son inferibles. Requiere confirmacion.',
@@ -118,7 +118,7 @@ SELECT DISTINCT ON (v.codigo)
      '{"PARAM.ID":{"descripcion":"Pk de la actividad","resuelve_con":"actividades_mias_listar","inferible":false},"BODY.FK_REFERENTE_ENUNCIADO":{"descripcion":"Enunciado de evidencia","resuelve_con":"referente_enunciados_listar","inferible":false}}',
      TRUE),
     ('asignar_estudiantes_actividad', 'ESCRITURA', 'PUT', '/planeador/actividades/:ID/estudiantes', 'PLANEADOR',
-     'Asigna estudiantes a una actividad, o a todo el grupo. No los quita. Requiere confirmacion.',
+     'Fija la lista completa de estudiantes de una actividad, o todo el grupo. Reemplaza: los que no incluyas salen de la actividad. Requiere confirmacion.',
      '{"PARAM.ID":{"descripcion":"Pk de la actividad","resuelve_con":"actividades_mias_listar","inferible":false},"BODY.FK_TMATRICULAS":{"descripcion":"Matriculas de los estudiantes","resuelve_con":"estudiantes_grupo_listar","inferible":false},"BODY.ASIGNAR_TODO_EL_GRUPO":{"descripcion":"Asignar a todo el grupo (true/false)","resuelve_con":null,"inferible":true}}',
      TRUE),
     ('calificar_estudiante_actividad', 'ESCRITURA', 'PUT', '/planeador/actividades/estudiantes/:ID/calificar', 'PLANEADOR',
@@ -280,6 +280,8 @@ UPDATE ai.herramienta h
     ('crear_unidad_planeador', 'BODY.FK_TGRADO'),
     ('crear_unidad_planeador', 'BODY.FK_TFUNCIONARIO'),
     ('ponderar_actividad_unidad', 'BODY.PONDERACION'),
+    ('crear_criterio_unidad', 'BODY.DESCRIPCION'),
+    ('crear_criterio_unidad', 'BODY.NIVELES'),
     ('vincular_enunciado_unidad', 'BODY.FK_REFERENTE_ENUNCIADO'),
     ('vincular_criterio_actividad', 'BODY.FK_TCRITERIO_UNIDAD'),
     ('vincular_evidencia_actividad', 'BODY.FK_REFERENTE_ENUNCIADO'),
@@ -287,6 +289,28 @@ UPDATE ai.herramienta h
   ) AS v (codigo, param)
           WHERE v.codigo = h.codigo AND h.parametros ? v.param), '{}'::jsonb)
  WHERE h.active = TRUE;
+
+-- ---------------------------------------------------------------------------
+-- 2c. Escrituras que reemplazan un conjunto: la funcion destino da de baja lo que
+--     no se incluye. Se permiten, pero la confirmacion lo dice; el resto queda sin aviso.
+-- ---------------------------------------------------------------------------
+UPDATE ai.herramienta h
+   SET aviso_confirmacion = a.aviso
+  FROM (SELECT h2.id, v.aviso
+          FROM ai.herramienta h2
+          LEFT JOIN (VALUES
+    ('asignar_estudiantes_actividad', 'Reemplaza la lista: los estudiantes que no incluyas saldrán de la actividad junto con sus adaptaciones.'),
+    ('editar_actividad_planeador', 'Si cambias los estudiantes, los que no incluyas saldrán de la actividad.'),
+    ('actualizar_instrumento_actividad', 'Reemplaza el instrumento: la rúbrica, escala o lista de cotejo anterior se dará de baja.'),
+    ('actualizar_adaptaciones_actividad', 'Reemplaza las adaptaciones: las que no incluyas se darán de baja.'),
+    ('actualizar_materiales_actividad', 'Reemplaza los materiales: los que no incluyas se darán de baja.'),
+    ('editar_unidad_planeador', 'Si cambias los enunciados, se quitarán las evidencias de las actividades ligadas a los que retires.'),
+    ('observar_estudiante_actividad', 'Reemplaza la observación: los soportes anteriores que no incluyas se darán de baja.'),
+    ('observar_grupo_actividad', 'Reemplaza la observación de cada estudiante: los soportes anteriores que no incluyas se darán de baja.')
+          ) AS v (codigo, aviso) ON v.codigo = h2.codigo
+         WHERE h2.active = TRUE) a
+ WHERE a.id = h.id
+   AND h.aviso_confirmacion IS DISTINCT FROM a.aviso;
 
 -- ---------------------------------------------------------------------------
 -- 3. ruta_ui: una fila por menu. Enriquece TMENU; la URL sale de academico_test.tmenu.

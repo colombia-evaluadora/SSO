@@ -1,9 +1,9 @@
--- V556 -- Schema ai del agente: catalogo y operacion (capa 0, DDL)
+-- V557 -- Schema ai del agente: catalogo y operacion (capa 0, DDL)
 -- Que hace: crea el schema ai con el catalogo de herramientas, rutas de UI y
 --   formularios, y el historial de conversaciones, acciones pendientes y eventos.
--- Por que aqui: primera capa del agente. Las utilidades (V556.1), las semillas
---   (V556.2) y los endpoints (V556.3) la leen. Sin funciones ni permisos.
--- Depende de: nada; solo referencias internas al schema ai.
+-- Por que aqui: primera capa del agente. Las utilidades (V557.1), las semillas
+--   (V557.2) y los endpoints (V557.3) la leen. Sin funciones ni permisos.
+-- Depende de: V283 (fn_cdc_asegurar_auditoria) para auditar el catalogo.
 
 CREATE SCHEMA IF NOT EXISTS ai;
 
@@ -19,6 +19,8 @@ CREATE TABLE IF NOT EXISTS ai.herramienta (
     descripcion_modelo    TEXT         NOT NULL,
     parametros            JSONB        NOT NULL DEFAULT '{}'::jsonb,
     requiere_confirmacion BOOLEAN      NOT NULL DEFAULT FALSE,
+    -- Escrituras que reemplazan un conjunto y dan de baja lo no incluido: se muestra al confirmar.
+    aviso_confirmacion    TEXT,
     ejemplos              JSONB        NOT NULL DEFAULT '[]'::jsonb,
     version               INTEGER      NOT NULL DEFAULT 1,
     created_by            VARCHAR(120) NOT NULL,
@@ -67,6 +69,8 @@ CREATE TABLE IF NOT EXISTS ai.ui_formulario (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS ux_ai_ui_formulario_codigo
     ON ai.ui_formulario (codigo) WHERE active = TRUE;
+CREATE INDEX IF NOT EXISTS ix_ai_ui_formulario_ruta ON ai.ui_formulario (ruta_ui_id);
+CREATE INDEX IF NOT EXISTS ix_ai_ui_formulario_herramienta ON ai.ui_formulario (herramienta_escritura);
 
 -- Operacion: conversaciones del usuario (fk_usuario = id de public.users del JWT).
 CREATE TABLE IF NOT EXISTS ai.conversacion (
@@ -127,6 +131,7 @@ CREATE TABLE IF NOT EXISTS ai.tool_invocacion (
 );
 CREATE INDEX IF NOT EXISTS ix_ai_tool_invocacion_mensaje
     ON ai.tool_invocacion (mensaje_id) WHERE active = TRUE;
+CREATE INDEX IF NOT EXISTS ix_ai_tool_invocacion_herramienta ON ai.tool_invocacion (herramienta_id);
 
 -- Una accion de escritura espera confirmacion con boton. payload_hash se verifica al confirmar.
 CREATE TABLE IF NOT EXISTS ai.accion_pendiente (
@@ -152,6 +157,7 @@ CREATE INDEX IF NOT EXISTS ix_ai_accion_pendiente_vivas
     ON ai.accion_pendiente (expira_at) WHERE estado = 'PENDIENTE';
 CREATE INDEX IF NOT EXISTS ix_ai_accion_pendiente_conversacion
     ON ai.accion_pendiente (conversacion_id) WHERE active = TRUE;
+CREATE INDEX IF NOT EXISTS ix_ai_accion_pendiente_herramienta ON ai.accion_pendiente (herramienta_id);
 
 -- Nivel 1 (consulta curada) y 2 (SQL generado). En v1 solo se usa el nivel 1.
 CREATE TABLE IF NOT EXISTS ai.consulta_analitica (
@@ -191,3 +197,14 @@ CREATE TABLE IF NOT EXISTS ai.evento_seguridad (
 );
 CREATE INDEX IF NOT EXISTS ix_ai_evento_seguridad_usuario
     ON ai.evento_seguridad (fk_usuario, created_at) WHERE active = TRUE;
+
+-- Solo el catalogo entra a la auditoria CDC. Las tablas de operacion son el propio
+-- historial y llevan el texto de las conversaciones: no se replican a ClickHouse.
+DO $$
+DECLARE
+    v_tabla TEXT;
+BEGIN
+    FOREACH v_tabla IN ARRAY ARRAY['herramienta', 'ruta_ui', 'ui_formulario'] LOOP
+        PERFORM academico_test.fn_cdc_asegurar_auditoria('ai', v_tabla);
+    END LOOP;
+END $$;

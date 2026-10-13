@@ -20,7 +20,7 @@ class TechoHerramientasTest {
 
     @Test
     void rutasDelCatalogoRealPasanElTecho() {
-        // Rutas de V556.2 que el catalogo real ya usa: ninguna debe caer en el techo.
+        // Rutas de V557.2 que el catalogo real ya usa: ninguna debe caer en el techo.
         for (String ruta : List.of("/planeador/actividades/:ID/calificar-bulk/escala",
                 "/establecimientos/funcionarios/query", "/planeador/unidades/:ID/criterios",
                 "/periodos-academicos/query", "/my-menus", "/select/:CATEGORIA")) {

@@ -10,7 +10,7 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
 
-/** Lee el registro de UI con las utilidades de V556.1; no toca tablas fuera de {@code ai}. */
+/** Lee el registro de UI con las utilidades de V557.1; no toca tablas fuera de {@code ai}. */
 @Repository
 public class JdbcRegistroUiRepository implements RegistroUiRepository {
 

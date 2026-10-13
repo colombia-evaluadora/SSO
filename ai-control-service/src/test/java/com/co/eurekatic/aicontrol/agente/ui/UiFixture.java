@@ -14,7 +14,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
-/** Pantallas, formularios y contexto de UI como los del registro sembrado en V556.2. */
+/** Pantallas, formularios y contexto de UI como los del registro sembrado en V557.2. */
 public final class UiFixture {
 
     public static final Pantalla FUNCIONARIOS = new Pantalla("funcionarios", "FUNCIONARIOS", "Funcionarios",

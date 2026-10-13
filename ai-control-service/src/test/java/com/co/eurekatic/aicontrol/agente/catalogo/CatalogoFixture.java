@@ -8,7 +8,7 @@ import java.util.List;
 
 /**
  * Filas con la forma exacta que devuelve {@code ai.fn_herramienta_catalogo_interno()}. Los
- * {@code param_types} y los nombres de parametro son los de la base real (V556.2 y los
+ * {@code param_types} y los nombres de parametro son los de la base real (V557.2 y los
  * {@code public.query} del servidor local); las descripciones son las de la migracion.
  */
 public final class CatalogoFixture {

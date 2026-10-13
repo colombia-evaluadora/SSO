@@ -1,7 +1,7 @@
 # Mapa del dominio
 
 **Generado** por `python scripts/migration-analysis mapa` — no editar a mano.
-Estado: 495 migraciones (V1–V556.3), 1325 funciones vivas, 49 endpoints vivos. Ultima generacion: 2026-10-13.
+Estado: 495 migraciones (V1–V557.3), 1325 funciones vivas, 49 endpoints vivos. Ultima generacion: 2026-10-13.
 
 Para una **funcion**, la migracion dueña es la que hay que editar: es su ultima escritura viva, no la que la creo.
 
@@ -1012,7 +1012,7 @@ Las secciones son las categorias funcionales de `scripts/migration-analysis/anal
 |---|---|---|---|
 | `academico_test.fn_audit_ctx` | 0 | V184 | V88, V256, V261, V276, V283, V378 |
 | `academico_test.fn_audit_declarar` | 5 | V66 | V37.2, V37.3, V38.3, V39.3, V40.4, V41.4… |
-| `academico_test.fn_cdc_asegurar_auditoria` | 2 | V283 | V496.1, V496.18 |
+| `academico_test.fn_cdc_asegurar_auditoria` | 2 | V283 | V496.1, V496.18, V557 |
 | `academico_test.fn_cdc_evento_tabla_nueva` | 0 | V283 | — |
 | `academico_test.fn_grado_grupo_etiqueta` | 3 | V224 | V251, V452, V481, V490, V526, V528… |
 | `academico_test.fn_listavalor_actualizar` | 5 | V103 | V104 |
@@ -1286,10 +1286,10 @@ Las secciones son las categorias funcionales de `scripts/migration-analysis/anal
 | `academico_test.fn_upsert_menu` | 11 | V113 | V126 |
 | `academico_test.fn_upsert_menu_interno` | 10 | V113 | — |
 | `academico_test.fn_usu_actualizar` | 19 | V179 | — |
-| `academico_test.fn_usuario_permisos_menu` | 1 | V303 | V29, V127, V556.1 |
+| `academico_test.fn_usuario_permisos_menu` | 1 | V303 | V29, V127, V557.1 |
 | `academico_test.fn_usuario_puede_en_menu` | 3 | V29 | V40, V43.3, V51, V52, V53, V116… |
-| `ai.fn_menus_usuario_interno` | 1 | V556.1 | — |
-| `ai.fn_pantallas_interno` | 0 | V556.1 | — |
+| `ai.fn_menus_usuario_interno` | 1 | V557.1 | — |
+| `ai.fn_pantallas_interno` | 0 | V557.1 | — |
 
 <a id="permisos"></a>
 
@@ -1554,8 +1554,8 @@ Las secciones son las categorias funcionales de `scripts/migration-analysis/anal
 | `academico_test.fn_usuario_otros_usos` | 3 | V162 | V160, V161 |
 | `academico_test.fn_usuario_peso_categoria` | 1 | V298 | — |
 | `academico_test.fn_usuario_rango_en_ee` | 4 | V298 | V297 |
-| `ai.fn_formularios_ui_interno` | 0 | V556.1 | — |
-| `ai.fn_herramienta_catalogo_interno` | 0 | V556.1 | — |
+| `ai.fn_formularios_ui_interno` | 0 | V557.1 | — |
+| `ai.fn_herramienta_catalogo_interno` | 0 | V557.1 | — |
 | `public.fn_get_academico_usuario_id` | 1 | V299 | V64, V67, V69, V75, V76, V77… |
 | `public.fn_microservice_validar_file_storage` | 0 | V147 | — |
 | `public.fn_sync_app_users` | 1 | V151 | V302 |
