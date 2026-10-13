@@ -6,8 +6,11 @@ import io.github.resilience4j.circuitbreaker.CircuitBreaker;
 import io.github.resilience4j.circuitbreaker.CircuitBreakerConfig;
 import io.github.resilience4j.ratelimiter.RateLimiter;
 import io.github.resilience4j.ratelimiter.RateLimiterConfig;
+import com.co.eurekatic.aicontrol.llm.ModeloInvoker;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.Primary;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.time.Duration;
@@ -42,11 +45,37 @@ public class ResilienceConfig {
     }
 
     @Bean
+    @Primary
     public Bulkhead modeloBulkhead(AiProperties props) {
         return Bulkhead.of("modelo", BulkheadConfig.custom()
                 .maxConcurrentCalls(props.maxConcurrent())
                 .maxWaitDuration(props.rateLimitTimeout())
                 .build());
+    }
+
+    /**
+     * Bulkhead del razonador. Sus llamadas son largas (planea y encadena
+     * herramientas); con su propio tope no ocupan los hilos del resto. Sin
+     * espera: si esta lleno, el turno responde 429 en vez de encolarse.
+     */
+    @Bean
+    public Bulkhead razonadorBulkhead(AgenteProperties props) {
+        return Bulkhead.of("razonador", BulkheadConfig.custom()
+                .maxConcurrentCalls(props.maxConcurrentRazonador())
+                .maxWaitDuration(Duration.ZERO)
+                .build());
+    }
+
+    /**
+     * Invocador del razonador. Comparte el cupo por minuto y el circuito con
+     * el modelo rapido porque es la misma cuenta del proveedor.
+     */
+    @Bean
+    @Qualifier("razonador")
+    public ModeloInvoker modeloInvokerRazonador(RateLimiter modeloRateLimiter,
+                                                @Qualifier("razonadorBulkhead") Bulkhead razonadorBulkhead,
+                                                CircuitBreaker modeloCircuitBreaker) {
+        return new ModeloInvoker(modeloRateLimiter, razonadorBulkhead, modeloCircuitBreaker);
     }
 
     @Bean

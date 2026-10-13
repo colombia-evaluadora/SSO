@@ -5,6 +5,7 @@ import org.springframework.ai.chat.client.advisor.SimpleLoggerAdvisor;
 import org.springframework.ai.openai.OpenAiChatOptions;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.Primary;
 import tools.jackson.core.type.TypeReference;
 import tools.jackson.databind.json.JsonMapper;
 
@@ -22,6 +23,7 @@ import java.util.Map;
 public class ChatClientConfig {
 
     @Bean
+    @Primary
     public ChatClient chatClient(ChatClient.Builder builder, AiProperties props, JsonMapper json) {
         Map<String, Object> extraBody = parseExtraBody(props.extraBodyJson(), json);
         if (!extraBody.isEmpty()) {
