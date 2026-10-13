@@ -6,12 +6,16 @@ en todas las ramas de origin.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import re
 import subprocess
+import tempfile
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from base.nucleo import FILE_RE, REPO, vnum
+from base.nucleo import FILE_RE, MIGRATIONS, REPO, vnum
 
 
 NL, SEP, TAB = chr(10), chr(31), chr(9)
@@ -112,13 +116,82 @@ def authorship(versions: set[str]) -> dict:
                     "retouched": sorted(pr["retouched"], key=vnum)})
     out.sort(key=lambda d: -len(d["created"]))
 
+    nombres, bl = blame(versions) if raw.strip() else ([], {})
     return {
         "people": out,
         "by_version": by_version,
         "commits": commits,
         "uncommitted": sorted(versions - set(by_version), key=vnum),
         "git": bool(raw.strip()),
+        "blame_names": nombres,
+        "blame": bl,
     }
+
+
+BLAME_CACHE = Path(tempfile.gettempdir()) / "sso-blame-cache.json"
+SIN_COMMIT = "(sin commitear)"
+
+
+def _blame_file(rel: str) -> list[list]:
+    """[[autor, lineas], ...] por tramos: quien escribio cada linea que HOY tiene
+    el fichero (-w: cambiar solo la indentacion no le quita la autoria)."""
+    out = git("blame", "--line-porcelain", "-w", "--", rel)
+    runs: list[list] = []
+    for line in out.splitlines():
+        if line.startswith("author "):
+            who = line[7:]
+            who = SIN_COMMIT if who == "Not Committed Yet" else who
+            if runs and runs[-1][0] == who:
+                runs[-1][1] += 1
+            else:
+                runs.append([who, 1])
+    return runs
+
+
+def blame(versions: set[str]) -> tuple[list[str], dict[str, list[list[int]]]]:
+    """Autoria por linea del codigo que queda hoy, cruzable con el mapa de lineas
+    de cada migracion. Cacheado por fichero: la clave es el blob de HEAD mas el
+    contenido del arbol, asi solo se recalcula lo que cambio (14 s en frio)."""
+    blobs = {}
+    for line in git("ls-tree", "-r", "HEAD", "--", "postgres/migrations/").splitlines():
+        meta, _, path = line.partition(TAB)
+        blobs[path] = meta.split()[-1] if meta else ""
+    try:
+        cache = json.loads(BLAME_CACHE.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        cache = {}
+    pendientes, claves, por_v = [], {}, {}
+    for f in MIGRATIONS.glob("V*.sql"):
+        m = FILE_RE.match(f.name)
+        if not m or m.group(1) not in versions:
+            continue
+        rel = f.relative_to(REPO).as_posix()
+        clave = blobs.get(rel, "") + ":" + hashlib.sha1(f.read_bytes()).hexdigest()
+        claves[rel], por_v[rel] = clave, m.group(1)
+        if cache.get(rel, {}).get("k") != clave:
+            pendientes.append(rel)
+    if pendientes:
+        with ThreadPoolExecutor(8) as ex:
+            for rel, runs in zip(pendientes, ex.map(_blame_file, pendientes)):
+                cache[rel] = {"k": claves[rel], "r": runs}
+        try:
+            tmp = BLAME_CACHE.with_suffix(".tmp")
+            tmp.write_text(json.dumps({r: cache[r] for r in claves}, ensure_ascii=False), encoding="utf-8")
+            tmp.replace(BLAME_CACHE)
+        except OSError:
+            pass
+    nombres: list[str] = []
+    idx: dict[str, int] = {}
+    out: dict[str, list[list[int]]] = {}
+    for rel, v in por_v.items():
+        runs = []
+        for who, n in cache.get(rel, {}).get("r", []):
+            if who not in idx:
+                idx[who] = len(nombres)
+                nombres.append(who)
+            runs.append([idx[who], n])
+        out[v] = runs
+    return nombres, out
 
 
 def git(*args: str) -> str:
