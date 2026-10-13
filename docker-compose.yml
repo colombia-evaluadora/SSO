@@ -260,6 +260,7 @@ services:
       # reintentarian contra un endpoint muerto. Nombres verificados
       # contra el spring-configuration-metadata.json de los jars.
       MANAGEMENT_TRACING_EXPORT_ENABLED: "${SSO_TELEMETRY_ENABLED:-false}"
+      OTEL_TRACING_SAMPLE_RATE: "${OTEL_TRACING_SAMPLE_RATE:-0.1}"
       MANAGEMENT_OTLP_METRICS_EXPORT_ENABLED: "${SSO_TELEMETRY_ENABLED:-false}"
       MANAGEMENT_LOGGING_EXPORT_OTLP_ENABLED: "${SSO_TELEMETRY_ENABLED:-false}"
     healthcheck:
@@ -386,6 +387,7 @@ services:
       # reintentarian contra un endpoint muerto. Nombres verificados
       # contra el spring-configuration-metadata.json de los jars.
       MANAGEMENT_TRACING_EXPORT_ENABLED: "${SSO_TELEMETRY_ENABLED:-false}"
+      OTEL_TRACING_SAMPLE_RATE: "${OTEL_TRACING_SAMPLE_RATE:-0.1}"
       MANAGEMENT_OTLP_METRICS_EXPORT_ENABLED: "${SSO_TELEMETRY_ENABLED:-false}"
       MANAGEMENT_LOGGING_EXPORT_OTLP_ENABLED: "${SSO_TELEMETRY_ENABLED:-false}"
     healthcheck:
@@ -459,6 +461,7 @@ services:
       # reintentarian contra un endpoint muerto. Nombres verificados
       # contra el spring-configuration-metadata.json de los jars.
       MANAGEMENT_TRACING_EXPORT_ENABLED: "${SSO_TELEMETRY_ENABLED:-false}"
+      OTEL_TRACING_SAMPLE_RATE: "${OTEL_TRACING_SAMPLE_RATE:-0.1}"
       MANAGEMENT_OTLP_METRICS_EXPORT_ENABLED: "${SSO_TELEMETRY_ENABLED:-false}"
       MANAGEMENT_LOGGING_EXPORT_OTLP_ENABLED: "${SSO_TELEMETRY_ENABLED:-false}"
     healthcheck:
@@ -591,6 +594,7 @@ services:
       # reintentarian contra un endpoint muerto. Nombres verificados
       # contra el spring-configuration-metadata.json de los jars.
       MANAGEMENT_TRACING_EXPORT_ENABLED: "${SSO_TELEMETRY_ENABLED:-false}"
+      OTEL_TRACING_SAMPLE_RATE: "${OTEL_TRACING_SAMPLE_RATE:-0.1}"
       MANAGEMENT_OTLP_METRICS_EXPORT_ENABLED: "${SSO_TELEMETRY_ENABLED:-false}"
       MANAGEMENT_LOGGING_EXPORT_OTLP_ENABLED: "${SSO_TELEMETRY_ENABLED:-false}"
     # No healthcheck on the public port — the gateway's
@@ -730,6 +734,7 @@ services:
       # reintentarian contra un endpoint muerto. Nombres verificados
       # contra el spring-configuration-metadata.json de los jars.
       MANAGEMENT_TRACING_EXPORT_ENABLED: "${SSO_TELEMETRY_ENABLED:-false}"
+      OTEL_TRACING_SAMPLE_RATE: "${OTEL_TRACING_SAMPLE_RATE:-0.1}"
       MANAGEMENT_OTLP_METRICS_EXPORT_ENABLED: "${SSO_TELEMETRY_ENABLED:-false}"
       MANAGEMENT_LOGGING_EXPORT_OTLP_ENABLED: "${SSO_TELEMETRY_ENABLED:-false}"
       # App-access cache (SsoAdminAppAccessManager /
@@ -890,6 +895,7 @@ services:
       # reintentarian contra un endpoint muerto. Nombres verificados
       # contra el spring-configuration-metadata.json de los jars.
       MANAGEMENT_TRACING_EXPORT_ENABLED: "${SSO_TELEMETRY_ENABLED:-false}"
+      OTEL_TRACING_SAMPLE_RATE: "${OTEL_TRACING_SAMPLE_RATE:-0.1}"
       MANAGEMENT_OTLP_METRICS_EXPORT_ENABLED: "${SSO_TELEMETRY_ENABLED:-false}"
       MANAGEMENT_LOGGING_EXPORT_OTLP_ENABLED: "${SSO_TELEMETRY_ENABLED:-false}"
       VONAGE_API_KEY: ${VONAGE_API_KEY:-}
@@ -995,6 +1001,7 @@ services:
       # reintentarian contra un endpoint muerto. Nombres verificados
       # contra el spring-configuration-metadata.json de los jars.
       MANAGEMENT_TRACING_EXPORT_ENABLED: "${SSO_TELEMETRY_ENABLED:-false}"
+      OTEL_TRACING_SAMPLE_RATE: "${OTEL_TRACING_SAMPLE_RATE:-0.1}"
       MANAGEMENT_OTLP_METRICS_EXPORT_ENABLED: "${SSO_TELEMETRY_ENABLED:-false}"
       MANAGEMENT_LOGGING_EXPORT_OTLP_ENABLED: "${SSO_TELEMETRY_ENABLED:-false}"
       # Eureka + JWT (sólo la pública: verifica, no emite)
@@ -1090,6 +1097,7 @@ services:
       # reintentarian contra un endpoint muerto. Nombres verificados
       # contra el spring-configuration-metadata.json de los jars.
       MANAGEMENT_TRACING_EXPORT_ENABLED: "${SSO_TELEMETRY_ENABLED:-false}"
+      OTEL_TRACING_SAMPLE_RATE: "${OTEL_TRACING_SAMPLE_RATE:-0.1}"
       MANAGEMENT_OTLP_METRICS_EXPORT_ENABLED: "${SSO_TELEMETRY_ENABLED:-false}"
       MANAGEMENT_LOGGING_EXPORT_OTLP_ENABLED: "${SSO_TELEMETRY_ENABLED:-false}"
     healthcheck:
@@ -1231,6 +1239,7 @@ services:
       # reintentarian contra un endpoint muerto. Nombres verificados
       # contra el spring-configuration-metadata.json de los jars.
       MANAGEMENT_TRACING_EXPORT_ENABLED: "${SSO_TELEMETRY_ENABLED:-false}"
+      OTEL_TRACING_SAMPLE_RATE: "${OTEL_TRACING_SAMPLE_RATE:-0.1}"
       MANAGEMENT_OTLP_METRICS_EXPORT_ENABLED: "${SSO_TELEMETRY_ENABLED:-false}"
       MANAGEMENT_LOGGING_EXPORT_OTLP_ENABLED: "${SSO_TELEMETRY_ENABLED:-false}"
       # El mismo interruptor, propagado a cada query-service que el
@@ -1722,6 +1731,7 @@ services:
       # reintentarian contra un endpoint muerto. Nombres verificados
       # contra el spring-configuration-metadata.json de los jars.
       MANAGEMENT_TRACING_EXPORT_ENABLED: "${SSO_TELEMETRY_ENABLED:-false}"
+      OTEL_TRACING_SAMPLE_RATE: "${OTEL_TRACING_SAMPLE_RATE:-0.1}"
       MANAGEMENT_OTLP_METRICS_EXPORT_ENABLED: "${SSO_TELEMETRY_ENABLED:-false}"
       MANAGEMENT_LOGGING_EXPORT_OTLP_ENABLED: "${SSO_TELEMETRY_ENABLED:-false}"
     mem_limit: 512m
@@ -1801,6 +1811,7 @@ services:
       JWT_PUBLIC_KEY: ${JWT_PUBLIC_KEY}
       OTEL_EXPORTER_OTLP_ENDPOINT: "${OTEL_EXPORTER_OTLP_ENDPOINT:-http://alloy:4318}"
       MANAGEMENT_TRACING_EXPORT_ENABLED: "${SSO_TELEMETRY_ENABLED:-false}"
+      OTEL_TRACING_SAMPLE_RATE: "${OTEL_TRACING_SAMPLE_RATE:-0.1}"
       MANAGEMENT_OTLP_METRICS_EXPORT_ENABLED: "${SSO_TELEMETRY_ENABLED:-false}"
       MANAGEMENT_LOGGING_EXPORT_OTLP_ENABLED: "${SSO_TELEMETRY_ENABLED:-false}"
     healthcheck:
@@ -1860,6 +1871,7 @@ services:
       JWT_PUBLIC_KEY: ${JWT_PUBLIC_KEY}
       OTEL_EXPORTER_OTLP_ENDPOINT: "${OTEL_EXPORTER_OTLP_ENDPOINT:-http://alloy:4318}"
       MANAGEMENT_TRACING_EXPORT_ENABLED: "${SSO_TELEMETRY_ENABLED:-false}"
+      OTEL_TRACING_SAMPLE_RATE: "${OTEL_TRACING_SAMPLE_RATE:-0.1}"
       MANAGEMENT_OTLP_METRICS_EXPORT_ENABLED: "${SSO_TELEMETRY_ENABLED:-false}"
       MANAGEMENT_LOGGING_EXPORT_OTLP_ENABLED: "${SSO_TELEMETRY_ENABLED:-false}"
     healthcheck:
