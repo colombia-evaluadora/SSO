@@ -57,10 +57,14 @@ public class PathRegistryNotifier {
     private final DiscoveryClient discovery;
 
     public PathRegistryNotifier(DiscoveryClient discovery,
-                                @Value("${sso.internal.token:}") String internalToken) {
+                                @Value("${sso.internal.token:}") String internalToken,
+                                @Value("${SSO_ADMIN_HTTP_CONNECT_TIMEOUT:2s}") java.time.Duration connectTimeout,
+                                @Value("${SSO_ADMIN_HTTP_READ_TIMEOUT:5s}") java.time.Duration readTimeout) {
         this.discovery = discovery;
         this.internalToken = internalToken;
-        this.client = RestClient.builder().build();
+        this.client = RestClient.builder()
+                .requestFactory(com.co.eurekatic.ssoadmin.client.HttpTimeouts.factory(connectTimeout, readTimeout))
+                .build();
     }
 
     /**
