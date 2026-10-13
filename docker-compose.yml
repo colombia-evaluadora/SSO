@@ -249,6 +249,8 @@ services:
       # Standalone Eureka — does not register with itself.
       EUREKA_CLIENT_REGISTER_WITH_EUREKA: "false"
       EUREKA_CLIENT_FETCH_REGISTRY: "false"
+      EUREKA_RENEWAL_THRESHOLD: "${EUREKA_RENEWAL_THRESHOLD:-0.85}"
+      EUREKA_EVICTION_INTERVAL_MS: "${EUREKA_EVICTION_INTERVAL_MS:-30000}"
       # Observability: push OTLP to Alloy
       OTEL_EXPORTER_OTLP_ENDPOINT: "${OTEL_EXPORTER_OTLP_ENDPOINT:-http://alloy:4318}"
       # Interruptor de telemetria: con el perfil de observabilidad
