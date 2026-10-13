@@ -155,17 +155,16 @@ class QueryPathRegistryMatchTest {
     }
 
     /** Ambigüedad real (misma especificidad, dos templates distintos
-     *  matchean la misma ruta): no hay forma correcta de desempatar,
-     *  así que se preserva el comportamiento histórico — gana el
-     *  primero en orden de inserción — en vez de fallar o elegir al
-     *  azar. */
+     *  matchean la misma ruta): gana la plantilla menor en orden
+     *  léxico, sin depender del orden de inserción. */
     @Test
-    void tiesFallBackToInsertionOrder() {
+    void tiesResolveByTemplateOrderNotInsertionOrder() {
         // Ambas plantillas matchean "/a/b/c" con exactamente 1
         // variable extraída — empate genuino de especificidad.
         Map<QueryPathRegistry.RouteKey, QueryPathRegistry.RouteEntry> table = new LinkedHashMap<>();
-        table.put(new QueryPathRegistry.RouteKey("GET", "/a/:X/c"), new QueryPathRegistry.RouteEntry("uuid-first", false, 60));
+        // Insertadas al revés: el orden de inserción no decide.
         table.put(new QueryPathRegistry.RouteKey("GET", "/a/b/:Y"), new QueryPathRegistry.RouteEntry("uuid-second", false, 60));
+        table.put(new QueryPathRegistry.RouteKey("GET", "/a/:X/c"), new QueryPathRegistry.RouteEntry("uuid-first", false, 60));
 
         var match = QueryPathRegistry.matchAgainst(table, "GET", "/a/b/c");
 
