@@ -57,7 +57,7 @@ spring:
       # OpenAI; spring.ai.retry.* ya no afecta a este starter.
       # Pasado el timeout se responde 504. Con el plan gratuito de NVIDIA
       # hace falta 120s (cola de hasta ~110s hasta el primer token).
-      timeout: ${AI_TIMEOUT:60s}
+      timeout: ${AI_TIMEOUT:120s}
       max-retries: ${AI_MAX_RETRIES:1}
       chat:
         model: ${AI_MODEL:MiniMax-M3}
