@@ -1271,6 +1271,24 @@ services:
       # Alloy con la telemetría apagada. Mismo patrón DOCKER_* de
       # relaxed-binding que DOCKER_JWT_PUBLIC_KEY.
       DOCKER_TELEMETRY_ENABLED: "${SSO_TELEMETRY_ENABLED:-false}"
+      # Recursos de cada query-service spawneado (HostConfig).
+      PROVISIONER_QUERY_MEM_LIMIT: ${PROVISIONER_QUERY_MEM_LIMIT:-512m}
+      PROVISIONER_QUERY_MEM_RESERVATION: ${PROVISIONER_QUERY_MEM_RESERVATION:-256m}
+      PROVISIONER_QUERY_CPUS: ${PROVISIONER_QUERY_CPUS:-}
+      # Tuning reenviado al query-service spawneado SOLO si está definido
+      # (vacío = no se reenvía y rige el default de su application.yml).
+      QUERY_BULKHEAD_MAX_CONCURRENT: ${QUERY_BULKHEAD_MAX_CONCURRENT:-}
+      QUERY_RATE_LIMIT_RPS: ${QUERY_RATE_LIMIT_RPS:-}
+      QUERY_RATE_LIMIT_WINDOW: ${QUERY_RATE_LIMIT_WINDOW:-}
+      QUERY_TIMEOUT_SECONDS: ${QUERY_TIMEOUT_SECONDS:-}
+      QUERY_REPORT_TIMEOUT_SECONDS: ${QUERY_REPORT_TIMEOUT_SECONDS:-}
+      QUERY_MAX_ROWS: ${QUERY_MAX_ROWS:-}
+      QUERY_DS_CONNECTION_TIMEOUT_MS: ${QUERY_DS_CONNECTION_TIMEOUT_MS:-}
+      QUERY_DS_STATEMENT_TIMEOUT_MS: ${QUERY_DS_STATEMENT_TIMEOUT_MS:-}
+      QUERY_CACHE_CATALOG_ENABLED: ${QUERY_CACHE_CATALOG_ENABLED:-}
+      QUERY_CACHE_METADATA_TTL_SECONDS: ${QUERY_CACHE_METADATA_TTL_SECONDS:-}
+      QUERY_CATALOG_CACHE_TTL_SECONDS: ${QUERY_CATALOG_CACHE_TTL_SECONDS:-}
+      JAVA_TOOL_OPTIONS: ${JAVA_TOOL_OPTIONS:-}
     healthcheck:
       # The provisioner image installs curl (it talks to
       # the Docker socket via curl --unix-socket) but not
