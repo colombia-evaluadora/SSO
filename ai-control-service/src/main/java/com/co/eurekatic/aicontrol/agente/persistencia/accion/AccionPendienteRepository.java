@@ -23,10 +23,10 @@ public class AccionPendienteRepository implements AccionPendienteStore {
                                              payload_hash, resumen, estado, expira_at, created_by)
             VALUES (:id, :cid, :fkUsuario, :herramientaId, CAST(:payload AS jsonb), :hash, :resumen,
                     'PENDIENTE', LOCALTIMESTAMP + make_interval(secs => :segundos), :actor)
-            RETURNING """ + COLUMNAS;
+            RETURNING\s""" + COLUMNAS;
 
     private static final String SQL_BUSCAR = """
-            SELECT """ + COLUMNAS + """
+            SELECT\s""" + COLUMNAS + """
              FROM ai.accion_pendiente
             WHERE id = :id AND fk_usuario = :fkUsuario AND active = TRUE
             """;

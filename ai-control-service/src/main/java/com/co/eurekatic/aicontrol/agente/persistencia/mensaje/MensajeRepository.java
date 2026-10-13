@@ -37,14 +37,14 @@ public class MensajeRepository implements MensajeStore {
             """;
 
     private static final String SQL_LISTAR = """
-            SELECT """ + COLUMNAS + """
+            SELECT\s""" + COLUMNAS + """
              FROM ai.mensaje
             WHERE conversacion_id = :cid AND active = TRUE
             ORDER BY secuencia
             """;
 
     private static final String SQL_LISTAR_FINALES = """
-            SELECT """ + COLUMNAS + """
+            SELECT\s""" + COLUMNAS + """
              FROM ai.mensaje
             WHERE conversacion_id = :cid AND active = TRUE AND rol IN ('USER', 'ASSISTANT')
             ORDER BY secuencia

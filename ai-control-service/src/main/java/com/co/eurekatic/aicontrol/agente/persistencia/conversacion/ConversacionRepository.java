@@ -19,16 +19,16 @@ public class ConversacionRepository implements ConversacionStore {
     private static final String SQL_CREAR = """
             INSERT INTO ai.conversacion (id, fk_usuario, titulo, created_by)
             VALUES (:id, :fkUsuario, :titulo, :actor)
-            RETURNING """ + COLUMNAS;
+            RETURNING\s""" + COLUMNAS;
 
     private static final String SQL_BUSCAR = """
-            SELECT """ + COLUMNAS + """
+            SELECT\s""" + COLUMNAS + """
              FROM ai.conversacion
             WHERE id = :id AND fk_usuario = :fkUsuario AND active = TRUE
             """;
 
     private static final String SQL_LISTAR = """
-            SELECT """ + COLUMNAS + """
+            SELECT\s""" + COLUMNAS + """
              FROM ai.conversacion
             WHERE fk_usuario = :fkUsuario AND active = TRUE AND estado <> 'ARCHIVADA'
             ORDER BY ultimo_mensaje_at DESC, created_at DESC
