@@ -83,8 +83,15 @@ public class AccionesService {
                                     ArgumentosCanonicos argumentos, String resumen) {
         String payload = CanonicoPayload.serializar(argumentos);
         AccionPendiente creada = acciones.crear(new NuevaAccion(conversacionId, usuario.userId(), herramienta.id(),
-                payload, Huellas.sha256(payload), resumen, expira));
+                payload, Huellas.sha256(payload), resumenConAviso(resumen, herramienta), expira));
         return new AccionPropuesta(creada.id(), creada.resumen(), creada.expiraAt());
+    }
+
+    /** Las escrituras que reemplazan un conjunto dicen, antes de confirmar, que daran de baja lo no incluido. */
+    static String resumenConAviso(String resumen, HerramientaDef herramienta) {
+        return herramienta.avisoConfirmacion()
+                .map(aviso -> resumen + " Atención: " + aviso)
+                .orElse(resumen);
     }
 
     /** Confirma y ejecuta la accion. Como mucho una peticion la ejecuta. */
@@ -116,7 +123,8 @@ public class AccionesService {
             throw new ErrorAgente.AccionNoPendiente();
         }
         if (!LocalDateTime.now(reloj).isBefore(accion.expiraAt())) {
-            acciones.transicionar(id, usuario.userId(), EstadoAccion.EXPIRADA, null);
+            // transicionar solo toca acciones vigentes; una vencida la cierra el barrido de expiradas.
+            acciones.marcarExpiradas();
             throw new ErrorAgente.AccionExpirada();
         }
         if (!Huellas.sha256(CanonicoPayload.canonico(accion.payload())).equals(accion.payloadHash())) {

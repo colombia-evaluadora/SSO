@@ -16,7 +16,7 @@ public class JdbcCatalogoRepository implements CatalogoRepository {
             SELECT id, codigo, tipo, descripcion_modelo, parametros::text AS parametros,
                    requiere_confirmacion, ejemplos::text AS ejemplos, version, menu_codigo,
                    path_template, http_method, param_types::text AS param_types,
-                   restricciones::text AS restricciones, roles
+                   restricciones::text AS restricciones, roles, aviso_confirmacion
               FROM ai.fn_herramienta_catalogo_interno()
             """;
 
@@ -43,7 +43,8 @@ public class JdbcCatalogoRepository implements CatalogoRepository {
                         rs.getString("http_method"),
                         rs.getString("param_types"),
                         rs.getString("restricciones"),
-                        roles(rs.getArray("roles"))))
+                        roles(rs.getArray("roles")),
+                        rs.getString("aviso_confirmacion")))
                 .list();
     }
 

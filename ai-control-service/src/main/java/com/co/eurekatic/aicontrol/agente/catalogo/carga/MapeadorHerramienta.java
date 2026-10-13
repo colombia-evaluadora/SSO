@@ -48,7 +48,8 @@ public final class MapeadorHerramienta {
                 fila.version(),
                 Optional.ofNullable(fila.menuCodigo()),
                 ruta,
-                Set.copyOf(fila.roles()));
+                Set.copyOf(fila.roles()),
+                Optional.of(fila.avisoConfirmacion()));
     }
 
     private static Optional<RutaQuery> ruta(FilaCatalogo fila, Map<String, String> paramTypes,

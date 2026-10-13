@@ -46,6 +46,26 @@ class TechoHerramientasTest {
     }
 
     @Test
+    void unaLecturaSoloVaPorGetOPorPostDeListado() {
+        assertThat(techo.motivoRechazo(herramienta(TipoHerramienta.LECTURA, "/establecimientos/funcionarios/query",
+                HttpMethod.POST, false))).isEmpty();
+        assertThat(techo.motivoRechazo(herramienta(TipoHerramienta.LECTURA, "/sedes/jornadas-activas",
+                HttpMethod.POST, false))).isEmpty();
+        assertThat(techo.motivoRechazo(herramienta(TipoHerramienta.LECTURA, "/planeador/actividades",
+                HttpMethod.POST, false))).as("POST que crea").isPresent();
+        assertThat(techo.motivoRechazo(herramienta(TipoHerramienta.ANALITICA, "/planeador/actividades/:ID",
+                HttpMethod.PATCH, false))).as("PATCH disfrazado de analitica").isPresent();
+        assertThat(techo.motivoRechazo(herramienta(TipoHerramienta.LECTURA, "/planeador/unidades/:ID",
+                HttpMethod.PUT, false))).isPresent();
+    }
+
+    @Test
+    void unaEscrituraNoPuedeIrPorGet() {
+        assertThat(techo.motivoRechazo(herramienta(TipoHerramienta.ESCRITURA, "/planeador/actividades",
+                HttpMethod.GET, true))).isPresent();
+    }
+
+    @Test
     void escrituraSinConfirmacionSeRechaza() {
         assertThat(techo.motivoRechazo(herramienta(TipoHerramienta.ESCRITURA, "/planeador/actividades",
                 HttpMethod.POST, false))).isPresent();

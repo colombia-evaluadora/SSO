@@ -96,6 +96,17 @@ class AccionesServiceTest {
     }
 
     @Test
+    void unaEscrituraQueReemplazaLlevaSuAvisoEnElResumen() {
+        HerramientaDef reemplaza = new HerramientaDef(HERRAMIENTA, "asignar_estudiantes_actividad",
+                TipoHerramienta.ESCRITURA, "d", List.of(), true, List.of(), 1, Optional.of("PLANEADOR"),
+                escritura.ruta(), Set.of(), Optional.of("Los que no incluyas saldrán de la actividad."));
+
+        assertThat(AccionesService.resumenConAviso("Asignar 2 estudiantes", reemplaza))
+                .isEqualTo("Asignar 2 estudiantes Atención: Los que no incluyas saldrán de la actividad.");
+        assertThat(AccionesService.resumenConAviso("Crear a Ana", escritura)).isEqualTo("Crear a Ana");
+    }
+
+    @Test
     void confirmarEjecutaConElTokenDeQuienConfirmaYRegistraElResultado() {
         when(store.buscar(accionId, USUARIO)).thenReturn(Optional.of(pendiente(AHORA_LOCAL.plusMinutes(5), null)));
         when(store.transicionar(accionId, USUARIO, EstadoAccion.EJECUTADA, AccionPendienteStore.MARCA_EN_CURSO)).thenReturn(true);
@@ -129,7 +140,7 @@ class AccionesServiceTest {
 
         assertThatThrownBy(() -> servicio.confirmar(accionId, usuario)).isInstanceOf(ErrorAgente.AccionExpirada.class);
 
-        verify(store).transicionar(accionId, USUARIO, EstadoAccion.EXPIRADA, null);
+        verify(store).marcarExpiradas();
         verify(queryService, never()).invocar(any(), any(), any(), any(), anyString());
     }
 
