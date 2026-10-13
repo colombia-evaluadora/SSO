@@ -11,10 +11,13 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.dao.EmptyResultDataAccessException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionOperations;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.math.BigDecimal;
 import java.util.ArrayList;
@@ -86,23 +89,45 @@ public class AuditRevertService {
     private final ClickHouseAuditClient clickHouse;
     private final JdbcTemplate jdbc;
     private final ObjectMapper mapper;
+    private final TransactionOperations tx;
 
-    public AuditRevertService(ClickHouseAuditClient clickHouse, JdbcTemplate jdbc, ObjectMapper mapper) {
+    @Autowired
+    public AuditRevertService(ClickHouseAuditClient clickHouse, JdbcTemplate jdbc, ObjectMapper mapper,
+                              PlatformTransactionManager txManager) {
+        this(clickHouse, jdbc, mapper, new TransactionTemplate(txManager));
+    }
+
+    AuditRevertService(ClickHouseAuditClient clickHouse, JdbcTemplate jdbc, ObjectMapper mapper,
+                       TransactionOperations tx) {
         this.clickHouse = clickHouse;
         this.jdbc = jdbc;
         this.mapper = mapper;
+        this.tx = tx;
+    }
+
+    /** Constructor sin transacciones reales, para pruebas unitarias. */
+    AuditRevertService(ClickHouseAuditClient clickHouse, JdbcTemplate jdbc, ObjectMapper mapper) {
+        this(clickHouse, jdbc, mapper, TransactionOperations.withoutTransaction());
     }
 
     /** Vista previa — no escribe nada, solo valida y muestra qué pasaría. */
     public AuditRevertResponse preview(long lsn, long seq) {
-        Plan plan = resolvePlan(lsn, seq);
+        Plan plan = resolvePlan(fetchRow(lsn, seq));
         return toResponse(plan, false, "Vista previa — nada se escribió. Repite con dryRun=false para aplicar.");
     }
 
-    /** Ejecuta la reversión. {@code actingUserId} puede ser null (token legado sin claim uid). */
-    @Transactional
+    /**
+     * Ejecuta la reversión. {@code actingUserId} puede ser null (token legado sin claim uid).
+     * La llamada HTTP a ClickHouse se hace ANTES de abrir la transacción, para no retener
+     * una conexión de Postgres mientras se espera a un servicio externo.
+     */
     public AuditRevertResponse revert(long lsn, long seq, Long actingUserId) {
-        Plan plan = resolvePlan(lsn, seq);
+        AuditLogRow row = fetchRow(lsn, seq);
+        return tx.execute(status -> revertInTx(row, lsn, seq, actingUserId));
+    }
+
+    private AuditRevertResponse revertInTx(AuditLogRow row, long lsn, long seq, Long actingUserId) {
+        Plan plan = resolvePlan(row);
         applyRevert(plan, lsn, seq, actingUserId);
         log.info("Reversión aplicada: tabla={} pk={} operación_original={} columnas={} (request original={})",
                 plan.row.tabla(), plan.pkValue(), plan.row.operacion(),
@@ -119,16 +144,18 @@ public class AuditRevertService {
                 plan.row.appUser(), message);
     }
 
+    private AuditLogRow fetchRow(long lsn, long seq) {
+        return clickHouse.findByLsnSeq(lsn, seq)
+                .orElseThrow(() -> new NotFoundException("cambio de auditoría", lsn + "/" + seq));
+    }
+
     /**
      * Resuelve y valida TODO antes de escribir nada: existe el cambio,
      * su operación es revertible, y el estado actual de Postgres
      * todavía coincide con lo que el cambio original dejó (si no,
      * alguien lo tocó después — {@link RevertConflictException}).
      */
-    private Plan resolvePlan(long lsn, long seq) {
-        AuditLogRow row = clickHouse.findByLsnSeq(lsn, seq)
-                .orElseThrow(() -> new NotFoundException("cambio de auditoría", lsn + "/" + seq));
-
+    private Plan resolvePlan(AuditLogRow row) {
         return switch (row.operacion()) {
             case "u" -> resolveUpdatePlan(row);
             case "c" -> resolveInsertPlan(row);
