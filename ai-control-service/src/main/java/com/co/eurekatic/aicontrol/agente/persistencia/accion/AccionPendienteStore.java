@@ -54,6 +54,22 @@ public interface AccionPendienteStore {
      */
     boolean transicionar(UUID id, long fkUsuario, EstadoAccion nuevo, String resultadoJson);
 
+    /**
+     * Reclama la ejecucion de una accion: la pasa a EJECUTADA con {@link #MARCA_EN_CURSO}. Es la
+     * transicion condicional que impide ejecutar dos veces; el resultado real llega con {@link #completar}.
+     * Si el proceso se corta entre ambas, la fila queda EJECUTADA en curso: resultado desconocido.
+     */
+    String MARCA_EN_CURSO = "{\"fase\":\"EN_CURSO\"}";
+
+    /**
+     * Cierra una ejecucion reclamada con {@link #MARCA_EN_CURSO}, pasandola a su estado final
+     * (EJECUTADA o FALLIDA). Solo actua si la fila sigue en EJECUTADA en curso.
+     *
+     * @return false si la fila ya no estaba en curso
+     * @throws IllegalArgumentException si {@code estadoFinal} no es EJECUTADA ni FALLIDA
+     */
+    boolean completar(UUID id, long fkUsuario, EstadoAccion estadoFinal, String resultadoJson);
+
     /** Marca como EXPIRADA toda accion PENDIENTE vencida, de cualquier usuario. */
     int marcarExpiradas();
 }

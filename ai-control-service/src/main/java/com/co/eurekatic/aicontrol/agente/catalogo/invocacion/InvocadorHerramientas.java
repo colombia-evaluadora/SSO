@@ -128,7 +128,7 @@ public class InvocadorHerramientas {
     }
 
     /** Frases para el modelo por cada codigo de error del query-service. */
-    static String traducir(RespuestaQuery.ErrorCliente error) {
+    public static String traducir(RespuestaQuery.ErrorCliente error) {
         String motivo = error.mensaje();
         return switch (error.status()) {
             case 400 -> "Datos no validos para el servicio academico: " + motivo;

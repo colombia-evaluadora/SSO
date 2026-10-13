@@ -43,6 +43,17 @@ public class AccionPendienteRepository implements AccionPendienteStore {
                AND estado = 'PENDIENTE' AND expira_at > LOCALTIMESTAMP
             """;
 
+    private static final String SQL_COMPLETAR = """
+            UPDATE ai.accion_pendiente
+               SET estado = :nuevo,
+                   resultado = CAST(:resultado AS jsonb),
+                   resuelta_at = LOCALTIMESTAMP,
+                   modified_by = :actor,
+                   modified_at = LOCALTIMESTAMP
+             WHERE id = :id AND fk_usuario = :fkUsuario AND active = TRUE
+               AND estado = 'EJECUTADA' AND resultado ->> 'fase' = 'EN_CURSO'
+            """;
+
     private static final String SQL_MARCAR_EXPIRADAS = """
             UPDATE ai.accion_pendiente
                SET estado = 'EXPIRADA', modified_by = :actor, modified_at = LOCALTIMESTAMP
@@ -102,6 +113,21 @@ public class AccionPendienteRepository implements AccionPendienteStore {
                 .param("id", id)
                 .param("fkUsuario", fkUsuario)
                 .param("nuevo", nuevo.name())
+                .param("resultado", resultadoJson)
+                .param("actor", Auditoria.ACTOR)
+                .update();
+        return filas == 1;
+    }
+
+    @Override
+    public boolean completar(UUID id, long fkUsuario, EstadoAccion estadoFinal, String resultadoJson) {
+        if (estadoFinal != EstadoAccion.EJECUTADA && estadoFinal != EstadoAccion.FALLIDA) {
+            throw new IllegalArgumentException("Cierre no permitido: " + estadoFinal);
+        }
+        int filas = jdbc.sql(SQL_COMPLETAR)
+                .param("id", id)
+                .param("fkUsuario", fkUsuario)
+                .param("nuevo", estadoFinal.name())
                 .param("resultado", resultadoJson)
                 .param("actor", Auditoria.ACTOR)
                 .update();

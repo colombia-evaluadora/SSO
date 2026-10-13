@@ -1,5 +1,6 @@
 package com.co.eurekatic.aicontrol.agente.seguridad.entrada.clasificador;
 
+import com.co.eurekatic.aicontrol.agente.comun.JsonDelModelo;
 import com.co.eurekatic.aicontrol.agente.seguridad.CapaSeguridad;
 import com.co.eurekatic.aicontrol.agente.seguridad.Hallazgo;
 import com.co.eurekatic.aicontrol.agente.seguridad.Motivo;
@@ -27,7 +28,7 @@ public final class RespuestaClasificador {
      */
     static Optional<Hallazgo> leer(String salida, JsonMapper json) {
         Objects.requireNonNull(salida, "salida");
-        Clasificacion clasificacion = json.readValue(extraerObjeto(salida), Clasificacion.class);
+        Clasificacion clasificacion = json.readValue(JsonDelModelo.objeto(salida), Clasificacion.class);
         if (clasificacion.riesgo() == null) {
             throw new IllegalArgumentException("La salida no trae riesgo");
         }
@@ -35,18 +36,5 @@ public final class RespuestaClasificador {
         return riesgo == Riesgo.BAJO
                 ? Optional.empty()
                 : Optional.of(new Hallazgo(CapaSeguridad.CLASIFICADOR, riesgo, SOSPECHA));
-    }
-
-    /**
-     * El modelo a veces envuelve el JSON en texto o en una cerca de codigo: se
-     * toma desde la primera llave hasta la ultima.
-     */
-    static String extraerObjeto(String salida) {
-        int inicio = salida.indexOf('{');
-        int fin = salida.lastIndexOf('}');
-        if (inicio < 0 || fin < inicio) {
-            throw new IllegalArgumentException("La salida no contiene un objeto JSON");
-        }
-        return salida.substring(inicio, fin + 1);
     }
 }
