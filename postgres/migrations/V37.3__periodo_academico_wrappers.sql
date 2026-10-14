@@ -219,14 +219,16 @@ LANGUAGE plpgsql STABLE AS $$
 DECLARE v_periodos BIGINT[];
 BEGIN
     -- Alcance resuelto antes de paginar para que total_count cuente solo lo
-    -- visible. Sin usuario no se filtra (fn_periodo_puede_ver(NULL) = TRUE);
-    -- el COALESCE evita que "ninguno visible" (array_agg NULL) se lea como "todos".
+    -- visible, en una pasada (no una llamada por periodo). Sin usuario no se
+    -- filtra; el COALESCE evita que "ninguno visible" (array_agg NULL) se lea
+    -- como "todos".
     IF p_pk_usuario IS NOT NULL THEN
         SELECT COALESCE(array_agg(pa.PK_TPERIODO_ACADEMICO), '{}') INTO v_periodos
           FROM academico_test.TPERIODO_ACADEMICO pa
          WHERE pa.ACTIVE = TRUE
            AND (p_fk_sede IS NULL OR pa.FK_TSEDE = p_fk_sede)
-           AND academico_test.fn_periodo_puede_ver(p_pk_usuario, pa.PK_TPERIODO_ACADEMICO);
+           AND pa.PK_TPERIODO_ACADEMICO IN (
+                   SELECT v.periodo_id FROM academico_test.fn_periodo_visibles(p_pk_usuario) v);
     END IF;
     RETURN QUERY SELECT * FROM academico_test.fn_periodo_listar_interno(
         v_periodos, p_fk_sede, p_nombre_sede, p_ano, p_fk_estado, p_fecha_desde, p_fecha_hasta,
@@ -308,8 +310,8 @@ COMMENT ON FUNCTION academico_test.fn_descanso_eliminar(BIGINT, BIGINT)
     IS 'PUT /periodos-academicos/descansos/:ID. Gate EDITAR con el alcance del periodo del descanso; delega en fn_descanso_eliminar_interno.';
 
 -- ------------------------------------------------- selects de los filtros
--- El alcance (global / establecimientos / sedes del usuario) se calcula una
--- vez aqui y viaja al nucleo como arrays.
+-- Mismo alcance que la tabla (fn_periodo_visibles), resuelto una vez aqui y
+-- pasado al nucleo como array.
 
 -- Firmas viejas de un parametro que quedaron en servidores antiguos.
 DROP FUNCTION IF EXISTS academico_test.fn_periodo_anos_lectivos_listar(BIGINT);
@@ -319,9 +321,7 @@ CREATE OR REPLACE FUNCTION academico_test.fn_periodo_anos_lectivos_listar(
 RETURNS TABLE (id BIGINT, name VARCHAR)
 LANGUAGE sql STABLE AS $$
     SELECT * FROM academico_test.fn_periodo_anos_lectivos_listar_interno(
-        academico_test.fn_periodo_usuario_global(p_pk_usuario),
-        ARRAY(SELECT establecimiento_id FROM academico_test.fn_periodo_usuario_establecimientos(p_pk_usuario)),
-        ARRAY(SELECT sede_id FROM academico_test.fn_periodo_usuario_sedes(p_pk_usuario)));
+        ARRAY(SELECT v.periodo_id FROM academico_test.fn_periodo_visibles(p_pk_usuario) v));
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_periodo_anos_lectivos_listar(BIGINT)
@@ -336,9 +336,7 @@ RETURNS TABLE (id BIGINT, name VARCHAR)
 LANGUAGE sql STABLE AS $$
     SELECT * FROM academico_test.fn_periodo_jornadas_listar_interno(
         p_fk_sede,
-        academico_test.fn_periodo_usuario_global(p_pk_usuario),
-        ARRAY(SELECT establecimiento_id FROM academico_test.fn_periodo_usuario_establecimientos(p_pk_usuario)),
-        ARRAY(SELECT sede_id FROM academico_test.fn_periodo_usuario_sedes(p_pk_usuario)));
+        ARRAY(SELECT v.periodo_id FROM academico_test.fn_periodo_visibles(p_pk_usuario) v));
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_periodo_jornadas_listar(BIGINT, BIGINT)
@@ -351,9 +349,7 @@ CREATE OR REPLACE FUNCTION academico_test.fn_periodo_sedes_listar(
 RETURNS TABLE (id BIGINT, name VARCHAR)
 LANGUAGE sql STABLE AS $$
     SELECT * FROM academico_test.fn_periodo_sedes_listar_interno(
-        academico_test.fn_periodo_usuario_global(p_pk_usuario),
-        ARRAY(SELECT establecimiento_id FROM academico_test.fn_periodo_usuario_establecimientos(p_pk_usuario)),
-        ARRAY(SELECT sede_id FROM academico_test.fn_periodo_usuario_sedes(p_pk_usuario)));
+        ARRAY(SELECT v.periodo_id FROM academico_test.fn_periodo_visibles(p_pk_usuario) v));
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_periodo_sedes_listar(BIGINT)

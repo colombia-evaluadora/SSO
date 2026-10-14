@@ -61,7 +61,8 @@ class NotificationProcessorTest {
         renderer = mock(TemplateRenderer.class);
         senderRegistry = mock(NotificationSenderRegistry.class);
         sender = mock(NotificationSender.class);
-        processor = new NotificationProcessor(validator, logRepository, renderer, senderRegistry);
+        processor = new NotificationProcessor(validator, new NotificationLogWriter(logRepository),
+                renderer, senderRegistry);
     }
 
     @Test
@@ -83,10 +84,8 @@ class NotificationProcessorTest {
     void duplicateIdempotency() {
         NotificationMessage msg = validMessage();
         when(validator.validate(msg)).thenReturn(Collections.emptySet());
-        when(logRepository.saveAndFlush(any(NotificationLog.class)))
-                .thenThrow(new DataIntegrityViolationException("dup"));
         NotificationLog existing = new NotificationLog(msg.notificationId(), msg.channel(),
-                msg.recipient().userId(), msg.templateId(), NotificationStatus.PENDING);
+                msg.recipient().userId(), msg.templateId(), NotificationStatus.SENT);
         when(logRepository.findByNotificationId(msg.notificationId())).thenReturn(Optional.of(existing));
 
         processor.process(msg, Channel.EMAIL);
@@ -94,6 +93,29 @@ class NotificationProcessorTest {
         assertThat(existing.getStatus()).isEqualTo(NotificationStatus.DUPLICATE);
         verify(logRepository).save(existing);
         verify(sender, never()).send(any());
+    }
+
+    @Test
+    @DisplayName("Reintento: 1er intento ProviderException → FAILED; 2do con mismo id se envia y queda SENT")
+    void retryAfterFailureResends() {
+        NotificationMessage msg = validMessage();
+        when(validator.validate(msg)).thenReturn(Collections.emptySet());
+        when(logRepository.saveAndFlush(any(NotificationLog.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(senderRegistry.forChannel(Channel.EMAIL)).thenReturn(sender);
+        when(renderer.render(msg)).thenReturn(rendered(msg));
+        when(sender.send(any())).thenThrow(new ProviderException("upstream timeout")).thenReturn("fake-email");
+
+        assertThatThrownBy(() -> processor.process(msg, Channel.EMAIL)).isInstanceOf(ProviderException.class);
+        ArgumentCaptor<NotificationLog> captor = ArgumentCaptor.forClass(NotificationLog.class);
+        verify(logRepository).saveAndFlush(captor.capture());
+        NotificationLog row = captor.getValue();
+        assertThat(row.getStatus()).isEqualTo(NotificationStatus.FAILED);
+
+        when(logRepository.findByNotificationId(msg.notificationId())).thenReturn(Optional.of(row));
+        processor.process(msg, Channel.EMAIL);
+
+        assertThat(row.getStatus()).isEqualTo(NotificationStatus.SENT);
+        verify(sender, times(2)).send(any());
     }
 
     @Test

@@ -12,12 +12,16 @@ import java.util.Map;
 /**
  * Fuentes, modelo y guardado de un resumen de observaciones.
  *
- * <p>Se guarda con {@code OBSERVACION = OBSERVACION_IA}: la base deduce el
- * estado comparando ambos, asi que el texto nace APROBADA y pasa a
- * MODIFICADA en cuanto el docente lo edite desde la pantalla.
+ * <p>El texto del modelo se guarda como BORRADOR ({@code ES_BORRADOR = "S"}):
+ * no sale en el boletin hasta que un humano lo guarde desde la pantalla, y
+ * ahi la base deduce APROBADA (sin cambios) o MODIFICADA (editado). Se guarda
+ * por el mismo endpoint que la pantalla para que apliquen las mismas reglas
+ * (gate, periodo cerrado); sus 4xx se propagan con el mensaje de la base.
  */
 @Service
 public class ResumenObservacionService {
+
+    static final String ESTADO_BORRADOR = "BORRADOR";
 
     private final QueryServiceClient queryService;
     private final GeneradorResumen generador;
@@ -53,9 +57,10 @@ public class ResumenObservacionService {
         guardar.put("OBSERVACION", texto);
         guardar.put("OBSERVACION_IA", texto);
         guardar.put(tipo.campoOrigen(), fuentes.piezas().size());
+        guardar.put("ES_BORRADOR", "S");
         queryService.post(tipo.rutaGuardar(), bearer, guardar);
 
-        return new ResumenResponse(texto, fuentes.piezas().size(), "APROBADA", g.modelo(),
+        return new ResumenResponse(texto, fuentes.piezas().size(), ESTADO_BORRADOR, g.modelo(),
                 g.tokensEntrada(), g.tokensSalida(), (System.nanoTime() - inicio) / 1_000_000, g.desdeCache());
     }
 }

@@ -4,16 +4,21 @@
 --   destino es NOTA_FINAL), y la deshace al retirarla. Con varios Refuerzos
 --   manda el mas reciente con nota (Regla 67, fn_actividad_refuerzo_vigente).
 -- Depende de: V22, V220 (periodo por fecha), V227 (piso/tope, grado), V239
---   (criterio vigente, accesores, definitiva proyectada).
+--   (criterio vigente, accesores, definitiva proyectada). fn_recuperacion_combinar
+--   y fn_actividad_recuperacion_consolidar viven hoy en V496.19.
 
 -- 1. Accesores de configuracion (mismo estilo que los de V239).
 CREATE OR REPLACE FUNCTION academico_test.fn_criterio_evaluacion_desempeno_sin_calificar(
     p_pk_criterio BIGINT
 )
 RETURNS VARCHAR
-LANGUAGE sql
+LANGUAGE plpgsql
 STABLE
 AS $$
+BEGIN
+    -- plpgsql y no sql: una sql con FROM no se incrusta y se replanifica en
+    -- cada llamada; aqui el plan queda en cache. Primera fila o NULL, como antes.
+    RETURN (SELECT * FROM (
     SELECT CASE
                WHEN UPPER(COALESCE(lv.NOMBRE, '') || ' ' || COALESCE(lv.VALOR, '')) LIKE '%MENOR%'  THEN 'MENOR'
                WHEN UPPER(COALESCE(lv.NOMBRE, '') || ' ' || COALESCE(lv.VALOR, '')) LIKE '%NINGUN%' THEN 'NINGUNA'
@@ -22,7 +27,9 @@ AS $$
       FROM academico_test.TCRITERIO_EVALUACION ce
       JOIN academico_test.TLISTA_VALOR lv
         ON lv.PK_LISTA_VALOR = ce.FK_TLV_DESEMPENO_SIN_CALIF
-     WHERE ce.PK_TCRITERIO_EVALUACION = p_pk_criterio;
+     WHERE ce.PK_TCRITERIO_EVALUACION = p_pk_criterio
+    ) q LIMIT 1);
+END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_criterio_evaluacion_desempeno_sin_calificar(BIGINT)
@@ -106,55 +113,6 @@ COMMENT ON FUNCTION academico_test.fn_recuperacion_definitiva_periodo(BIGINT, BI
 -- ---------------------------------------------------------------------------
 -- 4. La combinacion. Punto UNICO de las cuatro variantes.
 -- ---------------------------------------------------------------------------
-CREATE OR REPLACE FUNCTION academico_test.fn_recuperacion_combinar(
-    p_nota_base         NUMERIC,
-    p_nota_recuperacion NUMERIC,
-    p_aplicacion        VARCHAR,
-    p_calculo           VARCHAR,
-    p_ponderacion       NUMERIC,
-    p_politica_sin_nota VARCHAR,
-    p_piso              NUMERIC
-)
-RETURNS NUMERIC
-LANGUAGE plpgsql
-IMMUTABLE
-AS $$
-DECLARE
-    v_base NUMERIC := p_nota_base;
-BEGIN
-    IF p_nota_recuperacion IS NULL THEN
-        RETURN NULL;
-    END IF;
-
-    -- REEMPLAZAR no mira la nota anterior, asi que no necesita politica.
-    IF p_aplicacion = 'REEMPLAZAR' THEN
-        RETURN ROUND(p_nota_recuperacion, 2);
-    END IF;
-
-    -- COMPUTAR sin nota previa: lo decide el colegio, no esta funcion.
-    IF v_base IS NULL THEN
-        IF p_politica_sin_nota = 'MENOR' THEN
-            v_base := COALESCE(p_piso, 0);
-        ELSIF p_politica_sin_nota = 'NINGUNA' THEN
-            RETURN ROUND(p_nota_recuperacion, 2);
-        ELSE
-            RETURN NULL;
-        END IF;
-    END IF;
-
-    IF p_calculo = 'PONDERADO' AND p_ponderacion IS NOT NULL THEN
-        RETURN ROUND(p_nota_recuperacion * p_ponderacion / 100
-                     + v_base * (100 - p_ponderacion) / 100, 2);
-    END IF;
-
-    RETURN ROUND((v_base + p_nota_recuperacion) / 2, 2);
-END;
-$$;
-
-COMMENT ON FUNCTION academico_test.fn_recuperacion_combinar(NUMERIC, NUMERIC, VARCHAR, VARCHAR, NUMERIC, VARCHAR, NUMERIC)
-    IS 'Definicion UNICA de como una nota de recuperacion se combina con la nota anterior, compartida por los dos destinos (ACTIVIDAD y NOTA_FINAL) para que recuperar una actividad y recuperar la nota final del periodo no den numeros distintos con la misma configuracion. Todo en PORCENTAJE 0-100. Las cuatro combinaciones de TACTIVIDAD_RECUPERACION (V22): REEMPLAZAR ignora la nota anterior Y el tipo de calculo -- devuelve la recuperacion tal cual, y por eso es el unico caso que no necesita politica de "sin nota previa"; COMPUTAR+PONDERADO devuelve recuperacion*p/100 + base*(100-p)/100, donde p es VALOR_PONDERACION_RECUPERACION y es el peso de LA RECUPERACION, no el de la nota anterior (la pantalla lo dice literalmente: "Este porcentaje corresponde al valor de la recuperacion. El valor restante se aplicara a la nota actual"); COMPUTAR+PROMEDIADO devuelve el promedio simple de las dos. PONDERADO sin ponderacion cargada cae a promedio simple en vez de fallar, mismo criterio que V239 con TUNIDAD.PONDERACION: ponderar con un peso que no existe seria inventarselo. SIN NOTA PREVIA en COMPUTAR no se decide aqui con una constante: se recibe ya resuelta la politica institucional (fn_criterio_evaluacion_desempeno_sin_calificar) -- MENOR toma como base el piso PORCENTAJE_INICIAL_CALIF que tambien se recibe (0 si el colegio no lo puso), NINGUNA hace que la recuperacion valga el total, y cualquier otra cosa (incluido el colegio que no lo configuro) devuelve NULL para que el llamador se abstenga de escribir en vez de suponer una nota que nadie definio. Recuperacion NULL entra y sale NULL: "aun no hay nota de recuperacion". NO acota con el tope ni con el piso: eso es fn_actividad_nota_ajustar_por_criterio (V227) y lo aplica el llamador, para no tener la misma regla en dos sitios. Funcion PURA (IMMUTABLE): no lee tablas, no escribe, no gatea -- es aritmetica, y aislarla es lo que permite probar las cuatro combinaciones sin montar un estudiante. Redondea a 2 decimales, la escala de las columnas destino. V408.';
-
-
 -- ---------------------------------------------------------------------------
 -- 5. Regla 67: con varios Refuerzos de la misma actividad, manda el mas
 --    reciente que ya tenga nota para ese estudiante.
@@ -258,203 +216,6 @@ COMMENT ON FUNCTION academico_test.fn_actividad_recuperacion_revertir(BIGINT, BI
 -- ---------------------------------------------------------------------------
 -- 7. El orquestador. Se llama en cada calificacion; sale rapido si no aplica.
 -- ---------------------------------------------------------------------------
-CREATE OR REPLACE FUNCTION academico_test.fn_actividad_recuperacion_consolidar(
-    p_pk_usuario_solicitante   BIGINT,
-    p_pk_tactividad_estudiante BIGINT,
-    p_pk_tactividad_excluir    BIGINT
-)
-RETURNS JSONB
-LANGUAGE plpgsql
-AS $$
-DECLARE
-    v_pk_tactividad   BIGINT;
-    v_fk_tmatricula   BIGINT;
-    v_fk_tasignatura  BIGINT;
-    v_es_recuperacion CHAR(1);
-    v_destino         VARCHAR;
-    v_aplicacion      VARCHAR;
-    v_calculo         VARCHAR;
-    v_ponderacion     NUMERIC;
-    v_fk_recuperar    BIGINT;
-    v_nota_recup      NUMERIC;
-    v_fk_tgrado       BIGINT;
-    v_pk_criterio     BIGINT;
-    v_politica        VARCHAR;
-    v_piso            NUMERIC;
-    v_base            NUMERIC;
-    v_definitiva      NUMERIC;
-    v_pk_destino      BIGINT;
-    v_fk_periodo_eval BIGINT;
-    v_pk_ae_rec       BIGINT;
-    v_pk_ae_orig      BIGINT;
-    v_usuario         VARCHAR := p_pk_usuario_solicitante::VARCHAR;
-BEGIN
-    SELECT ae.FK_TACTIVIDAD, ae.FK_TMATRICULA, a.ES_RECUPERACION, a.FK_TASIGNATURA
-      INTO v_pk_tactividad, v_fk_tmatricula, v_es_recuperacion, v_fk_tasignatura
-      FROM academico_test.TACTIVIDAD_ESTUDIANTE ae
-      JOIN academico_test.TACTIVIDAD a ON a.PK_TACTIVIDAD = ae.FK_TACTIVIDAD
-     WHERE ae.PK_TACTIVIDAD_ESTUDIANTE = p_pk_tactividad_estudiante;
-
-    IF v_es_recuperacion IS DISTINCT FROM 'S' THEN
-        -- Si ESTA es la actividad recuperada por otra, recalificarla tiene que
-        -- rehacer la consolidacion con el Refuerzo que manda: la base cambio.
-        -- Profundidad 1: no se puede recuperar una recuperacion (Regla 64).
-        v_pk_ae_rec := academico_test.fn_actividad_refuerzo_vigente(
-                           v_pk_tactividad, v_fk_tmatricula, p_pk_tactividad_excluir);
-        IF v_pk_ae_rec IS NULL THEN
-            RETURN jsonb_build_object('aplicada', FALSE, 'motivo', 'NO_ES_RECUPERACION');
-        END IF;
-        RETURN academico_test.fn_actividad_recuperacion_consolidar(
-                   p_pk_usuario_solicitante, v_pk_ae_rec, p_pk_tactividad_excluir)
-               || jsonb_build_object('reaplicada_desde_original', TRUE);
-    END IF;
-
-    SELECT lv_d.VALOR, lv_a.VALOR, lv_c.VALOR,
-           r.VALOR_PONDERACION_RECUPERACION, r.FK_TACTIVIDAD_RECUPERAR
-      INTO v_destino, v_aplicacion, v_calculo, v_ponderacion, v_fk_recuperar
-      FROM academico_test.TACTIVIDAD_RECUPERACION r
-      JOIN academico_test.TLISTA_VALOR lv_d ON lv_d.PK_LISTA_VALOR = r.FK_TLV_DESTINO_RECUPERACION
-      JOIN academico_test.TLISTA_VALOR lv_a ON lv_a.PK_LISTA_VALOR = r.FK_TLV_TIPO_APLICACION_RECUPERACION
-      JOIN academico_test.TLISTA_VALOR lv_c ON lv_c.PK_LISTA_VALOR = r.FK_TLV_TIPO_CALCULO_RECUPERACION
-     WHERE r.FK_TACTIVIDAD = v_pk_tactividad AND r.ACTIVE = TRUE;
-
-    IF v_destino IS NULL THEN
-        RETURN jsonb_build_object('aplicada', FALSE, 'motivo', 'SIN_CONFIGURACION');
-    END IF;
-
-    SELECT n.CALIFICACION INTO v_nota_recup
-      FROM academico_test.TACTIVIDAD_NOTA n
-     WHERE n.FK_TACTIVIDAD_ESTUDIANTE = p_pk_tactividad_estudiante AND n.ACTIVE = TRUE;
-
-    IF v_nota_recup IS NULL THEN
-        RETURN jsonb_build_object('aplicada', FALSE, 'motivo', 'SIN_NOTA_DE_RECUPERACION');
-    END IF;
-
-    -- Configuracion institucional: politica de "sin calificar" y piso.
-    v_fk_tgrado := academico_test.fn_actividad_grado_resolver(v_pk_tactividad);
-    IF v_fk_tgrado IS NOT NULL AND v_fk_tasignatura IS NOT NULL THEN
-        v_pk_criterio := academico_test.fn_asignatura_criterio_evaluacion_vigente(
-                             v_fk_tasignatura, v_fk_tgrado);
-    END IF;
-    IF v_pk_criterio IS NOT NULL THEN
-        v_politica := academico_test.fn_criterio_evaluacion_desempeno_sin_calificar(v_pk_criterio);
-        v_piso     := academico_test.fn_criterio_evaluacion_porcentaje_inicial(v_pk_criterio);
-    END IF;
-
-    -- ----- Destino ACTIVIDAD: la nota del MISMO estudiante en la original.
-    IF v_destino = 'ACTIVIDAD' THEN
-        SELECT ae.PK_TACTIVIDAD_ESTUDIANTE INTO v_pk_ae_orig
-          FROM academico_test.TACTIVIDAD_ESTUDIANTE ae
-         WHERE ae.FK_TACTIVIDAD = v_fk_recuperar
-           AND ae.FK_TMATRICULA = v_fk_tmatricula
-           AND ae.ACTIVE = TRUE;
-        IF v_pk_ae_orig IS NULL THEN
-            RETURN jsonb_build_object('aplicada', FALSE, 'motivo', 'DESTINO_NO_ASIGNADO');
-        END IF;
-        IF academico_test.fn_actividad_refuerzo_vigente(v_fk_recuperar, v_fk_tmatricula, p_pk_tactividad_excluir)
-           IS DISTINCT FROM p_pk_tactividad_estudiante THEN
-            RETURN jsonb_build_object('aplicada', FALSE, 'motivo', 'REFUERZO_POSTERIOR_VIGENTE');
-        END IF;
-
-        -- Asignado pero nunca calificado: no hay fila todavia. Se crea (V227)
-        -- para que la politica de "sin calificar" tenga donde escribir.
-        v_pk_destino := academico_test.fn_actividad_nota_get_or_create(p_pk_usuario_solicitante, v_pk_ae_orig);
-        SELECT n.CALIFICACION INTO v_base
-          FROM academico_test.TACTIVIDAD_NOTA n WHERE n.PK_TACTIVIDAD_NOTA = v_pk_destino;
-
-        v_definitiva := academico_test.fn_recuperacion_combinar(
-                            v_base, v_nota_recup, v_aplicacion, v_calculo,
-                            v_ponderacion, v_politica, v_piso);
-        IF v_definitiva IS NULL THEN
-            RETURN jsonb_build_object('aplicada', FALSE, 'motivo', 'SIN_POLITICA_SIN_CALIFICAR');
-        END IF;
-
-        v_definitiva := academico_test.fn_actividad_nota_ajustar_por_criterio(
-                            v_pk_tactividad, v_definitiva);
-
-        UPDATE academico_test.TACTIVIDAD_NOTA
-           SET RECUPERACION = v_nota_recup,
-               DEFINITIVA   = v_definitiva,
-               MODIFIED_BY  = v_usuario,
-               MODIFIED_AT  = CURRENT_TIMESTAMP
-         WHERE PK_TACTIVIDAD_NOTA = v_pk_destino;
-
-    -- ----- Destino NOTA_FINAL: la nota del periodo en TASIGNATURA_NOTA.
-    ELSE
-        IF academico_test.fn_criterio_evaluacion_nota_final_editable(v_pk_criterio) = FALSE THEN
-            RETURN jsonb_build_object('aplicada', FALSE, 'motivo', 'NOTA_FINAL_NO_EDITABLE');
-        END IF;
-
-        v_fk_periodo_eval := academico_test.fn_actividad_periodo_evaluacion(
-                                 v_pk_tactividad, v_fk_tmatricula);
-        IF v_fk_periodo_eval IS NULL OR v_fk_tasignatura IS NULL THEN
-            RETURN jsonb_build_object('aplicada', FALSE, 'motivo', 'SIN_PERIODO_DE_EVALUACION');
-        END IF;
-
-        SELECT sn.PK_TASIGNATURA_NOTA, sn.CALIFICACION
-          INTO v_pk_destino, v_base
-          FROM academico_test.TASIGNATURA_NOTA sn
-         WHERE sn.FK_TMATRICULA          = v_fk_tmatricula
-           AND sn.FK_TPERIODO_EVALUACION = v_fk_periodo_eval
-           AND sn.FK_TASIGNATURA         = v_fk_tasignatura
-           AND sn.ACTIVE = TRUE;
-
-        IF v_base IS NULL THEN
-            v_base := academico_test.fn_recuperacion_definitiva_periodo(
-                          v_fk_tmatricula, v_fk_tasignatura, v_fk_periodo_eval);
-        END IF;
-
-        v_definitiva := academico_test.fn_recuperacion_combinar(
-                            v_base, v_nota_recup, v_aplicacion, v_calculo,
-                            v_ponderacion, v_politica, v_piso);
-        IF v_definitiva IS NULL THEN
-            RETURN jsonb_build_object('aplicada', FALSE, 'motivo', 'SIN_POLITICA_SIN_CALIFICAR');
-        END IF;
-
-        v_definitiva := academico_test.fn_actividad_nota_ajustar_por_criterio(
-                            v_pk_tactividad, v_definitiva);
-
-        IF v_pk_destino IS NULL THEN
-            INSERT INTO academico_test.TASIGNATURA_NOTA (
-                FK_TMATRICULA, FK_TPERIODO_EVALUACION, FK_TASIGNATURA,
-                CALIFICACION, RECUPERACION, DEFINITIVA, CREATED_BY, CREATED_AT, ACTIVE
-            ) VALUES (
-                v_fk_tmatricula, v_fk_periodo_eval, v_fk_tasignatura,
-                v_base, v_nota_recup, v_definitiva, v_usuario, CURRENT_TIMESTAMP, TRUE
-            )
-            ON CONFLICT (FK_TMATRICULA, FK_TPERIODO_EVALUACION, FK_TASIGNATURA)
-                WHERE ACTIVE = TRUE
-            DO UPDATE SET RECUPERACION = EXCLUDED.RECUPERACION,
-                          DEFINITIVA   = EXCLUDED.DEFINITIVA,
-                          MODIFIED_BY  = v_usuario,
-                          MODIFIED_AT  = CURRENT_TIMESTAMP
-            RETURNING PK_TASIGNATURA_NOTA INTO v_pk_destino;
-        ELSE
-            UPDATE academico_test.TASIGNATURA_NOTA
-               SET RECUPERACION = v_nota_recup,
-                   DEFINITIVA   = v_definitiva,
-                   MODIFIED_BY  = v_usuario,
-                   MODIFIED_AT  = CURRENT_TIMESTAMP
-             WHERE PK_TASIGNATURA_NOTA = v_pk_destino;
-        END IF;
-    END IF;
-
-    RETURN jsonb_build_object(
-        'aplicada',          TRUE,
-        'destino',           v_destino,
-        'tipo_aplicacion',   v_aplicacion,
-        'tipo_calculo',      v_calculo,
-        'pk_destino',        v_pk_destino,
-        'nota_base',         v_base,
-        'nota_recuperacion', v_nota_recup,
-        'definitiva',        v_definitiva
-    );
-END;
-$$;
-
-COMMENT ON FUNCTION academico_test.fn_actividad_recuperacion_consolidar(BIGINT, BIGINT, BIGINT)
-    IS 'Consolida la nota de una recuperacion sobre su destino: el escritor que faltaba. Se invoca DESPUES de cada escritura de TACTIVIDAD_NOTA.CALIFICACION en V227 (los seis sitios de los cuatro instrumentos, individual y bulk) y lo PRIMERO que hace es salir si la actividad no es de recuperacion, que es el caso mayoritario: el coste en la ruta caliente es una consulta por PK. Lee la config 1:1 de TACTIVIDAD_RECUPERACION (V22) y combina con fn_recuperacion_combinar, unica definicion de las cuatro variantes. DESTINO ACTIVIDAD: escribe RECUPERACION y DEFINITIVA en la TACTIVIDAD_NOTA que ESE MISMO estudiante tiene en la actividad recuperada, emparejando por FK_TMATRICULA -- una recuperacion aplicada a un grupo consolida a cada estudiante contra SU propia nota anterior, no contra un promedio. DESTINO NOTA_FINAL: escribe en TASIGNATURA_NOTA por (matricula, periodo de evaluacion, asignatura), la capa donde vive la nota final del periodo; el periodo se resuelve por fecha con fn_actividad_periodo_evaluacion, la base sale de la fila ya consolidada o, si no existe, de fn_recuperacion_definitiva_periodo, y la fila se crea con CALIFICACION = esa base para que siempre se pueda explicar de donde salio la definitiva. Escribir ahi consolida de hecho esa asignatura de ese periodo, igual que hace fn_informe_planilla_guardar del modulo de Informes con una sola asignatura; no se recalculan las metricas de TINFORME_PERIODO_MATRICULA, que son de aquel modulo. Si la actividad calificada NO es una recuperacion pero SI es la recuperada por otra activa, la llamada se REENVIA a la fila del Refuerzo que manda para ese estudiante (fn_actividad_refuerzo_vigente, Regla 67: el mas reciente con nota; profundidad 1): recalificar la original cambia la base y la DEFINITIVA tiene que rehacerse, no quedarse con el numero viejo; el JSONB vuelve con reaplicada_desde_original=true. Un estudiante asignado a la original pero nunca calificado no tiene fila en TACTIVIDAD_NOTA: se crea con fn_actividad_nota_get_or_create (V227) y se entra por la politica de sin calificar, que es justo el caso para el que existe; DESTINO_NO_ASIGNADO queda solo para quien no esta en la original. LA BASE NUNCA ES DEFINITIVA, SIEMPRE CALIFICACION: DEFINITIVA es la SALIDA de esta funcion, asi que recalcular desde ella acumularia la recuperacion sobre si misma cada vez que el docente corrige la nota; leyendo CALIFICACION la operacion es IDEMPOTENTE y volver a calificar la recuperacion recalcula desde cero. El resultado pasa por fn_actividad_nota_ajustar_por_criterio (V227) con la PK de la actividad de RECUPERACION y no la del destino: asi se aplica el tope PORCENTAJE_MAXIMO_RECUPERACION -- es una nota que sale de una recuperacion, que es lo que ese tope acota -- y tambien el piso, sin duplicar esa regla en dos sitios. NO ESCRIBE Y DEVUELVE EL MOTIVO en vez de lanzar excepcion, porque calificar no es el sitio donde bloquear al docente por configuracion que no es suya: NO_ES_RECUPERACION, SIN_CONFIGURACION, SIN_NOTA_DE_RECUPERACION (la rubrica aun incompleta), DESTINO_NO_ASIGNADO (al estudiante nunca se le asigno la actividad original), SIN_PERIODO_DE_EVALUACION, NOTA_FINAL_NO_EDITABLE (el colegio cerro la nota final del periodo, FK_TLV_MODIF_FINAL_PERACA) y REFUERZO_POSTERIOR_VIGENTE (otro Refuerzo mas reciente del estudiante ya manda, Regla 67), SIN_POLITICA_SIN_CALIFICAR (COMPUTAR sobre un estudiante sin nota previa y sin FK_TLV_DESEMPENO_SIN_CALIF configurado: no se inventa la base). Devuelve JSONB con aplicada mas el detalle del calculo, para que la pantalla pueda explicar la nota y para poder probar la funcion sin leer las tablas. NO gatea permisos: helper interno, siempre invocado desde una funcion de V227 que ya valido EDITAR sobre PLANEADOR. LO QUE NO HACE: no decide promocion -- TCRITERIO_PROMOCION se consulta al promover, no al calificar. p_pk_tactividad_excluir deja fuera un Refuerzo que se esta retirando (lo usa fn_actividad_recuperacion_revertir). V408.';
-
 CREATE OR REPLACE FUNCTION academico_test.fn_actividad_recuperacion_aplicar(
     p_pk_usuario_solicitante   BIGINT,
     p_pk_tactividad_estudiante BIGINT

@@ -139,10 +139,11 @@ public class DataSourceConfig {
                 .build();
         ds.setPoolName("query-" + name);
         ds.setMaximumPoolSize(entry.getMaximumPoolSize());
-        ds.setConnectionTimeout(entry.getHikari().getConnectionTimeout());
-        ds.setIdleTimeout(entry.getHikari().getIdleTimeout());
-        ds.setMaxLifetime(entry.getHikari().getMaxLifetime());
-        ds.setMinimumIdle(entry.getHikari().getMinimumIdle());
+        DataSourceProps.HikariProps h = entry.getHikari();
+        ds.setIdleTimeout(h.getIdleTimeout());
+        tune(ds, name, entry.getMaximumPoolSize(), h.getConnectionTimeout(),
+                h.getMinimumIdle(), h.getMaxLifetime(), h.getKeepaliveTime(),
+                h.getLeakDetectionThreshold(), h.getStatementTimeoutMs());
         return ds;
     }
 
@@ -167,11 +168,35 @@ public class DataSourceConfig {
                 ? p.getInstanceName()
                 : dialect;
         ds.setPoolName("query-" + instanceName);
-        ds.setMaximumPoolSize(p.getMaximumPoolSize());
+        tune(ds, dialect, p.getMaximumPoolSize(), p.getConnectionTimeoutMs(),
+                p.getMinimumIdle(), p.getMaxLifetimeMs(), p.getKeepaliveTimeMs(),
+                p.getLeakDetectionMs(), p.getStatementTimeoutMs());
         log.info("Datasource '{}' ready (instance): pool={}, max={}, url={}",
                 dialect, ds.getPoolName(), p.getMaximumPoolSize(),
                 redact(p.getUrl()));
         return ds;
+    }
+
+    /**
+     * Pool tunables shared by both boot modes: fail fast on pool
+     * exhaustion, keep a small warm core, recycle connections before
+     * the network drops them, and (postgres) cap a statement
+     * server-side as a safety net above the JDBC query timeout.
+     */
+    private static void tune(HikariDataSource ds, String dialect, int pool,
+                             long connectionTimeoutMs, int minimumIdle,
+                             long maxLifetimeMs, long keepaliveMs,
+                             long leakDetectionMs, long statementTimeoutMs) {
+        ds.setMaximumPoolSize(pool);
+        ds.setConnectionTimeout(connectionTimeoutMs);
+        ds.setMinimumIdle(Math.min(minimumIdle, pool));
+        ds.setMaxLifetime(maxLifetimeMs);
+        ds.setKeepaliveTime(keepaliveMs);
+        ds.setLeakDetectionThreshold(leakDetectionMs);
+        if ("postgres".equals(dialect) && statementTimeoutMs > 0) {
+            ds.addDataSourceProperty("options",
+                    "-c statement_timeout=" + statementTimeoutMs);
+        }
     }
 
     private static void requireDriver(String name, String driver) {

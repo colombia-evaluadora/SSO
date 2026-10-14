@@ -17,6 +17,7 @@ DROP FUNCTION IF EXISTS academico_test.fn_actividad_calendario_docente(BIGINT, D
 DROP FUNCTION IF EXISTS academico_test.fn_actividad_calendario_docente(BIGINT, DATE, DATE, BIGINT, BIGINT, BIGINT, INT, VARCHAR[]);
 
 DROP FUNCTION IF EXISTS academico_test.fn_actividad_calendario(BIGINT, DATE, DATE, BIGINT, BIGINT, BIGINT, INT, BIGINT, VARCHAR[]);
+DROP FUNCTION IF EXISTS academico_test.fn_actividad_calendario(BIGINT, DATE, DATE, BIGINT, BIGINT, BIGINT, INT, BIGINT, VARCHAR[], BIGINT, BIGINT);
 CREATE OR REPLACE FUNCTION academico_test.fn_actividad_calendario(
     p_pk_usuario_solicitante   BIGINT,
     p_fecha_desde              DATE,
@@ -28,7 +29,10 @@ CREATE OR REPLACE FUNCTION academico_test.fn_actividad_calendario(
     p_fk_tfuncionario          BIGINT    DEFAULT NULL,
     p_grado_asignatura_pares   VARCHAR[] DEFAULT NULL,
     p_fk_sede                  BIGINT DEFAULT NULL,
-    p_fk_periodo               BIGINT DEFAULT NULL
+    p_fk_periodo               BIGINT DEFAULT NULL,
+    p_estados                  VARCHAR[] DEFAULT NULL,
+    p_fk_tlv_instrumento       BIGINT    DEFAULT NULL,
+    p_search                   VARCHAR   DEFAULT NULL
 )
 RETURNS TABLE (
     fecha             DATE,
@@ -156,14 +160,38 @@ BEGIN
                      OR split_part(par.valor, ':', 2)::BIGINT = a.FK_TASIGNATURA
                   )
            ))
+       -- Filtros avanzados del tablero: estado derivado (mismo que la columna
+       -- estado) e instrumento de evaluacion, como en fn_actividad_listar_interno.
+       AND (p_estados IS NULL OR academico_test.fn_actividad_estado(
+                a.FECHA_INICIO, a.FECHA_CIERRE, a.FECHA_CALIFICADO, v_hoy, p_dias_gracia
+            ) = ANY(p_estados))
+       AND (p_fk_tlv_instrumento IS NULL OR a.FK_TLV_INSTRUMENTO_EVALUACION = p_fk_tlv_instrumento)
+       -- Texto libre del buscador, mismo match que fn_actividad_listar_interno
+       -- (titulo+descripcion, nivel de ensenanza de la unidad o instrumento).
+       AND (p_search IS NULL
+            OR (COALESCE(a.TITULO,'') || ' ' || COALESCE(a.DESCRIPCION,''))
+                   ILIKE '%' || p_search || '%'
+            OR EXISTS (
+                   SELECT 1
+                     FROM academico_test.TUNIDAD u2
+                     JOIN academico_test.TGRADO g2            ON g2.PK_TGRADO = u2.FK_TGRADO
+                     JOIN academico_test.TNIVEL_ENSENANZA ne2 ON ne2.PK_NIVEL_ENSENANZA = g2.FK_TNIVEL_ENSENANZA
+                    WHERE u2.PK_TUNIDAD = a.FK_TUNIDAD
+                      AND ne2.NOMBRE ILIKE '%' || p_search || '%')
+            OR EXISTS (
+                   SELECT 1
+                     FROM academico_test.TLISTA_VALOR lvs
+                    WHERE lvs.PK_LISTA_VALOR = a.FK_TLV_INSTRUMENTO_EVALUACION
+                      AND lvs.NOMBRE ILIKE '%' || p_search || '%'))
      ORDER BY 1, g.NOMBRE NULLS LAST, a.TITULO;
 END;
 $$;
 
-COMMENT ON FUNCTION academico_test.fn_actividad_calendario(BIGINT, DATE, DATE, BIGINT, BIGINT, BIGINT, INT, BIGINT, VARCHAR[], BIGINT, BIGINT)
+COMMENT ON FUNCTION academico_test.fn_actividad_calendario(BIGINT, DATE, DATE, BIGINT, BIGINT, BIGINT, INT, BIGINT, VARCHAR[], BIGINT, BIGINT, VARCHAR[], BIGINT, VARCHAR)
     IS 'etiqueta = grado/grupo + titulo ("601 · Debate"): va en la CELDA del calendario. Actividades de un rango de fechas para la grilla mensual del Planeador: fecha (dia de anclaje ya resuelto), fecha_inicio/fecha_cierre crudas, titulo, grupo, asignatura, area y estado derivado. Rango OBLIGATORIO y sin paginacion. El rango filtra por SOLAPAMIENTO con [FECHA_INICIO, FECHA_CIERRE]; p_fk_tfuncionario acota al docente que DICTA via TDOCENTE_ASIGNATURA. p_grado_asignatura_pares (V528): acota a una pestaña de Rotulo de Ejecucion (fn_planeador_actividad_tabs_listar, V525) -- VARCHAR[] de "grado:asignatura" (asignatura vacío = comodín), mismo contrato que fn_actividad_listar_interno (V526), nunca JSONB. Gate VER sobre PLANEADOR. V224/V251/V528. Alcance via fn_planeador_alcance_docente: en nivel 3 solo periodos de sus pares sede+jornada.';
 
 DROP FUNCTION IF EXISTS academico_test.fn_actividad_calendario_docente(BIGINT, DATE, DATE, BIGINT, BIGINT, BIGINT, INT, VARCHAR[], BIGINT);
+DROP FUNCTION IF EXISTS academico_test.fn_actividad_calendario_docente(BIGINT, DATE, DATE, BIGINT, BIGINT, BIGINT, INT, VARCHAR[], BIGINT, BIGINT, BIGINT);
 CREATE OR REPLACE FUNCTION academico_test.fn_actividad_calendario_docente(
     p_pk_usuario_solicitante   BIGINT,
     p_fecha_desde              DATE,
@@ -175,7 +203,10 @@ CREATE OR REPLACE FUNCTION academico_test.fn_actividad_calendario_docente(
     p_grado_asignatura_pares   VARCHAR[] DEFAULT NULL,
     p_fk_tfuncionario          BIGINT    DEFAULT NULL,
     p_fk_sede                  BIGINT DEFAULT NULL,
-    p_fk_periodo               BIGINT DEFAULT NULL
+    p_fk_periodo               BIGINT DEFAULT NULL,
+    p_estados                  VARCHAR[] DEFAULT NULL,
+    p_fk_tlv_instrumento       BIGINT    DEFAULT NULL,
+    p_search                   VARCHAR   DEFAULT NULL
 )
 RETURNS TABLE (
     fecha             DATE,
@@ -208,7 +239,7 @@ BEGIN
     SELECT * INTO v_alc
       FROM academico_test.fn_planeador_alcance_docente(p_pk_usuario_solicitante, p_fk_tfuncionario, p_fk_sede, p_fk_periodo);
 
-    IF v_alc.fk_tfuncionario IS NULL AND (v_alc.solo_propias OR v_alc.alcance_total) THEN
+    IF v_alc.fk_tfuncionario IS NULL AND v_alc.solo_propias THEN
         RETURN;
     END IF;
 
@@ -216,10 +247,11 @@ BEGIN
     SELECT * FROM academico_test.fn_actividad_calendario(
         p_pk_usuario_solicitante, p_fecha_desde, p_fecha_hasta,
         p_fk_tasignatura, p_fk_tgrupo, p_fk_tunidad, p_dias_gracia,
-        v_alc.fk_tfuncionario, p_grado_asignatura_pares, p_fk_sede, p_fk_periodo
+        v_alc.fk_tfuncionario, p_grado_asignatura_pares, p_fk_sede, p_fk_periodo,
+        p_estados, p_fk_tlv_instrumento, p_search
     );
 END;
 $$;
 
-COMMENT ON FUNCTION academico_test.fn_actividad_calendario_docente(BIGINT, DATE, DATE, BIGINT, BIGINT, BIGINT, INT, VARCHAR[], BIGINT, BIGINT, BIGINT)
-    IS 'Grilla mensual del tablero del Planeador: mismas columnas y reglas que fn_actividad_calendario, acotada al docente que resuelve fn_planeador_alcance_docente. Docente puro: el suyo (ignora p_fk_tfuncionario; sin funcionario, 0 filas). Otros con p_fk_tfuncionario (?funcionario=): ese docente, 42501 si no dicta nada en su alcance. Otros sin él: todo su alcance (nivel 3: pares sede+jornada); alcance total sin docente elegido: 0 filas. p_grado_asignatura_pares (V528): acota a una pestaña de Rotulo de Ejecucion, mismo contrato que fn_actividad_listar_docente (V526/V527). Gate VER sobre PLANEADOR. V251/V528.';
+COMMENT ON FUNCTION academico_test.fn_actividad_calendario_docente(BIGINT, DATE, DATE, BIGINT, BIGINT, BIGINT, INT, VARCHAR[], BIGINT, BIGINT, BIGINT, VARCHAR[], BIGINT, VARCHAR)
+    IS 'Grilla mensual del tablero del Planeador: mismas columnas y reglas que fn_actividad_calendario, acotada al docente que resuelve fn_planeador_alcance_docente. Docente puro: el suyo (ignora p_fk_tfuncionario; sin funcionario, 0 filas). Otros con p_fk_tfuncionario (?funcionario=): ese docente, 42501 si no dicta nada en su alcance. Otros sin él: todo su alcance (nivel 3: pares sede+jornada; alcance total: todas las sedes, el rango de fechas lo acota). p_grado_asignatura_pares (V528): acota a una pestaña de Rotulo de Ejecucion, mismo contrato que fn_actividad_listar_docente (V526/V527). Gate VER sobre PLANEADOR. V251/V528.';

@@ -43,23 +43,30 @@ RETURNS TABLE (sede_id BIGINT) LANGUAGE sql STABLE AS $$
        AND su.FK_TROL IN (11);
 $$;
 
+-- Periodos que el usuario puede ver. Los listados lo resuelven una vez en vez
+-- de llamar a la booleana por fila; la booleana se apoya en esta.
+CREATE OR REPLACE FUNCTION academico_test.fn_periodo_usuario_periodos(p_pk_usuario BIGINT)
+RETURNS TABLE (periodo_id BIGINT) LANGUAGE sql STABLE AS $$
+    SELECT pa.PK_TPERIODO_ACADEMICO
+      FROM academico_test.TPERIODO_ACADEMICO pa
+      JOIN academico_test.TSEDE s ON s.PK_TSEDE = pa.FK_TSEDE
+     WHERE academico_test.fn_periodo_usuario_global(p_pk_usuario)
+        OR s.FK_TESTABLECIMIENTO IN (
+               SELECT establecimiento_id
+                 FROM academico_test.fn_periodo_usuario_establecimientos(p_pk_usuario))
+        OR pa.FK_TSEDE IN (
+               SELECT sede_id
+                 FROM academico_test.fn_periodo_usuario_sedes(p_pk_usuario));
+$$;
+
 CREATE OR REPLACE FUNCTION academico_test.fn_periodo_usuario_puede_ver(
     p_pk_usuario BIGINT, p_fk_periodo BIGINT
 )
 RETURNS BOOLEAN LANGUAGE sql STABLE AS $$
     SELECT academico_test.fn_periodo_usuario_global(p_pk_usuario)
-        OR EXISTS (
-            SELECT 1
-              FROM academico_test.TPERIODO_ACADEMICO pa
-              JOIN academico_test.TSEDE s ON s.PK_TSEDE = pa.FK_TSEDE
-             WHERE pa.PK_TPERIODO_ACADEMICO = p_fk_periodo
-               AND ( s.FK_TESTABLECIMIENTO IN (
-                         SELECT establecimiento_id
-                           FROM academico_test.fn_periodo_usuario_establecimientos(p_pk_usuario))
-                     OR pa.FK_TSEDE IN (
-                         SELECT sede_id
-                           FROM academico_test.fn_periodo_usuario_sedes(p_pk_usuario)) )
-        );
+        OR EXISTS (SELECT 1
+                     FROM academico_test.fn_periodo_usuario_periodos(p_pk_usuario)
+                    WHERE periodo_id = p_fk_periodo);
 $$;
 
 -- fn_periodo_ano_lectivo_asegurar_interno hace ON CONFLICT (FK_TESTABLECIMIENTO,

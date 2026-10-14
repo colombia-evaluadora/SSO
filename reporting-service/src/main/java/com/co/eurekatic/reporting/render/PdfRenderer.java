@@ -39,7 +39,11 @@ import net.sf.jasperreports.export.SimpleOutputStreamExporterOutput;
 // net.sf.jasperreports.engine.export (ahi vivia en 6.x): se movio al
 // modulo jasperreports-pdf, bajo net.sf.jasperreports.pdf.
 import net.sf.jasperreports.pdf.JRPdfExporter;
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
 import org.slf4j.Logger;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.slf4j.LoggerFactory;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.stereotype.Component;
@@ -54,6 +58,7 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
@@ -72,7 +77,7 @@ import java.util.concurrent.ConcurrentHashMap;
  * sin tocar código. Un reporte que tarda una semana en existir porque falta el
  * diseño es un reporte que no existe.
  *
- * <p>Las plantillas compiladas se cachean por clave y ancho de columnas:
+ * <p>Las plantillas compiladas se cachean por clave y ancho de columnas (acotadas, ver {@code REPORTING_TEMPLATE_CACHE_MAX}):
  * compilar cuesta bastante más que llenar, y el diseño solo cambia si cambian
  * las columnas.
  */
@@ -85,7 +90,26 @@ public class PdfRenderer {
     private static final DateTimeFormatter FECHA_HORA =
             DateTimeFormatter.ofPattern("dd/MM/yyyy 'a las' hh:mm a", java.util.Locale.US);
 
-    private final Map<String, JasperReport> compiladas = new ConcurrentHashMap<>();
+    /** Granularidad (en puntos) a la que se redondean los anchos antes de armar clave y diseño. */
+    private static final int BUCKET_ANCHO = 10;
+
+    /**
+     * Acotada: la clave incluye anchos derivados de los datos, y sin tope cada
+     * combinación nueva se quedaba compilada para siempre.
+     */
+    private final Cache<String, JasperReport> compiladas;
+
+    /** Bytes del .jrxml por clave de reporte (vacío = el reporte no tiene plantilla). */
+    private final Cache<String, Optional<byte[]>> plantillas = Caffeine.newBuilder().maximumSize(500).build();
+
+    public PdfRenderer() {
+        this(200);
+    }
+
+    @Autowired
+    public PdfRenderer(@Value("${REPORTING_TEMPLATE_CACHE_MAX:200}") long maxPlantillas) {
+        this.compiladas = Caffeine.newBuilder().maximumSize(Math.max(1, maxPlantillas)).build();
+    }
 
     /** Crosstabs elasticos de cada plantilla, solo para contar sus columnas. */
     private final Map<String, List<JRDesignCrosstab>> elasticos = new ConcurrentHashMap<>();
@@ -116,9 +140,24 @@ public class PdfRenderer {
                          ReportMeta meta,
                          List<String> columnasPedidas,
                          Imagenes imagenes) {
+        return render(clave, def, rows, meta, columnasPedidas, imagenes, Map.of());
+    }
+
+    /**
+     * Variante con parametros extra para la plantilla (p.ej. la marca de agua
+     * MARCA_VERIFICACION de la copia publica del boletin). Una plantilla que
+     * no los declara los ignora.
+     */
+    public byte[] render(String clave,
+                         ReportingProperties.Report def,
+                         List<Map<String, Object>> rows,
+                         ReportMeta meta,
+                         List<String> columnasPedidas,
+                         Imagenes imagenes,
+                         Map<String, Object> extra) {
         try {
             Map<String, String> columnas = ColumnLayout.resolver(def, rows, columnasPedidas);
-            int[] anchos = ColumnLayout.anchos(columnas, rows, usableWidth());
+            int[] anchos = agruparAnchos(ColumnLayout.anchos(columnas, rows, usableWidth()), usableWidth());
 
             // El ancho SOLO no alcanza como clave de cache: dos subconjuntos
             // de columnas distintos pueden coincidir en cantidad y en el
@@ -135,7 +174,7 @@ public class PdfRenderer {
             List<Integer> conteos = conteosElasticos(clave, rows);
             String cacheKey = clave + "#" + columnas.keySet() + "#" + java.util.Arrays.toString(anchos)
                     + "#" + conteos;
-            JasperReport report = compiladas.computeIfAbsent(
+            JasperReport report = compiladas.get(
                     cacheKey, k -> compilar(clave, columnas, anchos, conteos));
 
             Map<String, Object> params = new HashMap<>();
@@ -144,6 +183,9 @@ public class PdfRenderer {
             params.put("TOTAL", rows.size());
             params.put("USUARIO", meta == null || meta.usuario() == null ? "" : meta.usuario());
             params.put("FILTROS", meta == null ? "" : meta.filtrosLegibles());
+            if (extra != null) {
+                params.putAll(extra);
+            }
 
             JasperPrint print = JasperFillManager.fillReport(
                     report, params,
@@ -160,6 +202,35 @@ public class PdfRenderer {
             throw new IllegalStateException(
                     "No se pudo generar el PDF del reporte '" + clave + "'", e);
         }
+    }
+
+    /**
+     * Redondea cada ancho a múltiplos de {@link #BUCKET_ANCHO} y deja el resto
+     * en la columna más ancha, para que la suma siga siendo el ancho útil.
+     * Sin esto, anchos que difieren en un punto producen claves (y compilaciones)
+     * distintas para el mismo diseño visual.
+     */
+    static int[] agruparAnchos(int[] anchos, int total) {
+        int n = anchos.length;
+        if (n == 0) {
+            return anchos;
+        }
+        int[] out = new int[n];
+        int suma = 0;
+        int masAncha = 0;
+        for (int i = 0; i < n; i++) {
+            out[i] = Math.max(BUCKET_ANCHO, Math.round(anchos[i] / (float) BUCKET_ANCHO) * BUCKET_ANCHO);
+            suma += out[i];
+            if (out[i] > out[masAncha]) {
+                masAncha = i;
+            }
+        }
+        int resto = total - suma;
+        if (out[masAncha] + resto < BUCKET_ANCHO) {
+            return anchos;
+        }
+        out[masAncha] += resto;
+        return out;
     }
 
     private static int usableWidth() {
@@ -187,11 +258,26 @@ public class PdfRenderer {
                 (imagenes == null || def == null || def.getImageFields() == null)
                         ? java.util.Set.of()
                         : new java.util.HashSet<>(def.getImageFields());
-        // Bucle y no stream: el cast de Map<String,Object> a Map<String,?>
-        // dentro del map() hace que se infiera List<Map<String,capture-of-?>>,
-        // que no es asignable a List<Map<String,?>>.
-        List<Map<String, ?>> out = new ArrayList<>(rows.size());
-        for (Map<String, Object> row : rows) {
+        // Vista perezosa: cada fila se aplana cuando Jasper la pide y se suelta
+        // al avanzar, en vez de duplicar las 50k filas en memoria antes de llenar.
+        return new java.util.AbstractList<Map<String, ?>>() {
+            @Override
+            public int size() {
+                return rows.size();
+            }
+
+            @Override
+            public Map<String, ?> get(int i) {
+                return normalizarFila(rows.get(i), columnas, imagen, imagenes);
+            }
+        };
+    }
+
+    private Map<String, ?> normalizarFila(Map<String, Object> row,
+                                          Map<String, String> columnas,
+                                          java.util.Set<String> imagen,
+                                          Imagenes imagenes) {
+        {
             Map<String, Object> limpia = new LinkedHashMap<>();
             for (String col : columnas.keySet()) {
                 if (imagen.contains(col)) {
@@ -205,9 +291,8 @@ public class PdfRenderer {
                     limpia.put(col, CellValues.toText(row.get(col)));
                 }
             }
-            out.add(limpia);
+            return limpia;
         }
-        return out;
     }
 
     /** El pk de un TARCHIVO tal como lo devuelve el JSON: Integer, Long o texto. */
@@ -242,15 +327,31 @@ public class PdfRenderer {
         return conteos;
     }
 
-    /** El diseño de reportes/{clave}.jrxml, o null si el reporte no tiene plantilla. */
-    private static JasperDesign cargarPlantilla(String clave) {
-        ClassPathResource plantilla = new ClassPathResource("reportes/" + clave + ".jrxml");
-        if (!plantilla.exists()) {
+    /**
+     * El diseño de reportes/{clave}.jrxml, o null si el reporte no tiene plantilla.
+     *
+     * <p>Se cachean los bytes y no el {@code JasperDesign}: {@link CrosstabElastico#ajustar}
+     * lo muta en sitio (por deltas), así que compartir un diseño ya parseado
+     * entre peticiones concurrentes daría anchos de otra exportación.
+     */
+    private JasperDesign cargarPlantilla(String clave) {
+        byte[] xml = plantillas.get(clave, k -> {
+            ClassPathResource plantilla = new ClassPathResource("reportes/" + k + ".jrxml");
+            if (!plantilla.exists()) {
+                return Optional.empty();
+            }
+            try (InputStream in = plantilla.getInputStream()) {
+                return Optional.of(in.readAllBytes());
+            } catch (IOException e) {
+                throw new IllegalStateException("No se pudo leer la plantilla del reporte '" + k + "'", e);
+            }
+        }).orElse(null);
+        if (xml == null) {
             return null;
         }
-        try (InputStream in = plantilla.getInputStream()) {
-            return JRXmlLoader.load(in);
-        } catch (JRException | IOException e) {
+        try {
+            return JRXmlLoader.load(new java.io.ByteArrayInputStream(xml));
+        } catch (JRException e) {
             throw new IllegalStateException("No se pudo leer la plantilla del reporte '" + clave + "'", e);
         }
     }

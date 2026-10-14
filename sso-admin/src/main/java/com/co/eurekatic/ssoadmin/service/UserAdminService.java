@@ -819,7 +819,7 @@ public class UserAdminService {
      */
     @Transactional(readOnly = true)
     public List<UserResponse> getUsers() {
-        return userRepository.findAll().stream()
+        return userRepository.findAllWithRolesBy().stream()
                 .map(UserResponse::fromEntity)
                 .toList();
     }

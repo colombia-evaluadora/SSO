@@ -10,6 +10,7 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.Map;
 import java.util.concurrent.LinkedBlockingQueue;
@@ -22,11 +23,14 @@ public class ClickHouseLogClient {
     private static final ObjectMapper mapper = new ObjectMapper();
 
     private final String clickhouseUrl;
-    private final HttpClient http = HttpClient.newHttpClient();
+    private static final Duration REQUEST_TIMEOUT = Duration.ofSeconds(5);
+
+    private final HttpClient http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(2)).build();
     private final ThreadPoolExecutor executor = new ThreadPoolExecutor(
             1, 2, 60, TimeUnit.SECONDS,
             new LinkedBlockingQueue<>(1000),
-            r -> { Thread t = new Thread(r, "ch-log-writer"); t.setDaemon(true); return t; }
+            r -> { Thread t = new Thread(r, "ch-log-writer"); t.setDaemon(true); return t; },
+            new ThreadPoolExecutor.DiscardPolicy()
     );
 
     public ClickHouseLogClient(String clickhouseUrl) {
@@ -54,6 +58,7 @@ public class ClickHouseLogClient {
                         .uri(uri)
                         .POST(HttpRequest.BodyPublishers.ofString(body))
                         .header("Content-Type", "application/json")
+                        .timeout(REQUEST_TIMEOUT)
                         .build();
                 HttpResponse<String> resp = http.send(req, HttpResponse.BodyHandlers.ofString());
                 if (resp.statusCode() != 200) {

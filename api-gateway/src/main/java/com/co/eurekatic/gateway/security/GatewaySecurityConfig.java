@@ -245,8 +245,18 @@ public class GatewaySecurityConfig {
                         // la autorización real es "¿esta clasificación
                         // es pública?", no "¿quién sos?".
                         .pathMatchers("/api/files/public/**").permitAll()
+                        // Verificacion publica del boletin por QR (pagina
+                        // /verificar/b/:codigo del front, sin sesion). Solo el
+                        // estado (GET) y el PDF con segundo factor (POST .../pdf);
+                        // cualquier otra ruta de /api/reportes sigue exigiendo
+                        // JWT. La autorizacion real es el codigo y los 4
+                        // digitos del documento, que valida la base; el
+                        // reporting-service limita por IP (X-Client-Ip) y por
+                        // intentos fallidos de cada codigo.
+                        .pathMatchers(HttpMethod.GET, "/api/reportes/public/boletin/*").permitAll()
+                        .pathMatchers(HttpMethod.POST, "/api/reportes/public/boletin/*/pdf").permitAll()
                         .pathMatchers("/actuator/health", "/actuator/health/**",
-                                "/actuator/info", "/actuator/prometheus").permitAll()
+                                "/actuator/info").permitAll()
                         // OpenAPI aggregator — Swagger UI + merged doc + webjars.
                         // Public because the rendered UI helps devs poke the
                         // gateway without a token; the actual API endpoints

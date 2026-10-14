@@ -1,6 +1,8 @@
 package com.co.eurekatic.query.read;
 
 import com.co.eurekatic.query.web.metadata.TableInfo;
+import com.co.eurekatic.query.resilience.QueryResilience;
+import io.github.resilience4j.bulkhead.BulkheadFullException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -64,9 +66,12 @@ public class TablesService {
     private static final Pattern SCHEMA_PATTERN = Pattern.compile("[a-zA-Z0-9_]*");
 
     private final Map<String, DataSource> sources;
+    private final QueryResilience resilience;
 
-    public TablesService(@Qualifier("queryDataSources") Map<String, DataSource> sources) {
+    public TablesService(@Qualifier("queryDataSources") Map<String, DataSource> sources,
+              QueryResilience resilience) {
         this.sources = sources;
+        this.resilience = resilience;
     }
 
     /**
@@ -112,6 +117,12 @@ public class TablesService {
                     "schema must match [a-zA-Z0-9_]+ (no LIKE meta-chars)");
         }
 
+        // Same per-dialect bulkhead as the query path: metadata calls
+        // compete for the same Hikari pool, so they must not bypass it.
+        var bulkhead = resilience.bulkheadFor(key);
+        if (!bulkhead.tryAcquirePermission()) {
+            throw BulkheadFullException.createBulkheadFullException(bulkhead);
+        }
         try (Connection conn = ds.getConnection()) {
             ResultSet rs = conn.getMetaData().getTables(
                     null, sp, null, new String[]{"TABLE"});
@@ -132,6 +143,8 @@ public class TablesService {
             // SQLException itself has no status mapping.
             throw new IllegalStateException(
                     "Failed to enumerate tables for dialect " + key, e);
+        } finally {
+            bulkhead.onComplete();
         }
     }
 }

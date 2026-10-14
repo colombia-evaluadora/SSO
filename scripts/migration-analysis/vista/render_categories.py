@@ -18,6 +18,8 @@ CAT_CSS = """
 .catmap span{display:block;height:100%}
 .catmap.big{height:16px;margin:8px 0 4px}
 .lg-b{background:var(--sunk)}
+/* la linea entera a la vista: con scroll propio parecia montada sobre la tabla */
+.catline-grid{max-height:none;overflow:visible;margin-bottom:16px}
 .catline-grid .slot{background:var(--c);color:#fff;cursor:pointer;border:1px solid transparent;
  width:auto;min-width:38px;padding:2px 4px}
 .catline-grid .slot:hover{filter:brightness(1.15)}
@@ -46,6 +48,18 @@ CAT_CSS = """
 .catmigs{display:flex;flex-wrap:wrap;gap:4px}
 .catlegend{display:flex;flex-wrap:wrap;gap:4px 14px;font-size:12px;color:var(--muted);margin:6px 0 12px}
 .catlegend span{cursor:default}
+.qc{display:inline-block;min-width:52px;text-align:center;font-family:var(--mono);font-size:11.5px;
+ font-weight:600;padding:1px 7px;border-radius:9px;border:1px solid var(--c);color:var(--c);
+ background:color-mix(in srgb,var(--c) 12%,transparent);cursor:help}
+.qc-ok{--c:var(--live)} .qc-warn{--c:var(--resid)} .qc-bad{--c:var(--dead)} .qc-na{--c:var(--faint)}
+#qctable td{vertical-align:middle}
+#qctable tr.sel td{background:var(--sunk)}
+.qcaxes{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:10px}
+.qcaxis{border:1px solid var(--rule);border-left:3px solid var(--c);border-radius:5px;
+ padding:8px 10px;background:var(--panel)}
+.qcaxis h4{margin:0 0 4px;font-size:12.5px;display:flex;justify-content:space-between;gap:6px}
+.qcaxis ul{margin:0;padding-left:16px;font-size:12px;color:var(--muted)}
+.qcaxis .ej{margin-top:4px;font-size:11.5px}
 """
 
 
@@ -79,6 +93,23 @@ CAT_PANEL = """
     <th class="sortable" data-k="people">Personas</th>
     <th class="sortable" data-k="last">Última</th>
   </tr></thead><tbody id="catbody"></tbody></table></div>
+
+  <h2>Calidad por categoría</h2>
+  <p class="note">Cada columna mide una regla de <code>.claude/rules/migraciones.md</code> sobre
+  las funciones y endpoints <b>vivos</b> de la categoría (el grafo de llamadas que queda tras
+  todas las reescrituras). Verde = cumple, ámbar = mirar, rojo = la incumple. El cursor sobre una
+  celda da el detalle; clic en la fila abre la categoría con ejemplos concretos.
+  <b>Seguridad</b>: endpoints con gate en su cadena. <b>Componentización</b>: escrituras que
+  delegan en un <code>_interno</code>, sin gate dentro del núcleo ni escrito a mano.
+  <b>Reutilización</b>: helpers y núcleos llamados desde más de un sitio, sin funciones muertas ni
+  reportes propios. <b>Extensibilidad</b>: profundidad de la cadena, ciclos, firmas cambiadas y
+  <code>EXECUTE</code> dinámico. <b>Optimización</b>: listados con <code>plan_cache_mode</code>
+  y sin OFFSET. <b>Lint</b>: errores / avisos del linter, deuda incluida.</p>
+  <div class="tablewrap"><table id="qctable"><thead><tr>
+    <th>Categoría</th><th style="text-align:right">Funciones</th><th style="text-align:right">Endpoints</th>
+    <th>Seguridad</th><th>Componentización</th><th>Reutilización</th><th>Extensibilidad</th>
+    <th>Optimización</th><th>Lint</th>
+  </tr></thead><tbody id="qcbody"></tbody></table></div>
 
   <h2>Grafo de relaciones</h2>
   <div class="controls">
@@ -196,6 +227,112 @@ $$('#cattable th.sortable').forEach(th => th.addEventListener('click', () => {
   renderCatOverview();
 }));
 
+/* ---------- calidad por categoría ---------- */
+const QC = D.qc || {}, LSEV = D.lintsev || {};
+const QC_AXES = [['seg', 'Seguridad'], ['comp', 'Componentización'], ['reu', 'Reutilización'],
+  ['ext', 'Extensibilidad'], ['opt', 'Optimización'], ['lint', 'Lint']];
+const QC_RANK = {bad: 3, warn: 2, ok: 1, na: 0};
+
+function lintOfCat(i) {
+  let err = 0, av = 0;
+  const reglas = {};
+  Object.entries(D.lintv || {}).forEach(([v, rs]) => {
+    if (catOfMig(v) !== i) return;
+    Object.entries(rs).forEach(([r, n]) => {
+      reglas[r] = (reglas[r] || 0) + n;
+      if (LSEV[r] === 'error') err += n; else av += n;
+    });
+  });
+  return {err, av, reglas};
+}
+
+/* Los umbrales son deliberadamente simples: el valor sirve para ordenar dónde
+   mirar, el detalle (title y panel) dice qué incumple y con ejemplos. */
+function qcAxes(i) {
+  const d = C.defs[i], q = QC[d.id];
+  if (!q) return null;
+  const pc = (a, b) => b ? Math.round(100 * a / b) : 100;
+  const ej = (...ks) => ks.flatMap(k => q.ejemplos[k] || []);
+  const L = lintOfCat(i);
+  const del = pc(q.delegan, q.escrituras), hr = pc(q.helpers_reusados, q.helpers);
+  const cut = pc(d.cut_lines, d.lines);
+  const ax = {
+    seg: {nivel: !q.endpoints ? 'na' : q.sin_gate ? 'bad' : q.gate_en_linea_ep ? 'warn' : 'ok',
+      val: q.endpoints ? `${q.endpoints - q.sin_gate}/${q.endpoints}` : '—',
+      det: [`${q.endpoints} endpoints vivos`,
+        q.sin_gate && `${q.sin_gate} sin ningún gate ni filtro de alcance en su cadena`,
+        q.gate_en_linea_ep && `${q.gate_en_linea_ep} controlan con un 42501 escrito a mano`],
+      ej: ej('sin_gate')},
+    comp: {nivel: q.violaciones || (q.escrituras && del < 40) ? 'bad'
+        : (q.escrituras && del < 80) || q.gate_a_mano ? 'warn' : 'ok',
+      val: q.escrituras ? `${del}%` : q.gate_a_mano ? `${q.gate_a_mano} a mano` : '—',
+      det: [`${q.delegan} de ${q.escrituras} escrituras delegan en un _interno`,
+        q.violaciones && `${q.violaciones} núcleos o validaciones llaman a un gate`,
+        q.gate_a_mano && `${q.gate_a_mano} funciones con el gate escrito a mano (42501 en el cuerpo)`,
+        `capas: ${Object.entries(q.capas).sort((a, b) => b[1] - a[1]).map(([c, n]) => `${c} ${n}`).join(' · ')}`],
+      ej: ej('violaciones', 'sin_nucleo', 'gate_a_mano')},
+    reu: {nivel: q.reportes || q.sin_uso > 3 ? 'bad' : (q.helpers && hr < 30) || q.sin_uso ? 'warn' : 'ok',
+      val: q.helpers ? `${hr}%` : '—',
+      det: [`${q.helpers_reusados} de ${q.helpers} helpers y núcleos los llama más de un sitio`,
+        q.validaciones && `${q.validaciones_reusadas} de ${q.validaciones} validaciones reutilizadas`,
+        q.sin_uso && `${q.sin_uso} funciones que nadie llama`,
+        q.reportes && `${q.reportes} funciones de reporte propias (deberían llamar al núcleo de la pantalla)`,
+        `${q.desde_fuera} llamadas desde otras categorías`],
+      ej: ej('reportes', 'sin_uso')},
+    ext: {nivel: q.ciclos || d.callsite_issues ? 'bad' : q.prof_max > 12 || q.dinamicas || d.sig_changes ? 'warn' : 'ok',
+      val: `prof. ${q.prof_max}`,
+      det: [q.ciclos && `${q.ciclos} ciclos de llamadas`, `cadena más larga: ${q.prof_max} niveles`,
+        d.sig_changes && `${d.sig_changes} firmas cambiadas`,
+        d.callsite_issues && `${d.callsite_issues} llamadas desalineadas`,
+        q.dinamicas && `${q.dinamicas} funciones con EXECUTE dinámico (dependencias que el grafo no ve)`,
+        `${q.hacia_fuera} llamadas a otras categorías`],
+      ej: []},
+    opt: {nivel: q.plan_generico ? 'bad' : q.offset || cut > 10 ? 'warn' : !q.listados ? 'na' : 'ok',
+      val: q.listados ? `${q.listados - q.plan_generico}/${q.listados}` : '—',
+      det: [`${q.listados} listados vivos`,
+        q.plan_generico && `${q.plan_generico} con filtros opcionales sin plan_cache_mode`,
+        q.offset && `${q.offset} paginan con OFFSET (candidatos a keyset)`,
+        `${cut}% de líneas recortables`],
+      ej: ej('plan_generico')},
+    lint: {nivel: L.err ? 'bad' : L.av ? 'warn' : 'ok', val: L.err || L.av ? `${L.err}/${L.av}` : '0',
+      det: [`${L.err} errores y ${L.av} avisos (deuda incluida)`,
+        ...Object.entries(L.reglas).sort((a, b) => b[1] - a[1]).slice(0, 6).map(([r, n]) => `${r}: ${n}`)],
+      ej: []},
+  };
+  Object.values(ax).forEach(a => { a.det = a.det.filter(Boolean); });
+  return ax;
+}
+
+const qcCell = a => `<span class="qc qc-${a.nivel}" title="${esc(a.det.join('\n'))}">${a.val}</span>`;
+
+function renderQc() {
+  const rows = C.defs.map((d, i) => [d, i, qcAxes(i)]).filter(r => r[2])
+    .sort((a, b) => Object.values(b[2]).reduce((n, x) => n + QC_RANK[x.nivel], 0)
+                  - Object.values(a[2]).reduce((n, x) => n + QC_RANK[x.nivel], 0));
+  $('#qcbody').innerHTML = rows.map(([d, i, ax]) => `
+    <tr class="clickable ${selCat === i ? 'sel' : ''}" data-qccat="${i}">
+      <td style="white-space:nowrap">${catDot(i)}<b>${esc(d.label)}</b></td>
+      <td class="num">${QC[d.id].funciones}</td><td class="num">${QC[d.id].endpoints}</td>
+      ${QC_AXES.map(([k]) => `<td>${qcCell(ax[k])}</td>`).join('')}</tr>`).join('')
+    || '<tr><td colspan="9" class="empty">El modelo no trae la calidad por categoría</td></tr>';
+  $$('#qcbody [data-qccat]').forEach(tr => tr.addEventListener('click', () => {
+    selectCat(+tr.dataset.qccat);
+    $('#catdetail').scrollIntoView({block: 'start'});
+  }));
+}
+
+function qcDetail(i) {
+  const ax = qcAxes(i);
+  if (!ax) return '';
+  return `<h3>Cumplimiento de reglas</h3><div class="qcaxes">${QC_AXES.map(([k, label]) => {
+    const a = ax[k];
+    return `<div class="qcaxis qc-${a.nivel}"><h4>${label} ${qcCell(a)}</h4>
+      <ul>${a.det.map(t => `<li>${esc(t)}</li>`).join('')}</ul>
+      ${a.ej.length ? `<div class="ej">ejemplos: ${a.ej.map(n =>
+        `<button class="objlink" data-qcobj="${esc(n)}">${esc(n)}</button>`).join(', ')}</div>` : ''}</div>`;
+  }).join('')}</div>`;
+}
+
 // uso entrante por objeto: los más usados de una categoría son su núcleo
 const USE_IN = new Map();
 D.uses.forEach(u => USE_IN.set(u[1], (USE_IN.get(u[1]) || 0) + 1));
@@ -261,6 +398,7 @@ function selectCat(i, keepHash) {
       <div><div class="k">Personas</div><div class="n">${d.people.length}</div>
         <div class="s">${esc(d.people[0]?.name || '—')} creó más</div></div>
     </div>
+    ${qcDetail(i)}
     ${catMap(d, true)}${catMapLegend(d)}
     <div class="vstack" title="Veredictos de sus migraciones">${vd.map(v => `<span
       style="width:${100 * d.verdicts[v] / vtot}%;background:${VD_COLOR(v)}" title="${v}: ${d.verdicts[v]}"></span>`).join('')}</div>
@@ -295,6 +433,14 @@ function selectCat(i, keepHash) {
   $$('#catdetail [data-catobj]').forEach(b => b.addEventListener('click', () => {
     $('.tab[data-tab="objetos"]').click(); selectObj(b.dataset.catobj);
   }));
+  $$('#catdetail [data-qcobj]').forEach(b => b.addEventListener('click', () => {
+    $('.tab[data-tab="objetos"]').click();
+    $('#objsearch').value = b.dataset.qcobj; objQ = b.dataset.qcobj; renderObjs();
+    const hit = chainEntries.find(c => c.label === b.dataset.qcobj || c.id.endsWith('.' + b.dataset.qcobj)
+      || c.label.endsWith(' ' + b.dataset.qcobj));
+    if (hit) selectObj(hit.key);
+  }));
+  renderQc();
   if (ccy) catGraph();
 }
 
@@ -396,8 +542,11 @@ function catGraph() {
   ccy = cytoscape({container: $('#catgraph'), elements: catElements(), style: catStyle(),
                    minZoom: .05, maxZoom: 4});
   ccy.layout({name: 'cose', animate: false, randomize: true, fit: true, padding: 24,
-    nodeRepulsion: () => focus ? 7000 : 90000, idealEdgeLength: () => focus ? 60 : 200,
-    gravity: focus ? .3 : .12, numIter: 1500}).run();
+    // la repulsión crece con el área de la burbuja: con un valor fijo las
+    // grandes (Planeador, Matrícula) se montaban sobre las chicas y sus rótulos
+    nodeRepulsion: n => focus ? 7000 : 60000 + 90 * n.width() ** 2, nodeOverlap: 60,
+    idealEdgeLength: e => focus ? 60 : 160 + (e.source().width() + e.target().width()) / 2,
+    gravity: focus ? .3 : .08, numIter: 2000}).run();
   const nn = ccy.nodes();
   $('#cgcount').textContent = focus
     ? `${nn.filter('[kind="mig"]').length} migraciones · ${nn.filter('[kind="obj"]').length} objetos · ` +
@@ -455,5 +604,6 @@ function catDeepLink() {
 }
 window.addEventListener('hashchange', catDeepLink);
 renderCatOverview();
+renderQc();
 catDeepLink();
 """

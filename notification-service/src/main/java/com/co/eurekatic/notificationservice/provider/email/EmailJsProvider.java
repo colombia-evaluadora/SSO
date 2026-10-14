@@ -9,8 +9,11 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
+import org.springframework.http.client.JdkClientHttpRequestFactory;
 import org.springframework.web.client.RestClient;
 
+import java.net.http.HttpClient;
+import java.time.Duration;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
@@ -41,8 +44,17 @@ public class EmailJsProvider implements ChannelProvider {
     private volatile RestClient cachedClient;
     private volatile Map<String, Object> cachedSettings;
 
+    private final Duration connectTimeout;
+    private final Duration readTimeout;
+
     public EmailJsProvider(ProviderRegistry registry) {
+        this(registry, Duration.ofSeconds(3), Duration.ofSeconds(10));
+    }
+
+    public EmailJsProvider(ProviderRegistry registry, Duration connectTimeout, Duration readTimeout) {
         this.registry = registry;
+        this.connectTimeout = connectTimeout;
+        this.readTimeout = readTimeout;
     }
 
     @Override
@@ -87,6 +99,13 @@ public class EmailJsProvider implements ChannelProvider {
         }
     }
 
+    private JdkClientHttpRequestFactory requestFactory() {
+        HttpClient http = HttpClient.newBuilder().connectTimeout(connectTimeout).build();
+        JdkClientHttpRequestFactory factory = new JdkClientHttpRequestFactory(http);
+        factory.setReadTimeout(readTimeout);
+        return factory;
+    }
+
     private synchronized RestClient clientFor(Map<String, Object> settings) {
         if (cachedClient != null && cachedSettings == settings) {
             return cachedClient;
@@ -94,6 +113,7 @@ public class EmailJsProvider implements ChannelProvider {
         String baseUrl = str(settings, "api_base");
         if (baseUrl == null) baseUrl = "https://api.emailjs.com/api/v1.0/email/send";
         cachedClient = RestClient.builder()
+                .requestFactory(requestFactory())
                 .baseUrl(baseUrl)
                 .defaultHeader(HttpHeaders.CONTENT_TYPE, MediaType.APPLICATION_JSON_VALUE)
                 .build();

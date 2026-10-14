@@ -48,8 +48,11 @@ public class SessionInvalidationClient {
 
     public SessionInvalidationClient(
             @Value("${sso.auth-center.base-url:http://auth-center:8081}") String baseUrl,
-            @Value("${sso.session.user-roles.invalidation-secret:}") String secret) {
-        this.http = RestClient.builder().baseUrl(baseUrl).build();
+            @Value("${sso.session.user-roles.invalidation-secret:}") String secret,
+            @Value("${SSO_ADMIN_HTTP_CONNECT_TIMEOUT:2s}") java.time.Duration connectTimeout,
+            @Value("${SSO_ADMIN_HTTP_READ_TIMEOUT:5s}") java.time.Duration readTimeout) {
+        this.http = RestClient.builder().baseUrl(baseUrl)
+                .requestFactory(HttpTimeouts.factory(connectTimeout, readTimeout)).build();
         this.secret = secret;
     }
 

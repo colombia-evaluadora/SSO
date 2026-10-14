@@ -34,6 +34,10 @@ DECLARE
     v_pk_criterio BIGINT;
     v_politica    VARCHAR;
     v_piso        NUMERIC;
+    v_pe_inicio   DATE;
+    v_pe_fin      DATE;
+    v_tipo_correccion BIGINT;
+    v_estado_pendiente BIGINT;
 BEGIN
     SELECT gr.FK_TGRADO INTO v_fk_grado
       FROM academico_test.TMATRICULA m
@@ -46,6 +50,16 @@ BEGIN
         v_politica := academico_test.fn_criterio_evaluacion_desempeno_sin_calificar(v_pk_criterio);
         v_piso     := COALESCE(academico_test.fn_criterio_evaluacion_porcentaje_inicial(v_pk_criterio), 0);
     END IF;
+
+    -- Constantes de la consulta, una vez y no por actividad: las fechas del
+    -- periodo (mismo criterio que fn_actividad_en_periodo_eval: fecha de
+    -- cierre, si no la de inicio, si no la de creacion) y los dos codigos de
+    -- la correccion pendiente. Periodo inexistente: fechas NULL, nada entra.
+    SELECT pe.FECHA_INICIO, pe.FECHA_FIN INTO v_pe_inicio, v_pe_fin
+      FROM academico_test.TPERIODO_EVALUACION pe
+     WHERE pe.PK_TPERIODO_EVALUACION = p_fk_tperiodo_evaluacion;
+    v_tipo_correccion  := academico_test.fn_tlv_solicitud_tipo_pk('CORRECCION_RESULTADO');
+    v_estado_pendiente := academico_test.fn_tlv_solicitud_estado_pk('PENDIENTE');
 
     -- Regla 77. PENDIENTE no tiene valor; la inasistencia justificada sale
     -- siempre del denominador; NO_PRESENTO / no justificada valen el piso de
@@ -82,8 +96,8 @@ BEGIN
                     FROM academico_test.TSOLICITUD_APROBACION s
                    WHERE s.TABLA_OBJETO = 'TACTIVIDAD_ESTUDIANTE'
                      AND s.FK_OBJETO = ae.PK_TACTIVIDAD_ESTUDIANTE
-                     AND s.FK_TLV_TIPO = academico_test.fn_tlv_solicitud_tipo_pk('CORRECCION_RESULTADO')
-                     AND s.FK_TLV_ESTADO = academico_test.fn_tlv_solicitud_estado_pk('PENDIENTE')
+                     AND s.FK_TLV_TIPO = v_tipo_correccion
+                     AND s.FK_TLV_ESTADO = v_estado_pendiente
                      AND s.ACTIVE = TRUE
                    LIMIT 1
               ) sp ON p_con_propuestas
@@ -92,8 +106,8 @@ BEGIN
                AND COALESCE(a.ES_EVALUATIVA::VARCHAR, 'S') = 'S'
                AND COALESCE(a.ES_RECUPERACION::VARCHAR, 'N') <> 'S'
                AND COALESCE(n.CALIFICABLE, 'S') <> 'N'
-               AND academico_test.fn_actividad_en_periodo_eval(
-                       a.PK_TACTIVIDAD, p_fk_tperiodo_evaluacion) = TRUE
+               AND COALESCE(a.FECHA_CIERRE, a.FECHA_INICIO, a.FECHA_CREACION::DATE)
+                       BETWEEN v_pe_inicio AND v_pe_fin
            ) x
      WHERE x.nota IS NOT NULL;
 END;
@@ -103,22 +117,24 @@ COMMENT ON FUNCTION academico_test.fn_asignatura_notas_periodo_interno(BIGINT, B
     IS 'INTERNO: universo de notas que computan para (matricula, asignatura, periodo de evaluacion), una fila por actividad con su peso (PONDERACION), su puntaje (NOTA_MAXIMA) y la nota en porcentaje ya resuelta por la Regla 77 segun TACTIVIDAD_NOTA.FK_TLV_ESTADO_RESULTADO y la politica "Sin calificaciones" del criterio (fn_criterio_evaluacion_desempeno_sin_calificar): PENDIENTE y NO_ASISTIO_JUSTIFICADA nunca computan; NO_PRESENTO y NO_ASISTIO_NO_JUSTIFICADA valen PORCENTAJE_INICIAL_CALIF (0 si no hay) con MENOR y se excluyen con NINGUNA o sin politica. Solo actividades sumativas (ES_EVALUATIVA = S), no de recuperacion (su efecto ya esta en DEFINITIVA) y CALIFICABLE <> N. Con p_con_propuestas la nota propuesta de una CORRECCION_RESULTADO pendiente reemplaza a la vigente. Sin gate. La usa fn_asignatura_definitiva_proyectada_periodo.';
 
 
-CREATE OR REPLACE FUNCTION academico_test.fn_asignatura_definitiva_proyectada_periodo(
+CREATE OR REPLACE FUNCTION academico_test.fn_asignatura_definitiva_proyectada_periodo_detalle(
     p_fk_tmatricula          BIGINT,
     p_fk_tasignatura         BIGINT,
     p_fk_tperiodo_evaluacion BIGINT,
     p_con_propuestas         BOOLEAN
 )
-RETURNS NUMERIC
+RETURNS TABLE(nota NUMERIC, error_configuracion TEXT)
 LANGUAGE plpgsql
 STABLE
 AS $function$
+#variable_conflict use_column
 DECLARE
     v_pk_asignatura_plan BIGINT;
     v_elemento           VARCHAR;
     v_modo               VARCHAR;
     v_resultado          NUMERIC;
     v_falta              VARCHAR;
+    v_notas              JSONB;
 BEGIN
     SELECT academico_test.fn_asignatura_plan_vigente(m.FK_TGRUPO, p_fk_tasignatura)
       INTO v_pk_asignatura_plan
@@ -130,19 +146,25 @@ BEGIN
         v_modo     := academico_test.fn_asignatura_plan_calculo_definitiva_modo(v_pk_asignatura_plan);
     END IF;
 
+    -- Las notas del estudiante se leen UNA vez: la validacion y el calculo
+    -- las recorrian por separado (dos o tres lecturas por llamada).
+    SELECT COALESCE(jsonb_agg(to_jsonb(t)), '[]'::jsonb) INTO v_notas
+      FROM academico_test.fn_asignatura_notas_periodo_interno(
+               p_fk_tmatricula, p_fk_tasignatura, p_fk_tperiodo_evaluacion, p_con_propuestas) t;
+
     IF v_elemento = 'ACTIVIDADES' THEN
         IF v_modo IN ('PONDERAR', 'SUMATORIA') THEN
             SELECT academico_test.fn_actividad_etiqueta(t.pk_tactividad) INTO v_falta
-              FROM academico_test.fn_asignatura_notas_periodo_interno(
-                   p_fk_tmatricula, p_fk_tasignatura, p_fk_tperiodo_evaluacion, p_con_propuestas) t
+              FROM jsonb_to_recordset(v_notas) AS t(pk_tactividad BIGINT, titulo VARCHAR, fk_tunidad BIGINT,
+                                         ponderacion NUMERIC, puntaje NUMERIC, nota NUMERIC)
              WHERE (CASE WHEN v_modo = 'SUMATORIA' THEN t.puntaje ELSE t.ponderacion END) IS NULL
              LIMIT 1;
             IF FOUND THEN
-                RAISE EXCEPTION '% no tiene % y la asignatura calcula por %',
-                    v_falta,
-                    CASE WHEN v_modo = 'SUMATORIA' THEN 'puntaje' ELSE 'ponderacion' END,
-                    v_modo
-                    USING ERRCODE = '22023';
+                RETURN QUERY SELECT NULL::NUMERIC,
+                    format('%s no tiene %s y la asignatura calcula por %s', v_falta,
+                           CASE WHEN v_modo = 'SUMATORIA' THEN 'puntaje' ELSE 'ponderacion' END,
+                           v_modo);
+                RETURN;
             END IF;
         END IF;
 
@@ -157,10 +179,11 @@ BEGIN
                        ELSE AVG(t.nota)
                    END, 2)
           INTO v_resultado
-          FROM academico_test.fn_asignatura_notas_periodo_interno(
-                   p_fk_tmatricula, p_fk_tasignatura, p_fk_tperiodo_evaluacion, p_con_propuestas) t;
+          FROM jsonb_to_recordset(v_notas) AS t(pk_tactividad BIGINT, titulo VARCHAR, fk_tunidad BIGINT,
+                                         ponderacion NUMERIC, puntaje NUMERIC, nota NUMERIC);
 
-        RETURN v_resultado;
+        RETURN QUERY SELECT v_resultado, NULL::TEXT;
+        RETURN;
     END IF;
 
     -- UNIDADES y fallback sin configuracion. Con UNIDADES configurado, una
@@ -172,8 +195,8 @@ BEGIN
                       academico_test.fn_unidad_etiqueta(tu.PK_TUNIDAD),
                       CASE WHEN m.modo = 'SUMATORIA' THEN 'puntaje' ELSE 'ponderacion' END)
           INTO v_falta
-          FROM academico_test.fn_asignatura_notas_periodo_interno(
-                   p_fk_tmatricula, p_fk_tasignatura, p_fk_tperiodo_evaluacion, p_con_propuestas) t
+          FROM jsonb_to_recordset(v_notas) AS t(pk_tactividad BIGINT, titulo VARCHAR, fk_tunidad BIGINT,
+                                         ponderacion NUMERIC, puntaje NUMERIC, nota NUMERIC)
           JOIN academico_test.TUNIDAD tu ON tu.PK_TUNIDAD = t.fk_tunidad
           CROSS JOIN LATERAL (SELECT academico_test.fn_unidad_calculo_definitiva_modo(t.fk_tunidad) AS modo) m
          WHERE (m.modo = 'PONDERAR'  AND t.ponderacion IS NULL)
@@ -186,15 +209,16 @@ BEGIN
                         ELSE format('%s no tiene ponderacion', academico_test.fn_unidad_etiqueta(tu.PK_TUNIDAD))
                    END
               INTO v_falta
-              FROM academico_test.fn_asignatura_notas_periodo_interno(
-                   p_fk_tmatricula, p_fk_tasignatura, p_fk_tperiodo_evaluacion, p_con_propuestas) t
+              FROM jsonb_to_recordset(v_notas) AS t(pk_tactividad BIGINT, titulo VARCHAR, fk_tunidad BIGINT,
+                                         ponderacion NUMERIC, puntaje NUMERIC, nota NUMERIC)
               LEFT JOIN academico_test.TUNIDAD tu ON tu.PK_TUNIDAD = t.fk_tunidad
              WHERE tu.PONDERACION IS NULL
              LIMIT 1;
         END IF;
         IF v_falta IS NOT NULL THEN
-            RAISE EXCEPTION 'No se puede calcular la nota de la asignatura por unidades: %', v_falta
-                USING ERRCODE = '22023';
+            RETURN QUERY SELECT NULL::NUMERIC,
+                'No se puede calcular la nota de la asignatura por unidades: ' || v_falta;
+            RETURN;
         END IF;
     END IF;
 
@@ -207,8 +231,8 @@ BEGIN
                    THEN SUM(t.nota * t.ponderacion) / NULLIF(SUM(t.ponderacion), 0)
                END AS nota_calc,
                AVG(t.nota) AS nota_prom
-          FROM academico_test.fn_asignatura_notas_periodo_interno(
-                   p_fk_tmatricula, p_fk_tasignatura, p_fk_tperiodo_evaluacion, p_con_propuestas) t
+          FROM jsonb_to_recordset(v_notas) AS t(pk_tactividad BIGINT, titulo VARCHAR, fk_tunidad BIGINT,
+                                         ponderacion NUMERIC, puntaje NUMERIC, nota NUMERIC)
          GROUP BY t.fk_tunidad
     ),
     con_peso AS (
@@ -228,7 +252,32 @@ BEGIN
       INTO v_resultado
       FROM con_peso cp;
 
-    RETURN v_resultado;
+    RETURN QUERY SELECT v_resultado, NULL::TEXT;
+END;
+$function$;
+
+-- El calculo vive en _detalle, que devuelve el error de configuracion en vez
+-- de lanzarlo: las lecturas (informes, boletin) lo muestran por celda.
+CREATE OR REPLACE FUNCTION academico_test.fn_asignatura_definitiva_proyectada_periodo(
+    p_fk_tmatricula          BIGINT,
+    p_fk_tasignatura         BIGINT,
+    p_fk_tperiodo_evaluacion BIGINT,
+    p_con_propuestas         BOOLEAN
+)
+RETURNS NUMERIC
+LANGUAGE plpgsql
+STABLE
+AS $function$
+DECLARE
+    r RECORD;
+BEGIN
+    SELECT d.* INTO r
+      FROM academico_test.fn_asignatura_definitiva_proyectada_periodo_detalle(
+               p_fk_tmatricula, p_fk_tasignatura, p_fk_tperiodo_evaluacion, p_con_propuestas) d;
+    IF r.error_configuracion IS NOT NULL THEN
+        RAISE EXCEPTION '%', r.error_configuracion USING ERRCODE = '22023';
+    END IF;
+    RETURN r.nota;
 END;
 $function$;
 
@@ -245,6 +294,9 @@ AS $function$
     SELECT academico_test.fn_asignatura_definitiva_proyectada_periodo(
                p_fk_tmatricula, p_fk_tasignatura, p_fk_tperiodo_evaluacion, FALSE);
 $function$;
+
+COMMENT ON FUNCTION academico_test.fn_asignatura_definitiva_proyectada_periodo_detalle(BIGINT, BIGINT, BIGINT, BOOLEAN)
+    IS 'INTERNO: el calculo de fn_asignatura_definitiva_proyectada_periodo sin lanzar: devuelve (nota, error_configuracion). Un peso o puntaje que falta, una unidad sin PONDERACION o actividades sin unidad salen en error_configuracion con nota NULL. La usan las lecturas de informes (detalle por asignatura, nota requerida) para no abortar el grupo entero por una celda.';
 
 COMMENT ON FUNCTION academico_test.fn_asignatura_definitiva_proyectada_periodo(BIGINT, BIGINT, BIGINT, BOOLEAN)
     IS 'INTERNO: como la de 3 argumentos; con p_con_propuestas TRUE computa las correcciones pendientes de aprobacion (Regla 55) con su nota propuesta. La usa la planilla para la definitiva propuesta.';

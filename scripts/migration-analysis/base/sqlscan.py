@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
+from functools import lru_cache
 
 
 # ---------------------------------------------------------------------------
@@ -36,6 +37,45 @@ class Statement:
         return re.sub(r"\s+", " ", self.text.strip()[:120]).upper()
 
 
+# Donde puede empezar algo que no es texto plano. Saltar hasta ahi con una regex
+# en vez de mirar caracter a caracter, y casar el dollar-quote en su posicion
+# (`pattern.match(s, pos)`) en vez de sobre `s[i:]`, que copiaba el resto del
+# fichero en cada `$`: era el 40% del tiempo del analizador.
+_STOP_STRIP = re.compile(r"['\"$]|--|/\*")
+_STOP_STRIP_DEEP = re.compile(r"['\"]|--|/\*")
+_STOP_SPLIT = re.compile(r"['\";$]")
+_DOLLAR_TAG = re.compile(r"\$[A-Za-z_]\w*\$|\$\$")
+
+
+def _fin_literal(s: str, i: int) -> int:
+    """Indice tras la comilla que cierra el literal abierto en `i` ('' escapa)."""
+    n = len(s)
+    j = i + 1
+    while True:
+        q = s.find("'", j)
+        if q == -1:
+            return n
+        if q + 1 < n and s[q + 1] == "'":
+            j = q + 2
+            continue
+        return q + 1
+
+
+def _fin_identificador(s: str, i: int) -> int:
+    j = s.find('"', i + 1)
+    return len(s) if j == -1 else j + 1
+
+
+def _fin_dollar(s: str, i: int) -> int | None:
+    """Fin del bloque `$tag$ ... $tag$` que abre en `i`, o None si no abre uno."""
+    m = _DOLLAR_TAG.match(s, i)
+    if not m:
+        return None
+    tag = m.group(0)
+    j = s.find(tag, i + len(tag))
+    return len(s) if j == -1 else j + len(tag)
+
+
 def strip_comments(sql: str, deep: bool = False) -> str:
     """
     Quita `-- ...` y `/* ... */` sin tocar literales ni dollar-quotes.
@@ -44,124 +84,97 @@ def strip_comments(sql: str, deep: bool = False) -> str:
     limpian los comentarios de adentro de los cuerpos PL/pgSQL. Hace falta
     para buscar llamadas reales a funciones -- media docena de cuerpos
     mencionan otras funciones en un comentario interno.
+
+    Cacheado por contenido: el modelo, los usos y precision parten el mismo
+    fichero varias veces.
     """
+    return _strip_comments(sql, deep)
+
+
+@lru_cache(maxsize=8192)
+def _strip_comments(sql: str, deep: bool) -> str:
     out: list[str] = []
+    stop = _STOP_STRIP_DEEP if deep else _STOP_STRIP
     i, n = 0, len(sql)
     while i < n:
-        ch = sql[i]
-
-        # literal de cadena: '' escapa la comilla
+        m = stop.search(sql, i)
+        if not m:
+            out.append(sql[i:])
+            break
+        k = m.start()
+        if k > i:
+            out.append(sql[i:k])
+        ch = sql[k]
         if ch == "'":
-            j = i + 1
-            while j < n:
-                if sql[j] == "'":
-                    if j + 1 < n and sql[j + 1] == "'":
-                        j += 2
-                        continue
-                    j += 1
-                    break
-                j += 1
-            out.append(sql[i:j])
-            i = j
-            continue
-
-        # identificador entre comillas dobles
-        if ch == '"':
-            j = sql.find('"', i + 1)
-            j = n if j == -1 else j + 1
-            out.append(sql[i:j])
-            i = j
-            continue
-
-        # dollar quoting: $$ ... $$ o $tag$ ... $tag$
-        if ch == "$" and not deep:
-            m = re.match(r"\$[A-Za-z_]\w*\$|\$\$", sql[i:])
-            if m:
-                tag = m.group(0)
-                j = sql.find(tag, i + len(tag))
-                j = n if j == -1 else j + len(tag)
-                out.append(sql[i:j])
-                i = j
-                continue
-
-        # comentario de linea
-        if sql.startswith("--", i):
-            j = sql.find("\n", i)
+            j = _fin_literal(sql, k)
+            out.append(sql[k:j])
+        elif ch == '"':
+            j = _fin_identificador(sql, k)
+            out.append(sql[k:j])
+        elif ch == "$":
+            j = _fin_dollar(sql, k)
+            if j is None:
+                out.append("$")
+                j = k + 1
+            else:
+                out.append(sql[k:j])
+        elif ch == "-":  # comentario de linea
+            j = sql.find("\n", k)
             j = n if j == -1 else j
-            out.append("\n" * sql.count("\n", i, j))  # preserva numeracion
-            i = j
-            continue
-
-        # comentario de bloque
-        if sql.startswith("/*", i):
-            j = sql.find("*/", i + 2)
+            out.append("\n" * sql.count("\n", k, j))  # preserva numeracion
+        else:  # comentario de bloque
+            j = sql.find("*/", k + 2)
             j = n if j == -1 else j + 2
-            out.append("\n" * sql.count("\n", i, j))
-            i = j
-            continue
-
-        out.append(ch)
-        i += 1
-
+            out.append("\n" * sql.count("\n", k, j))
+        i = j
     return "".join(out)
 
 
 def split_statements(sql: str) -> list[Statement]:
-    """Parte el archivo en sentencias por `;` de nivel superior."""
+    """Parte el archivo en sentencias por `;` de nivel superior.
+
+    Cacheado por contenido; cada llamada recibe su propia lista (las
+    sentencias se comparten: nadie las modifica)."""
+    return list(_split_statements(sql))
+
+
+@lru_cache(maxsize=4096)
+def _split_statements(sql: str) -> tuple[Statement, ...]:
     clean = strip_comments(sql)
     stmts: list[Statement] = []
-
-    i, n = 0, len(clean)
-    start = 0
+    n = len(clean)
+    i = start = 0
+    linea = 1          # linea de `start`, contada de forma incremental
+    contado_hasta = 0
     while i < n:
-        ch = clean[i]
-
+        m = _STOP_SPLIT.search(clean, i)
+        if not m:
+            break
+        k = m.start()
+        ch = clean[k]
         if ch == "'":
-            j = i + 1
-            while j < n:
-                if clean[j] == "'":
-                    if j + 1 < n and clean[j + 1] == "'":
-                        j += 2
-                        continue
-                    j += 1
-                    break
-                j += 1
-            i = j
+            i = _fin_literal(clean, k)
             continue
-
         if ch == '"':
-            j = clean.find('"', i + 1)
-            i = n if j == -1 else j + 1
+            i = _fin_identificador(clean, k)
             continue
-
         if ch == "$":
-            m = re.match(r"\$[A-Za-z_]\w*\$|\$\$", clean[i:])
-            if m:
-                tag = m.group(0)
-                j = clean.find(tag, i + len(tag))
-                i = n if j == -1 else j + len(tag)
-                continue
-
-        if ch == ";":
-            body = clean[start:i]
-            if body.strip():
-                stmts.append(Statement(
-                    text=body.strip(),
-                    line=clean.count("\n", 0, start) + 1,
-                    raw=body,
-                ))
-            start = i + 1
-
-        i += 1
+            j = _fin_dollar(clean, k)
+            i = k + 1 if j is None else j
+            continue
+        body = clean[start:k]  # ';'
+        if body.strip():
+            linea += clean.count("\n", contado_hasta, start)
+            contado_hasta = start
+            stmts.append(Statement(text=body.strip(), line=linea, raw=body))
+        start = k + 1
+        i = k + 1
 
     tail = clean[start:]
     if tail.strip():
-        stmts.append(Statement(
-            text=tail.strip(),
-            line=clean.count("\n", 0, start) + 1,
-            raw=tail,
-        ))
-    return stmts
+        linea += clean.count("\n", contado_hasta, start)
+        stmts.append(Statement(text=tail.strip(), line=linea, raw=tail))
+    return tuple(stmts)
 
 
 # ---------------------------------------------------------------------------
@@ -246,6 +259,7 @@ def find_top_level(text: str, pattern: str) -> int:
     return -1
 
 
+@lru_cache(maxsize=16384)
 def mask_inert(sql: str, strings: bool = True, dollar: bool = True) -> str:
     """
     Misma longitud y mismos saltos de linea, con lo que NO se ejecuta al migrar

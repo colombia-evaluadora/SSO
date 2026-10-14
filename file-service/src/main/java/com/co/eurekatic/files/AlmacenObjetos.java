@@ -52,6 +52,9 @@ public class AlmacenObjetos {
 
     private final S3Client s3;
     private final String bucket;
+    /** Bucket del sistema anterior (solo lectura); null si no se configura. */
+    private final String bucketLegado;
+    private final S3Client s3Legado;
 
     public AlmacenObjetos(
             @Value("${files.s3.endpoint:}") String endpoint,
@@ -59,9 +62,28 @@ public class AlmacenObjetos {
             @Value("${files.s3.bucket}") String bucket,
             @Value("${files.s3.access-key}") String accessKey,
             @Value("${files.s3.secret-key}") String secretKey,
-            @Value("${files.s3.path-style:true}") boolean pathStyle) {
+            @Value("${files.s3.path-style:true}") boolean pathStyle,
+            @Value("${files.s3.legado.bucket:}") String bucketLegado,
+            @Value("${files.s3.legado.region:us-east-1}") String regionLegado,
+            @Value("${files.s3.legado.access-key:}") String accessKeyLegado,
+            @Value("${files.s3.legado.secret-key:}") String secretKeyLegado) {
 
         this.bucket = bucket;
+        // Archivos migrados del sistema anterior: no se copian, se leen de
+        // su bucket en AWS. Solo lectura: subir y borrar van siempre al
+        // bucket propio.
+        if (bucketLegado != null && !bucketLegado.isBlank()) {
+            this.bucketLegado = bucketLegado;
+            this.s3Legado = S3Client.builder()
+                    .region(Region.of(regionLegado))
+                    .credentialsProvider(StaticCredentialsProvider.create(
+                            AwsBasicCredentials.create(accessKeyLegado, secretKeyLegado)))
+                    .build();
+            log.info("AlmacenObjetos: bucket legado (solo lectura) {} region={}", bucketLegado, regionLegado);
+        } else {
+            this.bucketLegado = null;
+            this.s3Legado = null;
+        }
 
         var builder = S3Client.builder()
                 .region(Region.of(region))
@@ -158,6 +180,26 @@ public class AlmacenObjetos {
     public ResponseInputStream<GetObjectResponse> abrir(String clave) {
         return s3.getObject(GetObjectRequest.builder()
                 .bucket(bucket)
+                .key(clave)
+                .build());
+    }
+
+    /**
+     * ¿{@code bucketDeLaFila} es el bucket legado configurado? La fila de
+     * {@code TARCHIVO} lo nombra en {@code urls3} (ver
+     * {@link DownloadController#extraerBucket}).
+     */
+    public boolean esLegado(String bucketDeLaFila) {
+        return bucketLegado != null && bucketLegado.equalsIgnoreCase(bucketDeLaFila);
+    }
+
+    /** Como {@link #abrir(String)}, pero contra el bucket legado. */
+    public ResponseInputStream<GetObjectResponse> abrirLegado(String clave) {
+        if (s3Legado == null) {
+            throw new IllegalStateException("files.s3.legado.bucket no configurado");
+        }
+        return s3Legado.getObject(GetObjectRequest.builder()
+                .bucket(bucketLegado)
                 .key(clave)
                 .build());
     }

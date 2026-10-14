@@ -99,6 +99,13 @@ query:
         username: ${QUERY_DS_POSTGRES_USER:query}
         password: ${QUERY_DS_POSTGRES_PASSWORD:change-me}
         maximum-pool-size: 10
+        hikari:
+          connection-timeout: ${QUERY_DS_CONNECTION_TIMEOUT_MS:2000}
+          minimum-idle: ${QUERY_DS_MINIMUM_IDLE:4}
+          max-lifetime: ${QUERY_DS_MAX_LIFETIME_MS:1500000}
+          keepalive-time: ${QUERY_DS_KEEPALIVE_TIME_MS:120000}
+          leak-detection-threshold: ${QUERY_DS_LEAK_DETECTION_MS:20000}
+          statement-timeout-ms: ${QUERY_DS_STATEMENT_TIMEOUT_MS:185000}
       # oracle:
       #   enabled: ${QUERY_DS_ORACLE_ENABLED:false}
       #   url: ${QUERY_DS_ORACLE_URL:jdbc:oracle:thin:@//oracle-host:1521/ORCLPDB1}
@@ -119,12 +126,29 @@ query:
     internal-token: ${QUERY_CATALOG_INTERNAL_TOKEN:}
     read-timeout: 3s
     connect-timeout: 2s
+    # Cache local de /getQuery y /getWrite por (email, uuid). Un cambio de
+    # roles tarda hasta el TTL en reflejarse; el catálogo la vacía entero.
+    cache:
+      enabled: ${QUERY_CATALOG_CACHE_ENABLED:true}
+      ttl-seconds: ${QUERY_CATALOG_CACHE_TTL_SECONDS:60}
+      max-size: ${QUERY_CATALOG_CACHE_MAX:50000}
   # V27/V30 — controls the path-template in-memory registry
   # refresh cadence. Default 60s; the registry's first
   # load happens at boot via @Scheduled initialDelay=0 so
   # the dispatcher is warm before the first request.
   path-registry:
     refresh-ms: ${QUERY_PATH_REGISTRY_REFRESH_MS:60000}
+  # Per-statement JDBC limits. The long profile (header
+  # X-Query-Timeout-Profile: report, or a path_template matching
+  # long-path-pattern: exports, imports, bulk ops) gets the longer
+  # timeout. Keep it below reporting-service's read timeout (3m) and
+  # QUERY_DS_STATEMENT_TIMEOUT_MS (185s) so the JDBC cancel wins.
+  execution:
+    timeout-seconds: ${QUERY_TIMEOUT_SECONDS:15}
+    report-timeout-seconds: ${QUERY_REPORT_TIMEOUT_SECONDS:170}
+    long-path-pattern: ${QUERY_LONG_PATH_PATTERN:(?i).*(export|exportar|importar|reporte|boletin|bulk|masivo|masiva|lote).*}
+    max-rows: ${QUERY_MAX_ROWS:50001}
+    fetch-size: ${QUERY_FETCH_SIZE:500}
   # V33 — Resilience4j protection for the read path.
   #   bulkhead caps CONCURRENT JDBC calls per dialect so a
   #     single slow query can't starve the HikariCP pool.
@@ -135,10 +159,14 @@ query:
   # @TestPropertySource — see ResilienceIntegrationTest.
   resilience:
     bulkhead:
-      max-concurrent: ${QUERY_BULKHEAD_MAX_CONCURRENT:20}
+      max-concurrent: ${QUERY_BULKHEAD_MAX_CONCURRENT:8}
+      # Espera corta por un permiso antes del 503 (0 = fallo inmediato).
+      max-wait: ${QUERY_BULKHEAD_MAX_WAIT:200ms}
     rate-limit:
       rps: ${QUERY_RATE_LIMIT_RPS:100}
       window: ${QUERY_RATE_LIMIT_WINDOW:1s}
+      idle-expiry: ${QUERY_RATE_LIMIT_IDLE_EXPIRY:10m}
+      max-principals: ${QUERY_RATE_LIMIT_MAX_PRINCIPALS:100000}
   # Redis-backed @Cacheable settings.
   cache:
     # TTL for "schema-metadata" (@Cacheable("tables") /

@@ -25,7 +25,6 @@ from pathlib import Path
 RAIZ = Path(__file__).resolve().parents[1]
 REPO = RAIZ.parents[1]
 MIGRATIONS = REPO / "postgres" / "migrations"
-PRECISION = REPO / ".claude" / "skills" / "next-migration-number" / "precision.py"
 CACHE = Path(tempfile.gettempdir()) / "sso-migrations-model.json"
 
 # Solo estos paquetes calculan el modelo: cambiar como se pinta (vista) o un
@@ -44,7 +43,7 @@ def huella() -> str:
         h.update(p.name.encode())
         h.update(p.read_bytes())
     fuentes = [p for pkg in _PAQUETES_DEL_MODELO for p in sorted((RAIZ / pkg).glob("*.py"))]
-    for p in fuentes + [PRECISION]:
+    for p in fuentes:
         if p.exists():
             h.update(p.relative_to(REPO).as_posix().encode())
             h.update(p.read_bytes())
@@ -62,8 +61,11 @@ def guardar(model: dict, destino: Path = CACHE) -> None:
     """Escritura atomica: el hook de lint y una sesion pueden leer a la vez."""
     destino.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=destino.parent, suffix=".json")
+    # Una sola escritura y sin espacios: `json.dump` a fichero escribe a trozos
+    # y tardaba ~2,8 s con un modelo de ~40 MB.
+    texto = json.dumps(model, ensure_ascii=False, separators=(",", ":"))
     with os.fdopen(fd, "w", encoding="utf-8") as f:
-        json.dump(model, f, ensure_ascii=False)
+        f.write(texto)
     os.replace(tmp, destino)
 
 

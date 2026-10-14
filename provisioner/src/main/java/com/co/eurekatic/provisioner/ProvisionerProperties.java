@@ -131,6 +131,33 @@ public class ProvisionerProperties {
      *  de esta clase. */
     private String redisPassword = "";
 
+    /** Límite de memoria del contenedor spawneado (HostConfig.Memory).
+     *  Acepta bytes o sufijo k/m/g (con o sin "b"). Sin límite, un
+     *  query-service desbocado se come el host. */
+    private String queryMemLimit = "768m";
+
+    /** Reserva blanda de memoria (HostConfig.MemoryReservation). */
+    private String queryMemReservation = "256m";
+
+    /** Tope de CPU en cores (HostConfig.NanoCpus), p.ej. "1.5".
+     *  Vacío = sin límite. */
+    private String queryCpus = "";
+
+    /** Rotación de logs json-file del contenedor spawneado. */
+    private String logMaxSize = "20m";
+    private String logMaxFile = "5";
+
+    public String getQueryMemLimit() { return queryMemLimit; }
+    public void setQueryMemLimit(String v) { this.queryMemLimit = v; }
+    public String getQueryMemReservation() { return queryMemReservation; }
+    public void setQueryMemReservation(String v) { this.queryMemReservation = v; }
+    public String getQueryCpus() { return queryCpus; }
+    public void setQueryCpus(String v) { this.queryCpus = v; }
+    public String getLogMaxSize() { return logMaxSize; }
+    public void setLogMaxSize(String v) { this.logMaxSize = v; }
+    public String getLogMaxFile() { return logMaxFile; }
+    public void setLogMaxFile(String v) { this.logMaxFile = v; }
+
     public String getImage() { return image; }
     public void setImage(String image) { this.image = image; }
     public String getNetwork() { return network; }

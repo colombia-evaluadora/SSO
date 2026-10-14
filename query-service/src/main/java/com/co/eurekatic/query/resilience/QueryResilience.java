@@ -8,20 +8,29 @@ import io.github.resilience4j.ratelimiter.RateLimiterConfig;
 import io.github.resilience4j.ratelimiter.RateLimiterRegistry;
 import io.github.resilience4j.ratelimiter.RequestNotPermitted;
 import com.co.eurekatic.common.security.AuthPrincipal;
+import com.co.eurekatic.query.config.JdbcTemplateRegistry;
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
+import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
-import io.micrometer.core.instrument.Tag;
 import io.micrometer.core.instrument.Tags;
 import jakarta.annotation.PostConstruct;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Component;
+import org.springframework.web.context.request.RequestContextHolder;
+import org.springframework.web.context.request.ServletRequestAttributes;
 
 import java.time.Duration;
-import java.util.LinkedHashMap;
+import java.util.Locale;
 import java.util.Map;
+import java.util.OptionalInt;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Programmatic Resilience4j wiring for the query path.
@@ -33,7 +42,8 @@ import java.util.Map;
  *       cannot starve the HikariCP pool for every other
  *       dialect. Configured via
  *       {@code query.resilience.bulkhead.*} properties;
- *       default 20 concurrent / 50 queued.</li>
+ *       default 8 concurrent (below the Hikari pool) and fail-fast:
+ *       there is no queue, an over-cap call is rejected at once.</li>
  *   <li><b>RateLimiter</b> — caps RPS per principal
  *       (email). A runaway client cannot overwhelm the
  *       service; overflow returns 429 with a Retry-After.
@@ -69,29 +79,47 @@ public class QueryResilience {
     private final int rateLimitRps;
     private final Duration rateLimitWindow;
 
-    /** One Bulkhead per dialect (postgres / oracle / sqlserver).
-     *  Built lazily on first access. */
-    private final Map<String, Bulkhead> bulkheads = new LinkedHashMap<>();
+    /** One Bulkhead per dialect (postgres / oracle / sqlserver), keyed
+     *  lower-case like JdbcTemplateRegistry. Built lazily on first access. */
+    private final Map<String, Bulkhead> bulkheads = new ConcurrentHashMap<>();
 
-    /** One RateLimiter per principal (email). Built lazily; old
-     *  entries are pruned when they age out (see Refresh). */
-    private final Map<String, RateLimiter> rateLimiters = new LinkedHashMap<>();
+    /** One RateLimiter per principal (email). Built lazily and evicted
+     *  after an idle period, with a hard size cap. */
+    private final Cache<String, RateLimiter> rateLimiters;
+
+    /** Rejections, with no per-user tags (bounded cardinality). */
+    private final Counter rateLimitRejected;
 
     public QueryResilience(
             MeterRegistry meters,
-            @Value("${query.resilience.bulkhead.max-concurrent:20}") int bulkheadMaxConcurrent,
+            @Value("${query.resilience.bulkhead.max-concurrent:8}") int bulkheadMaxConcurrent,
             @Value("${query.resilience.rate-limit.rps:100}") int rateLimitRps,
-            @Value("${query.resilience.rate-limit.window:1s}") Duration rateLimitWindow) {
+            @Value("${query.resilience.rate-limit.window:1s}") Duration rateLimitWindow,
+            @Value("${query.resilience.rate-limit.idle-expiry:10m}") Duration rateLimitIdleExpiry,
+            @Value("${query.resilience.rate-limit.max-principals:100000}") long rateLimitMaxPrincipals) {
         this.meters = meters;
+        this.rateLimiters = Caffeine.newBuilder()
+                .expireAfterAccess(rateLimitIdleExpiry)
+                .maximumSize(rateLimitMaxPrincipals)
+                .build();
+        this.rateLimitRejected = meters.counter("query.resilience.rate_limit.rejected");
         this.bulkheadMaxConcurrent = bulkheadMaxConcurrent;
         this.rateLimitRps = rateLimitRps;
         this.rateLimitWindow = rateLimitWindow;
     }
 
+    /** Espera máxima por un permiso del bulkhead antes del 503. */
+    private Duration bulkheadMaxWait = Duration.ofMillis(200);
+
+    @Value("${query.resilience.bulkhead.max-wait:200ms}")
+    void setBulkheadMaxWait(Duration maxWait) {
+        this.bulkheadMaxWait = maxWait == null ? Duration.ZERO : maxWait;
+    }
+
     @PostConstruct
     void publishConfig() {
-        log.info("QueryResilience: bulkhead maxConcurrent={} (fail-fast, no queue)",
-                bulkheadMaxConcurrent);
+        log.info("QueryResilience: bulkhead maxConcurrent={} maxWait={} (sin cola larga)",
+                bulkheadMaxConcurrent, bulkheadMaxWait);
         log.info("QueryResilience: rateLimit rps={} window={}",
                 rateLimitRps, rateLimitWindow);
     }
@@ -102,22 +130,50 @@ public class QueryResilience {
      * on each dialect lands) so we don't pre-register
      * unused meters.
      */
-    public synchronized Bulkhead bulkheadFor(String dialect) {
-        return bulkheads.computeIfAbsent(dialect, this::buildBulkhead);
+    public Bulkhead bulkheadFor(String dialect) {
+        return bulkheads.computeIfAbsent(dialect.toLowerCase(Locale.ROOT), this::buildBulkhead);
+    }
+
+    /** Pool por dialecto; opcional para poder construir la clase en tests sin Spring. */
+    private ObjectProvider<JdbcTemplateRegistry> registry;
+
+    @Autowired(required = false)
+    void setRegistry(ObjectProvider<JdbcTemplateRegistry> registry) {
+        this.registry = registry;
+    }
+
+    /**
+     * Permisos efectivos del dialecto: el configurado, pero nunca más que
+     * las conexiones de su pool (las instancias aprovisionadas pueden
+     * nacer con un pool menor que el default del bulkhead).
+     */
+    int effectiveMaxConcurrent(String dialect) {
+        JdbcTemplateRegistry r = registry == null ? null : registry.getIfAvailable();
+        if (r == null) {
+            return bulkheadMaxConcurrent;
+        }
+        OptionalInt pool = r.maxPoolSize(dialect);
+        return pool.isPresent() ? Math.max(1, Math.min(bulkheadMaxConcurrent, pool.getAsInt()))
+                : bulkheadMaxConcurrent;
     }
 
     private Bulkhead buildBulkhead(String dialect) {
         // SEMAPHORE bulkhead — the right choice for a synchronous MVC
         // controller, since there is no thread handoff.
         //
-        // No maxWaitDuration on purpose: QueryService acquires with
-        // tryAcquirePermission(), which never waits, so any value set here
-        // would be ignored. Waiting is also the wrong behaviour for this
-        // service — a caller that has to queue for a JDBC permit is better
-        // told 503 + Retry-After immediately than left holding a Tomcat
-        // thread hoping one frees up.
+        // tryAcquirePermission() SÍ respeta maxWaitDuration (Resilience4j
+        // hace Semaphore.tryAcquire(maxWait)). Una espera corta absorbe las
+        // ráfagas (una consulta típica libera su permiso en milisegundos)
+        // sin volver a la cola de 30 s de Hikari: pasado ese margen, 503
+        // con Retry-After. 0 = fallo inmediato.
+        int maxConcurrent = effectiveMaxConcurrent(dialect);
+        if (maxConcurrent != bulkheadMaxConcurrent) {
+            log.info("QueryResilience: bulkhead {} acotado a {} por el pool del dialecto",
+                    dialect, maxConcurrent);
+        }
         BulkheadConfig config = BulkheadConfig.custom()
-                .maxConcurrentCalls(bulkheadMaxConcurrent)
+                .maxConcurrentCalls(maxConcurrent)
+                .maxWaitDuration(bulkheadMaxWait)
                 .build();
         Bulkhead bh = BulkheadRegistry.of(config).bulkhead("query-" + dialect, config);
         registerBulkheadMeters(bh, dialect);
@@ -130,14 +186,14 @@ public class QueryResilience {
      * limiters are per-caller — a noisy client can't
      * starve a quiet one.
      */
-    public synchronized RateLimiter rateLimiterFor(String principal) {
-        return rateLimiters.computeIfAbsent(principal, this::buildRateLimiter);
+    public RateLimiter rateLimiterFor(String principal) {
+        return rateLimiters.get(principal, this::buildRateLimiter);
     }
 
     /**
      * Applies the per-principal cap to the request on this thread, keyed by
-     * the JWT subject (email) or, with no principal, by a shared
-     * {@code "anonymous"} bucket.
+     * the JWT subject (email) or, with no principal, by a bucket per
+     * client address ({@code X-Client-Ip}, set by the gateway).
      *
      * <p>Lives here rather than in a controller so every read entry point
      * gets the same treatment by construction. It didn't, before: the one
@@ -152,16 +208,27 @@ public class QueryResilience {
         Authentication auth = SecurityContextHolder.getContext().getAuthentication();
         String key = (auth != null && auth.getPrincipal() instanceof AuthPrincipal p)
                 ? p.email()
-                : ANONYMOUS_BUCKET;
+                : anonymousKey();
         RateLimiter limiter = rateLimiterFor(key);
         if (!limiter.acquirePermission()) {
-            log.warn("Rate limit exceeded for principal={}", key);
+            rateLimitRejected.increment();
+            // Debug on purpose: the key is an email, and one noisy client
+            // would otherwise flood the log at warn.
+            log.debug("Rate limit exceeded for principal-hash={}", Integer.toHexString(key.hashCode()));
             throw RequestNotPermitted.createRequestNotPermitted(limiter);
         }
     }
 
-    /** Shared bucket for callers with no verified identity. */
-    static final String ANONYMOUS_BUCKET = "anonymous";
+    /** Bucket prefix for callers with no verified identity. */
+    static final String ANONYMOUS_PREFIX = "anon:";
+
+    private static String anonymousKey() {
+        String ip = null;
+        if (RequestContextHolder.getRequestAttributes() instanceof ServletRequestAttributes sra) {
+            ip = sra.getRequest().getHeader("X-Client-Ip");
+        }
+        return ANONYMOUS_PREFIX + (ip == null || ip.isBlank() ? "unknown" : ip.trim());
+    }
 
     private RateLimiter buildRateLimiter(String principal) {
         RateLimiterConfig config = RateLimiterConfig.custom()
@@ -172,7 +239,6 @@ public class QueryResilience {
                 .build();
         RateLimiter rl = RateLimiterRegistry.of(config)
                 .rateLimiter("query-rl-" + principal, config);
-        registerRateLimiterMeters(rl, principal);
         return rl;
     }
 
@@ -184,19 +250,9 @@ public class QueryResilience {
                 tags, bh, b -> b.getMetrics().getAvailableConcurrentCalls());
     }
 
-    private void registerRateLimiterMeters(RateLimiter rl, String principal) {
-        // No PII in metric tags — principal email is fine
-        // for per-user dashboards; operators can choose to
-        // drop this tag via meter filter if they want
-        // lower-cardinality rollups.
-        Tags tags = Tags.of("principal", principal, "kind", "ratelimiter");
-        meters.gauge("query.resilience.rate_limit.available",
-                tags, rl, r -> r.getMetrics().getAvailablePermissions());
-    }
-
     /** Test-only: clear cached instances. */
-    public synchronized void reset() {
+    public void reset() {
         bulkheads.clear();
-        rateLimiters.clear();
+        rateLimiters.invalidateAll();
     }
 }

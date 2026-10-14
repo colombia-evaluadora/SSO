@@ -6,7 +6,7 @@ import com.co.eurekatic.common.query.ParamConstraintValidator;
 import com.co.eurekatic.common.query.ParamNamespace;
 import com.co.eurekatic.common.query.ParamTypes;
 import com.co.eurekatic.common.query.SqlRewriter;
-import com.co.eurekatic.query.catalog.CatalogClient;
+import com.co.eurekatic.query.catalog.CatalogDefinitionCache;
 import com.co.eurekatic.query.catalog.QueryDefinition;
 import com.co.eurekatic.query.config.JdbcTemplateRegistry;
 import com.co.eurekatic.query.exception.ParamConstraintViolationException;
@@ -23,6 +23,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataAccessException;
 import org.springframework.http.HttpStatus;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.security.core.Authentication;
@@ -49,6 +51,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.regex.Pattern;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
@@ -83,14 +86,40 @@ public class QueryService {
 
     private static final Logger log = LoggerFactory.getLogger(QueryService.class);
 
-    private final CatalogClient catalog;
+    private final CatalogDefinitionCache catalog;
     private final JdbcTemplateRegistry registry;
     private final QueryMetrics metrics;
     private final QueryResilience resilience;
     private final ObjectMapper objectMapper;
     private final CatalogResultCacheService resultCache;
 
-    public QueryService(CatalogClient catalog, JdbcTemplateRegistry registry,
+    /** Header the caller sets to ask for the long (report) statement timeout. */
+    static final String TIMEOUT_PROFILE_HEADER = "X-Query-Timeout-Profile";
+
+    // Per-statement limits (query.execution.*). Plain fields with
+    // matching defaults so a manually built service (unit tests) is
+    // still bounded; Spring overrides them from application.yml.
+    @Value("${query.execution.timeout-seconds:15}")
+    private int timeoutSeconds = 15;
+    @Value("${query.execution.report-timeout-seconds:170}")
+    private int reportTimeoutSeconds = 170;
+    // Rutas del catálogo que el front llama directo (exportar, importar,
+    // borrados y calificaciones en lote) y que legítimamente tardan más
+    // que una consulta de pantalla: reciben el timeout largo sin cabecera.
+    static final String DEFAULT_LONG_PATH_PATTERN =
+            "(?i).*(export|exportar|importar|reporte|boletin|bulk|masivo|masiva|lote).*";
+    private Pattern longPathPattern = Pattern.compile(DEFAULT_LONG_PATH_PATTERN);
+
+    @Value("${query.execution.long-path-pattern:" + DEFAULT_LONG_PATH_PATTERN + "}")
+    void setLongPathPattern(String regex) {
+        this.longPathPattern = regex == null || regex.isBlank() ? null : Pattern.compile(regex);
+    }
+    @Value("${query.execution.max-rows:50001}")
+    private int maxRows = 50001;
+    @Value("${query.execution.fetch-size:500}")
+    private int fetchSize = 500;
+
+    public QueryService(CatalogDefinitionCache catalog, JdbcTemplateRegistry registry,
                          QueryMetrics metrics, QueryResilience resilience,
                          ObjectMapper objectMapper,
                          CatalogResultCacheService resultCache) {
@@ -138,14 +167,34 @@ public class QueryService {
         } catch (BulkheadFullException bfe) {
             metrics.recordExecution(mode[0], QueryMetrics.Outcome.FAILURE,
                     System.nanoTime() - start);
-            log.warn("Bulkhead full for query uuid={} (dialect={})", req.uuid(),
+            // No stack trace: a full bulkhead is load shedding, not a bug.
+            // GlobalExceptionHandler turns it into 503 + Retry-After and
+            // code BULKHEAD_FULL, same as the write path.
+            log.warn("Bulkhead full for query uuid={} ({})", req.uuid(),
                     bfe.getMessage());
-            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
-                    "Service busy, retry shortly");
+            throw bfe;
         } catch (RuntimeException e) {
             metrics.recordExecution(mode[0], QueryMetrics.Outcome.FAILURE,
                     System.nanoTime() - start);
             throw e;
+        }
+    }
+
+    /**
+     * Comprueba el acceso del llamante a {@code uuid} sin ejecutar nada:
+     * resuelve la definición (vía la caché local, así que casi nunca es una
+     * llamada HTTP) y aplica las mismas comprobaciones de acceso que
+     * {@link #execute}. Lo llama el controlador antes de servir una respuesta
+     * de la caché de resultados, que de otro modo se saltaría la autorización.
+     */
+    public void authorize(String uuid, boolean publicOk) {
+        Authentication auth = currentAuthentication();
+        String bearer = auth == null ? "" : bearerToken(auth);
+        QueryDefinition def = catalog.query(auth, bearer, uuid);
+        if (!def.publicEnd() && publicOk) {
+            log.warn("Non-public query {} reached /public/service — denying", uuid);
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN,
+                    "La consulta no es pública");
         }
     }
 
@@ -162,7 +211,7 @@ public class QueryService {
         // Anonymous callers forward an empty bearer: the catalog has
         // no roles to intersect, so only publicEnd=true rows survive.
         String bearer = auth == null ? "" : bearerToken(auth);
-        QueryDefinition def = catalog.fetchQuery(bearer, req.uuid());
+        QueryDefinition def = catalog.query(auth, bearer, req.uuid());
 
         String mode = def.executionMode() == null
                 ? "SELECT"
@@ -194,7 +243,8 @@ public class QueryService {
                     "La consulta no es pública");
         }
 
-        NamedParameterJdbcTemplate jdbc = registry.resolve(def.type());
+        NamedParameterJdbcTemplate jdbc = withStatementLimits(registry.resolve(def.type()),
+                def.pathTemplate());
 
         // Caller params + CONTEXT.* from the JWT/request. Keys are NOT
         // re-cased here: Spring JDBC binds case-sensitively against the
@@ -276,10 +326,9 @@ public class QueryService {
                 ? wrapWithAuditContext(rewrittenSql)
                 : rewrittenSql;
 
-        // Per-dialect bulkhead; fail fast (no wait) is the right call
-        // for a sync MVC controller — execute() maps it to 503.
-        var bulkhead = resilience.bulkheadFor(def.type() == null
-                ? "default" : def.type());
+        // Per-dialect bulkhead: waits at most query.resilience.bulkhead.max-wait
+        // for a permit, then BulkheadFullException → 503 + Retry-After.
+        var bulkhead = resilience.bulkheadFor(JdbcTemplateRegistry.dialectKey(def.type()));
         if (!bulkhead.tryAcquirePermission()) {
             throw BulkheadFullException.createBulkheadFullException(bulkhead);
         }
@@ -332,6 +381,10 @@ public class QueryService {
 
                 List<Map<String, Object>> rows = jdbc.query(finalSql, params,
                         (rs, rn) -> mapRow(rs, rn, objectMapper));
+                if (maxRows > 0 && rows.size() >= maxRows) {
+                    log.warn("uuid={} reached the row cap ({}); result truncated",
+                            req.uuid(), maxRows);
+                }
                 log.debug("uuid={} returned {} rows (mode={})", req.uuid(), rows.size(), mode);
                 return QueryResult.rowsOnly(rows);
             } catch (DataAccessException dae) {
@@ -340,6 +393,36 @@ public class QueryService {
         } finally {
             bulkhead.onComplete();
         }
+    }
+
+    /**
+     * Wraps the dialect's shared template in a throwaway one carrying the
+     * statement limits for THIS call (the timeout depends on the request's
+     * profile header, so the shared template must not be mutated). It is
+     * cheap: same DataSource and the same exception translator, no new pool.
+     */
+    private NamedParameterJdbcTemplate withStatementLimits(NamedParameterJdbcTemplate shared,
+                                                          String pathTemplate) {
+        JdbcTemplate base = shared.getJdbcTemplate();
+        JdbcTemplate t = new JdbcTemplate(base.getDataSource());
+        t.setExceptionTranslator(base.getExceptionTranslator());
+        t.setQueryTimeout(resolveTimeoutSeconds(pathTemplate));
+        if (maxRows > 0) t.setMaxRows(maxRows);
+        if (fetchSize > 0) t.setFetchSize(fetchSize);
+        return new NamedParameterJdbcTemplate(t);
+    }
+
+    /** Timeout largo para reportes (cabecera) y para las rutas de operaciones en lote. */
+    int resolveTimeoutSeconds(String pathTemplate) {
+        if (RequestContextHolder.getRequestAttributes() instanceof ServletRequestAttributes sra
+                && "report".equalsIgnoreCase(sra.getRequest().getHeader(TIMEOUT_PROFILE_HEADER))) {
+            return reportTimeoutSeconds;
+        }
+        if (pathTemplate != null && longPathPattern != null
+                && longPathPattern.matcher(pathTemplate).matches()) {
+            return reportTimeoutSeconds;
+        }
+        return timeoutSeconds;
     }
 
     /* ====================== parámetros del llamante ====================== */
@@ -507,6 +590,7 @@ public class QueryService {
         return jdbc.getJdbcTemplate().execute(
                 (Connection con) -> {
                     try (CallableStatement cs = con.prepareCall(sql)) {
+                        cs.setQueryTimeout(jdbc.getJdbcTemplate().getQueryTimeout());
                         for (Map.Entry<String, Object> e : params.getValues().entrySet()) {
                             Integer sqlType = sqlTypes.get(e.getKey());
                             if (sqlType != null && sqlType.intValue() != Types.ARRAY) {

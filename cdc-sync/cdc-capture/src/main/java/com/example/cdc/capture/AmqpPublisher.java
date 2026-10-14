@@ -7,6 +7,7 @@ import io.debezium.engine.ChangeEvent;
 import io.debezium.engine.DebeziumEngine;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.amqp.rabbit.connection.CorrelationData;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
@@ -15,8 +16,12 @@ import java.nio.charset.StandardCharsets;
 import java.util.Base64;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 @Component
 public class AmqpPublisher implements DebeziumEngine.ChangeConsumer<ChangeEvent<String, String>> {
@@ -26,16 +31,24 @@ public class AmqpPublisher implements DebeziumEngine.ChangeConsumer<ChangeEvent<
     /** Logical-message prefix emitted by the BEFORE STATEMENT trigger in 04-context-emitter.sql. */
     private static final String AUDIT_CTX_PREFIX = "audit_ctx";
 
+    private static final long DEFAULT_CONFIRM_TIMEOUT_MS = 10_000L;
+
     private final RabbitTemplate rabbitTemplate;
     private final CaptureMetrics captureMetrics;
     private final String exchange;
     private final AuditContextCache ctxCache;
+    private final long confirmTimeoutMs;
     private final ObjectMapper mapper = new ObjectMapper();
 
     @Autowired
     public AmqpPublisher(RabbitTemplate rabbitTemplate,
                          CaptureMetrics captureMetrics,
-                         @org.springframework.beans.factory.annotation.Value("${cdc.rabbitmq.exchange}") String exchange) {
+                         @org.springframework.beans.factory.annotation.Value("${cdc.rabbitmq.exchange}") String exchange,
+                         @org.springframework.beans.factory.annotation.Value("${cdc.rabbitmq.confirm-timeout-ms:10000}") long confirmTimeoutMs) {
+        this(rabbitTemplate, captureMetrics, exchange, new AuditContextCache(), confirmTimeoutMs);
+    }
+
+    public AmqpPublisher(RabbitTemplate rabbitTemplate, CaptureMetrics captureMetrics, String exchange) {
         this(rabbitTemplate, captureMetrics, exchange, new AuditContextCache());
     }
 
@@ -44,6 +57,15 @@ public class AmqpPublisher implements DebeziumEngine.ChangeConsumer<ChangeEvent<
                          CaptureMetrics captureMetrics,
                          String exchange,
                          AuditContextCache ctxCache) {
+        this(rabbitTemplate, captureMetrics, exchange, ctxCache, DEFAULT_CONFIRM_TIMEOUT_MS);
+    }
+
+    public AmqpPublisher(RabbitTemplate rabbitTemplate,
+                         CaptureMetrics captureMetrics,
+                         String exchange,
+                         AuditContextCache ctxCache,
+                         long confirmTimeoutMs) {
+        this.confirmTimeoutMs = confirmTimeoutMs;
         this.rabbitTemplate = rabbitTemplate;
         this.captureMetrics = captureMetrics;
         this.exchange = exchange;
@@ -54,7 +76,9 @@ public class AmqpPublisher implements DebeziumEngine.ChangeConsumer<ChangeEvent<
     public void handleBatch(List<ChangeEvent<String, String>> records,
                             DebeziumEngine.RecordCommitter<ChangeEvent<String, String>> committer)
             throws InterruptedException {
-        for (ChangeEvent<String, String> record : records) {
+        List<CorrelationData> pending = new ArrayList<>(records.size());
+        for (int seq = 0; seq < records.size(); seq++) {
+            ChangeEvent<String, String> record = records.get(seq);
             if (record.value() == null) continue;
             try {
                 Map<String, Object> event = parseEvent(record.value());
@@ -66,7 +90,6 @@ public class AmqpPublisher implements DebeziumEngine.ChangeConsumer<ChangeEvent<
                 String routingKey = schema + "." + table;
                 long lsn = ((Number) source.getOrDefault("lsn", 0)).longValue();
                 long xid = ((Number) source.getOrDefault("txId", 0)).longValue();
-                int seq = records.indexOf(record);
 
                 String op = (String) event.get("op");
 
@@ -113,20 +136,51 @@ public class AmqpPublisher implements DebeziumEngine.ChangeConsumer<ChangeEvent<
                     envelope.put("context", contextToMap(ctx));
                 }
 
+                final int seqHeader = seq;
+                CorrelationData correlation = new CorrelationData(lsn + ":" + seqHeader);
+                pending.add(correlation);
                 rabbitTemplate.convertAndSend(exchange, routingKey, envelope, m -> {
                     m.getMessageProperties().setHeader("x-lsn", lsn);
                     m.getMessageProperties().setHeader("x-xid", xid);
-                    m.getMessageProperties().setHeader("x-seq", seq);
+                    m.getMessageProperties().setHeader("x-seq", seqHeader);
                     return m;
-                });
+                }, correlation);
                 captureMetrics.incrementPublished(table, op);
             } catch (Exception e) {
                 log.error("Error publicando evento a RabbitMQ", e);
                 throw new InterruptedException("publish failed: " + e.getMessage());
             }
         }
+        // Publisher confirms: sin ack del broker para todo el lote no se avanza el offset.
+        awaitConfirms(pending);
         committer.markProcessed(records.get(records.size() - 1));
         committer.markBatchFinished();
+    }
+
+    /**
+     * Espera la confirmacion del broker de cada mensaje del lote. Un nack, un mensaje
+     * devuelto (mandatory sin cola enlazada) o el timeout lanzan excepcion para que
+     * Debezium no marque el lote y se reintente.
+     */
+    private void awaitConfirms(List<CorrelationData> pending) throws InterruptedException {
+        long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(confirmTimeoutMs);
+        for (CorrelationData cd : pending) {
+            long remaining = Math.max(0L, deadline - System.nanoTime());
+            try {
+                CorrelationData.Confirm confirm = cd.getFuture().get(remaining, TimeUnit.NANOSECONDS);
+                if (!confirm.isAck()) {
+                    throw new InterruptedException("publish nack id=" + cd.getId() + " reason=" + confirm.getReason());
+                }
+                if (cd.getReturned() != null) {
+                    throw new InterruptedException("publish returned id=" + cd.getId()
+                            + " replyText=" + cd.getReturned().getReplyText());
+                }
+            } catch (TimeoutException e) {
+                throw new InterruptedException("publish confirm timeout (" + confirmTimeoutMs + " ms) id=" + cd.getId());
+            } catch (ExecutionException e) {
+                throw new InterruptedException("publish confirm failed id=" + cd.getId() + ": " + e.getCause());
+            }
+        }
     }
 
     private Map<String, Object> parseEvent(String json) throws Exception {

@@ -3,9 +3,11 @@ package com.co.eurekatic.auth.security;
 import com.co.eurekatic.common.dto.AuthDtos.UserSummary;
 import com.co.eurekatic.common.entity.Role;
 import com.co.eurekatic.common.entity.User;
-import com.co.eurekatic.common.repository.UserRepository;
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.PersistenceContext;
 import org.springframework.cache.annotation.Cacheable;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -27,15 +29,17 @@ import java.util.stream.Collectors;
 @Service
 public class CachedUserListService {
 
-    private final UserRepository userRepository;
-
-    public CachedUserListService(UserRepository userRepository) {
-        this.userRepository = userRepository;
-    }
+    @PersistenceContext
+    private EntityManager em;
 
     @Cacheable("users-sso")
+    @Transactional(readOnly = true)
     public List<UserSummary> allEnabled() {
-        return userRepository.findAll().stream()
+        // Una sola consulta con los roles traidos por JOIN FETCH: findAll()
+        // con roles EAGER dispara 1 + N selects.
+        return em.createQuery(
+                        "select distinct u from User u left join fetch u.roles", User.class)
+                .getResultList().stream()
                 .filter(User::isEnabled)
                 .map(this::toSummary)
                 .collect(Collectors.toList());

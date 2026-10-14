@@ -11,15 +11,21 @@ CREATE OR REPLACE FUNCTION academico_test.fn_actividad_en_periodo_eval(
     p_fk_tperiodo_evaluacion BIGINT
 )
 RETURNS BOOLEAN
-LANGUAGE sql
+LANGUAGE plpgsql
 STABLE
 AS $function$
+BEGIN
+    -- plpgsql y no sql: una sql con FROM no se incrusta y se replanifica en
+    -- cada llamada; aqui el plan queda en cache. Primera fila o NULL, como antes.
+    RETURN (SELECT * FROM (
     SELECT COALESCE(a.FECHA_CIERRE, a.FECHA_INICIO, a.FECHA_CREACION::DATE)
                BETWEEN pe.FECHA_INICIO AND pe.FECHA_FIN
       FROM academico_test.TACTIVIDAD a
       JOIN academico_test.TPERIODO_EVALUACION pe
         ON pe.PK_TPERIODO_EVALUACION = p_fk_tperiodo_evaluacion
-     WHERE a.PK_TACTIVIDAD = p_pk_tactividad;
+     WHERE a.PK_TACTIVIDAD = p_pk_tactividad
+    ) q LIMIT 1);
+END;
 $function$;
 
 COMMENT ON FUNCTION academico_test.fn_actividad_en_periodo_eval(BIGINT, BIGINT)

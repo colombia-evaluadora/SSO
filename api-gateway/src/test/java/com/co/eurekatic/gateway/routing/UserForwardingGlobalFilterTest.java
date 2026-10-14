@@ -194,6 +194,58 @@ class UserForwardingGlobalFilterTest {
     }
 
     @Test
+    void dropsForgedIdentityHeadersOnAnonymousRequest() {
+        MockServerHttpRequest request = MockServerHttpRequest
+                .get("/some/path")
+                .header(UserForwardingGlobalFilter.HEADER_USER, "admin@evil")
+                .header(UserForwardingGlobalFilter.HEADER_USER_ID, "1")
+                .header(UserForwardingGlobalFilter.HEADER_ROLES, "ADMIN")
+                .header(UserForwardingGlobalFilter.HEADER_TOKEN_TYPE, "api")
+                .header(UserForwardingGlobalFilter.HEADER_FAMILY_ID, "forged")
+                .build();
+        ServerWebExchange exchange = MockServerWebExchange.from(request);
+
+        filter.filter(exchange, chain).block();
+
+        ArgumentCaptor<ServerWebExchange> captor =
+                ArgumentCaptor.forClass(ServerWebExchange.class);
+        verify(chain).filter(captor.capture());
+        HttpHeaders headers = captor.getValue().getRequest().getHeaders();
+        assertThat(headers.containsHeader(UserForwardingGlobalFilter.HEADER_USER)).isFalse();
+        assertThat(headers.containsHeader(UserForwardingGlobalFilter.HEADER_USER_ID)).isFalse();
+        assertThat(headers.containsHeader(UserForwardingGlobalFilter.HEADER_ROLES)).isFalse();
+        assertThat(headers.containsHeader(UserForwardingGlobalFilter.HEADER_TOKEN_TYPE)).isFalse();
+        assertThat(headers.containsHeader(UserForwardingGlobalFilter.HEADER_FAMILY_ID)).isFalse();
+    }
+
+    @Test
+    void overwritesForgedIdentityHeadersOnAuthenticatedRequest() {
+        AuthPrincipal principal = new AuthPrincipal("alice", 42L,
+                new LinkedHashSet<>(List.of("USER")), "access", "fam");
+        UsernamePasswordAuthenticationToken auth =
+                new UsernamePasswordAuthenticationToken(principal, "token",
+                        List.<GrantedAuthority>of(new SimpleGrantedAuthority("USER")));
+        MockServerHttpRequest request = MockServerHttpRequest
+                .get("/some/path")
+                .header(UserForwardingGlobalFilter.HEADER_USER, "admin@evil")
+                .header(UserForwardingGlobalFilter.HEADER_ROLES, "ADMIN")
+                .build();
+
+        filter.filter(MockServerWebExchange.from(request), chain)
+                .contextWrite(ReactiveSecurityContextHolder
+                        .withSecurityContext(Mono.just(
+                                new org.springframework.security.core.context.SecurityContextImpl(auth))))
+                .block();
+
+        ArgumentCaptor<ServerWebExchange> captor =
+                ArgumentCaptor.forClass(ServerWebExchange.class);
+        verify(chain).filter(captor.capture());
+        HttpHeaders headers = captor.getValue().getRequest().getHeaders();
+        assertThat(headers.get(UserForwardingGlobalFilter.HEADER_USER)).containsExactly("alice");
+        assertThat(headers.get(UserForwardingGlobalFilter.HEADER_ROLES)).containsExactly("USER");
+    }
+
+    @Test
     void addsNoUserHeadersWhenPrincipalIsNotAuthPrincipal() {
         // Spring Security's default principal when the user is
         // unauthenticated is "anonymousUser" (a String). The

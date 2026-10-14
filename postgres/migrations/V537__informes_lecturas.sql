@@ -185,8 +185,10 @@ $function$;
 COMMENT ON FUNCTION academico_test.fn_informe_periodo_academico_resolver(BIGINT, BIGINT, INTEGER, BIGINT)
     IS 'El periodo academico que corresponde a (sede, año, jornada), que es lo que eligen los tres selects de la pantalla de informes (V417). Levanta P0002 si no hay ninguno y 42501 si el usuario no alcanza esa sede y jornada -- el alcance se valida ANTES de leer, con fn_assert_permiso_seccion, para que pedir una sede ajena sea un error y no una lista vacia que se confunde con "no hay nada configurado". Entre sedes y establecimientos activos la tripleta identifica hoy un solo periodo, medido, pero ningun indice lo garantiza: el unico unico de TPERIODO_ACADEMICO es (FK_TANO_LECTIVO, FK_TSEDE, NOMBRE) WHERE active y la jornada no entra, y en el historico hay 24 tripletas con dos o mas periodos, todas en sedes inactivas y varias de colegios por CICLOS. Si reaparece, se devuelve el de FECHA_INICIO mas reciente desempatando por PK, en vez de fallar: un informe no puede quedar inaccesible porque alguien creo dos periodos el mismo año. El front tiene la salida limpia -- fn_informe_jornadas_listar devuelve una fila por periodo con su PK. V418.';
 
-CREATE OR REPLACE FUNCTION academico_test.fn_informe_periodos_evaluacion_listar(p_pk_usuario_solicitante bigint, p_fk_tsede bigint, p_anio integer, p_fk_tlv_jornada bigint)
- RETURNS TABLE(fk_tperiodo_evaluacion bigint, codigo character varying, nombre character varying, abreviacion character varying, fecha_inicio date, fecha_fin date, porcentaje numeric, estado character varying, calificable boolean, termino boolean, en_curso boolean, fk_tperiodo_academico bigint, periodo_academico character varying, fk_tsede bigint, sede_nombre character varying, fk_tlv_jornada bigint, jornada character varying, fk_testablecimiento bigint, anio integer)
+-- Suma PERIODO_CERRADO al retorno.
+DROP FUNCTION IF EXISTS academico_test.fn_informe_periodos_evaluacion_listar(BIGINT, BIGINT, INTEGER, BIGINT);
+CREATE FUNCTION academico_test.fn_informe_periodos_evaluacion_listar(p_pk_usuario_solicitante bigint, p_fk_tsede bigint, p_anio integer, p_fk_tlv_jornada bigint)
+ RETURNS TABLE(fk_tperiodo_evaluacion bigint, codigo character varying, nombre character varying, abreviacion character varying, fecha_inicio date, fecha_fin date, porcentaje numeric, estado character varying, calificable boolean, termino boolean, en_curso boolean, fk_tperiodo_academico bigint, periodo_academico character varying, fk_tsede bigint, sede_nombre character varying, fk_tlv_jornada bigint, jornada character varying, fk_testablecimiento bigint, anio integer, periodo_cerrado boolean)
  LANGUAGE plpgsql
  STABLE
 AS $function$
@@ -219,7 +221,9 @@ BEGIN
            pa.FK_TLV_JORNADA,
            jor.NOMBRE,
            s.FK_TESTABLECIMIENTO,
-           academico_test.fn_anio_lectivo_numero(al.NOMBRE)
+           academico_test.fn_anio_lectivo_numero(al.NOMBRE),
+           -- La misma regla que bloquea los guardados, para deshabilitarlos en pantalla.
+           academico_test.fn_periodo_evaluacion_cerrado(pe.PK_TPERIODO_EVALUACION)
       FROM academico_test.TPERIODO_EVALUACION pe
       JOIN academico_test.TPERIODO_ACADEMICO pa
         ON pa.PK_TPERIODO_ACADEMICO = pe.FK_TPERIODO_ACADEMICO
@@ -237,7 +241,7 @@ BEGIN
 END;
 $function$;
 COMMENT ON FUNCTION academico_test.fn_informe_periodos_evaluacion_listar(BIGINT, BIGINT, INTEGER, BIGINT)
-    IS 'Los periodos de evaluacion del periodo academico que resuelven (sede, año, jornada) -- los checkboxes de la pantalla de informes. Sustituye a fn_periodo_evaluacion_listar_ano (V339), que devolvia los de TODO el año dentro del alcance del usuario: todas las sedes y jornadas juntas, de donde venia que a un usuario con alcance amplio le salieran muchos y la mitad con el mismo nombre. No es la misma pregunta con un filtro mas: cambia la unidad de respuesta, de una lista heterogenea donde cada fila cargaba su sede para poder distinguirse, a una lista homogenea y ordenable. El alcance y la existencia del periodo los valida fn_informe_periodo_academico_resolver, que responde 42501 o P0002 antes de leer. Devuelve TERMINO y EN_CURSO calculados contra CURRENT_DATE: TERMINO es exactamente la condicion que usa la alerta roja (V338) para decidir si una planilla puede considerarse pendiente, asi que devolverlo evita que el front reimplemente esa regla con otro criterio. Conserva las columnas de la funcion anterior -- sede, jornada, establecimiento -- aunque ahora sean siempre las mismas, para que el front cambie lo que manda y no lo que lee. V418.';
+    IS 'Los periodos de evaluacion del periodo academico que resuelven (sede, año, jornada) -- los checkboxes de la pantalla de informes. Sustituye a fn_periodo_evaluacion_listar_ano (V339), que devolvia los de TODO el año dentro del alcance del usuario: todas las sedes y jornadas juntas, de donde venia que a un usuario con alcance amplio le salieran muchos y la mitad con el mismo nombre. No es la misma pregunta con un filtro mas: cambia la unidad de respuesta, de una lista heterogenea donde cada fila cargaba su sede para poder distinguirse, a una lista homogenea y ordenable. El alcance y la existencia del periodo los valida fn_informe_periodo_academico_resolver, que responde 42501 o P0002 antes de leer. Devuelve TERMINO y EN_CURSO calculados contra CURRENT_DATE: TERMINO es exactamente la condicion que usa la alerta roja (V338) para decidir si una planilla puede considerarse pendiente, asi que devolverlo evita que el front reimplemente esa regla con otro criterio. Conserva las columnas de la funcion anterior -- sede, jornada, establecimiento -- aunque ahora sean siempre las mismas, para que el front cambie lo que manda y no lo que lee. PERIODO_CERRADO es fn_periodo_evaluacion_cerrado (NO Calificable y fecha fin pasada): con el, guardar informe, planilla y observaciones responde 23514 salvo al super admin. V418.';
 
 CREATE OR REPLACE FUNCTION academico_test.fn_informe_grupos_listar(p_pk_usuario_solicitante bigint, p_fk_tsede bigint, p_anio integer, p_fk_tlv_jornada bigint, p_search character varying DEFAULT NULL::character varying)
  RETURNS TABLE(grupo_id bigint, grupo_codigo character varying, grupo_nombre character varying, grupo_etiqueta character varying, capacidad numeric, estudiantes bigint, jornada_id bigint, jornada_nombre character varying, grado_id bigint, grado_codigo character varying, grado_nombre character varying, nivel_ensenanza_id bigint, nivel_ensenanza_nombre character varying, director_id bigint, director_nombre character varying, fk_tperiodo_academico bigint)
@@ -526,63 +530,13 @@ CREATE OR REPLACE FUNCTION academico_test.fn_informe_planillas_pendientes(p_pk_u
  STABLE
 AS $function$
 DECLARE
-    r_g          RECORD;
-    -- V491 -- los grupos que de verdad se van a consultar: los pedidos
-    -- menos los que el usuario no puede ver por no dirigirlos.
-    v_grupos     BIGINT[] := ARRAY[]::BIGINT[];
-    v_solo_mios  BOOLEAN;
-    v_fk_sede    BIGINT;
-    v_fk_jornada BIGINT;
-    v_fk_ee      BIGINT;
+    -- Los grupos que de verdad se consultan: los pedidos que el usuario puede
+    -- ver. La validacion de permisos y el recorte por grupos dirigidos viven en
+    -- fn_informe_grupos_visibles, una vez por sede y jornada.
+    v_grupos BIGINT[];
 BEGIN
-    IF p_fk_tgrupos IS NULL OR CARDINALITY(p_fk_tgrupos) = 0 THEN
-        RAISE EXCEPTION 'Debe indicar al menos un grupo'
-            USING ERRCODE = '22023';
-    END IF;
-
-    -- Gate por grupo, ANTES de leer nada.
-    FOR r_g IN SELECT UNNEST(p_fk_tgrupos) AS pk
-    LOOP
-        SELECT s.PK_TSEDE, gr.FK_TLV_JORNADA, s.FK_TESTABLECIMIENTO
-          INTO v_fk_sede, v_fk_jornada, v_fk_ee
-          FROM academico_test.TGRUPO gr
-          JOIN academico_test.TGRADO gd ON gd.PK_TGRADO = gr.FK_TGRADO
-          JOIN academico_test.TPERIODO_ACADEMICO pa
-            ON pa.PK_TPERIODO_ACADEMICO = gd.FK_TPERIODO_ACADEMICO
-          JOIN academico_test.TSEDE s ON s.PK_TSEDE = pa.FK_TSEDE
-         WHERE gr.PK_TGRUPO = r_g.pk
-           AND gr.ACTIVE = TRUE;
-
-        IF NOT FOUND THEN
-            RAISE EXCEPTION 'No se encontro el grupo %', r_g.pk
-                USING ERRCODE = 'P0002';
-        END IF;
-
-        PERFORM academico_test.fn_assert_permiso_seccion(
-            p_pk_usuario_solicitante, 'INFORMES', 'VER',
-            v_fk_ee, v_fk_sede, v_fk_jornada
-        );
-
-        -- V491 -- el recorte por grupo DESCARTA en silencio, no falla.
-        -- Es la diferencia con el gate de arriba y es deliberada: pedir
-        -- un grupo de otra sede es un error de quien llama, pero pedir
-        -- uno de la propia sede que no se dirige es lo que hace el front
-        -- solo, con las pestañas que quedaron abiertas. Fallar ahi
-        -- tumbaria las alertas de los grupos que SI puede ver.
-        -- V447 -- por grupo y no una vez para toda la lista: la sede la
-        -- acaba de resolver el SELECT de arriba, y una lista de pestañas
-        -- abiertas puede cruzar establecimientos.
-        v_solo_mios := academico_test.fn_usuario_solo_sus_grupos(
-                           p_pk_usuario_solicitante, v_fk_sede, v_fk_jornada);
-
-        IF NOT v_solo_mios
-           OR EXISTS (SELECT 1
-                        FROM academico_test.fn_usuario_grupos_dirigidos(
-                                 p_pk_usuario_solicitante) g
-                       WHERE g.grupo_id = r_g.pk) THEN
-            v_grupos := v_grupos || r_g.pk;
-        END IF;
-    END LOOP;
+    v_grupos := academico_test.fn_informe_grupos_visibles(
+                    p_pk_usuario_solicitante, p_fk_tgrupos);
 
     RETURN QUERY
     WITH grupos AS (
@@ -712,63 +666,13 @@ CREATE OR REPLACE FUNCTION academico_test.fn_informe_cambios_pendientes(p_pk_usu
  STABLE
 AS $function$
 DECLARE
-    r_g          RECORD;
-    -- V491 -- los grupos que de verdad se van a consultar: los pedidos
-    -- menos los que el usuario no puede ver por no dirigirlos.
-    v_grupos     BIGINT[] := ARRAY[]::BIGINT[];
-    v_solo_mios  BOOLEAN;
-    v_fk_sede    BIGINT;
-    v_fk_jornada BIGINT;
-    v_fk_ee      BIGINT;
+    -- Los grupos que de verdad se consultan: los pedidos que el usuario puede
+    -- ver. La validacion de permisos y el recorte por grupos dirigidos viven en
+    -- fn_informe_grupos_visibles, una vez por sede y jornada.
+    v_grupos BIGINT[];
 BEGIN
-    IF p_fk_tgrupos IS NULL OR CARDINALITY(p_fk_tgrupos) = 0 THEN
-        RAISE EXCEPTION 'Debe indicar al menos un grupo'
-            USING ERRCODE = '22023';
-    END IF;
-
-    -- Gate por grupo, ANTES de leer nada.
-    FOR r_g IN SELECT UNNEST(p_fk_tgrupos) AS pk
-    LOOP
-        SELECT s.PK_TSEDE, gr.FK_TLV_JORNADA, s.FK_TESTABLECIMIENTO
-          INTO v_fk_sede, v_fk_jornada, v_fk_ee
-          FROM academico_test.TGRUPO gr
-          JOIN academico_test.TGRADO gd ON gd.PK_TGRADO = gr.FK_TGRADO
-          JOIN academico_test.TPERIODO_ACADEMICO pa
-            ON pa.PK_TPERIODO_ACADEMICO = gd.FK_TPERIODO_ACADEMICO
-          JOIN academico_test.TSEDE s ON s.PK_TSEDE = pa.FK_TSEDE
-         WHERE gr.PK_TGRUPO = r_g.pk
-           AND gr.ACTIVE = TRUE;
-
-        IF NOT FOUND THEN
-            RAISE EXCEPTION 'No se encontro el grupo %', r_g.pk
-                USING ERRCODE = 'P0002';
-        END IF;
-
-        PERFORM academico_test.fn_assert_permiso_seccion(
-            p_pk_usuario_solicitante, 'INFORMES', 'VER',
-            v_fk_ee, v_fk_sede, v_fk_jornada
-        );
-
-        -- V491 -- el recorte por grupo DESCARTA en silencio, no falla.
-        -- Es la diferencia con el gate de arriba y es deliberada: pedir
-        -- un grupo de otra sede es un error de quien llama, pero pedir
-        -- uno de la propia sede que no se dirige es lo que hace el front
-        -- solo, con las pestañas que quedaron abiertas. Fallar ahi
-        -- tumbaria las alertas de los grupos que SI puede ver.
-        -- V447 -- por grupo y no una vez para toda la lista: la sede la
-        -- acaba de resolver el SELECT de arriba, y una lista de pestañas
-        -- abiertas puede cruzar establecimientos.
-        v_solo_mios := academico_test.fn_usuario_solo_sus_grupos(
-                           p_pk_usuario_solicitante, v_fk_sede, v_fk_jornada);
-
-        IF NOT v_solo_mios
-           OR EXISTS (SELECT 1
-                        FROM academico_test.fn_usuario_grupos_dirigidos(
-                                 p_pk_usuario_solicitante) g
-                       WHERE g.grupo_id = r_g.pk) THEN
-            v_grupos := v_grupos || r_g.pk;
-        END IF;
-    END LOOP;
+    v_grupos := academico_test.fn_informe_grupos_visibles(
+                    p_pk_usuario_solicitante, p_fk_tgrupos);
 
     RETURN QUERY
     WITH matriculas AS (
@@ -777,6 +681,23 @@ BEGIN
           FROM academico_test.TMATRICULA m
          WHERE m.FK_TGRUPO = ANY (v_grupos)
            AND m.ACTIVE = TRUE
+    ),
+    -- Un cambio propuesto exige nota GUARDADA (TASIGNATURA_NOTA): sin ella el
+    -- estado es "proyectada", nunca "cambio_propuesto". Se descarta antes de
+    -- recalcular, que es lo caro (se calculaba la sede entera para 0 filas).
+    -- Con FK_TPERIODO_EVALUACION nulo (la Final) tambien se considera.
+    consolidadas AS (
+        SELECT mt.*
+          FROM matriculas mt
+         WHERE EXISTS (
+                SELECT 1
+                  FROM academico_test.TASIGNATURA_NOTA an
+                 WHERE an.FK_TMATRICULA = mt.pk
+                   AND an.ACTIVE = TRUE
+                   AND (p_fk_periodos_evaluacion IS NULL
+                        OR CARDINALITY(p_fk_periodos_evaluacion) = 0
+                        OR an.FK_TPERIODO_EVALUACION IS NULL
+                        OR an.FK_TPERIODO_EVALUACION = ANY (p_fk_periodos_evaluacion)))
     ),
     -- Se reutiliza el detalle con p_solo_cambios para que la alerta no pueda
     -- contradecir a la tabla.
@@ -789,10 +710,10 @@ BEGIN
                d.periodo_inicio,
                mt.pk          AS matricula,
                d.calificado_en
-          FROM matriculas mt
-          CROSS JOIN LATERAL academico_test.fn_informe_estudiante_asignaturas_interno(
+          FROM consolidadas mt
+          CROSS JOIN LATERAL academico_test.fn_informe_estudiante_cambios_interno(
                          mt.pk,
-                         p_fk_periodos_evaluacion, TRUE) d
+                         p_fk_periodos_evaluacion) d
         UNION ALL
         -- Una correccion pendiente no mueve la proyectada: se suma aparte.
         SELECT mt.grupo,
@@ -1240,8 +1161,10 @@ $function$;
 COMMENT ON FUNCTION academico_test.fn_informe_planilla_listar(BIGINT, BIGINT, BIGINT, BIGINT, CHARACTER VARYING)
     IS 'La planilla de calificacion a la que llevan las dos alertas del modulo de informes: una fila por estudiante del grupo, con su definitiva del periodo -- guardada y proyectada, ambas en porcentaje y ya homologadas -- y las actividades del periodo embebidas en ACTIVIDADES (JSONB), una celda por actividad con su nota, estado y el pkTactividadEstudiante que el popover necesita. NO ES la planilla del planeador (fn_planilla_columnas_listar / fn_planilla_calificaciones_listar, V239), que no se toca: aquella es la del docente calificando dia a dia y difiere en tres cosas de fondo -- acota por ventana de fechas libre y no por periodo de evaluacion; usa fn_planilla_definitiva_proyectada, que NO filtra por periodo, de modo que mostraria una definitiva que no corresponde al cambio que el revisor vino a aprobar; y toma su linea base de TUNIDAD_NOTA, que nadie consolida (su autor lo dejo anotado, calculado para que la flecha funcionara sola cuando la consolidacion existiera), mientras esta la toma de TASIGNATURA_NOTA, que es donde V336 si consolida. Lo unico que reutiliza de V239 es fn_planilla_grupo_asignatura_assert, un validador puro sin gate ni efectos, para que el mismo filtro invalido de el mismo error en las dos pantallas. EL CRITERIO DE FECHA ES EL NUESTRO: las columnas se definen con fn_actividad_en_periodo_eval (fecha de corte) y no con el solapamiento de fn_planilla_actividades_universo, porque no son equivalentes -- una actividad que abre en un periodo y cierra en el siguiente entra en las dos ventanas por solapamiento pero solo suma al segundo en la proyeccion, y seria una columna cuya nota no esta en la definitiva de esa pantalla, sin que nadie pudiera explicar la diferencia. Asi columnas y definitiva salen siempre del mismo conjunto. UN SOLO BUSCADOR para dos dimensiones: filtra estudiantes por nombre/documento y actividades por titulo, pero la dimension donde NADA coincidio se deja INTACTA -- buscar un nombre filtra filas y conserva columnas, buscar una actividad conserva filas y filtra columnas; filtrar ambas siempre vaciaria la tabla al escribir un nombre, porque ninguna actividad se llama como un alumno. Sin paginacion: se muestra el grupo entero, y paginar obligaria ademas a decidir que hacer con las columnas, que no son filas. Las flechas las pinta el front comparando las dos definitivas homologadas; no se manda una columna tendencia porque seria duplicar un dato derivado y calcularla sobre porcentajes daria flecha cuando dos porcentajes distintos redondean a la misma nota. ESTADO_NOTA usa el mismo vocabulario que fn_informe_estudiante_asignaturas (sin_nota / proyectada / guardada / cambio_propuesto) para que el front no aprenda dos juegos de estados para la misma idea. Gate: INFORMES/VER sobre el grupo. Con una recuperacion de destino NOTA_FINAL ESTADO_NOTA compara la proyectada contra TASIGNATURA_NOTA.CALIFICACION (la original), igual que fn_informe_estudiante_asignaturas_interno; DEFINITIVA_GUARDADA sigue siendo la resultante.';
 
-CREATE OR REPLACE FUNCTION academico_test.fn_informe_grupo_listar(p_pk_usuario_solicitante bigint, p_fk_tgrupo bigint, p_fk_periodos_evaluacion bigint[] DEFAULT NULL::bigint[], p_search character varying DEFAULT NULL::character varying)
- RETURNS TABLE(fk_tmatricula bigint, estudiante character varying, documento character varying, fk_tperiodo_evaluacion bigint, periodo_nombre character varying, periodo_abreviacion character varying, periodo_inicio date, modo_periodo character varying, formato character varying, es_cualitativo boolean, consolidado boolean, promedio_guardado numeric, promedio_proyectado numeric, puesto bigint, asignaturas_total bigint, aprobadas bigint, reprobadas bigint, sin_definir bigint, tiene_cambios_propuestos boolean, asignaturas jsonb, observacion text, observacion_estado character varying, observacion_desactualizada boolean, evidencias bigint, total_count bigint, promedio_valoracion character varying, promedio_simbolo character varying, promedio_proyectado_valoracion character varying, promedio_proyectado_simbolo character varying, promedio_formato character varying)
+-- Suma ERROR_CONFIGURACION al retorno, como su nucleo.
+DROP FUNCTION IF EXISTS academico_test.fn_informe_grupo_listar(BIGINT, BIGINT, BIGINT[], CHARACTER VARYING);
+CREATE FUNCTION academico_test.fn_informe_grupo_listar(p_pk_usuario_solicitante bigint, p_fk_tgrupo bigint, p_fk_periodos_evaluacion bigint[] DEFAULT NULL::bigint[], p_search character varying DEFAULT NULL::character varying)
+ RETURNS TABLE(fk_tmatricula bigint, estudiante character varying, documento character varying, fk_tperiodo_evaluacion bigint, periodo_nombre character varying, periodo_abreviacion character varying, periodo_inicio date, modo_periodo character varying, formato character varying, es_cualitativo boolean, consolidado boolean, promedio_guardado numeric, promedio_proyectado numeric, puesto bigint, asignaturas_total bigint, aprobadas bigint, reprobadas bigint, sin_definir bigint, tiene_cambios_propuestos boolean, asignaturas jsonb, observacion text, observacion_estado character varying, observacion_desactualizada boolean, evidencias bigint, total_count bigint, promedio_valoracion character varying, promedio_simbolo character varying, promedio_proyectado_valoracion character varying, promedio_proyectado_simbolo character varying, promedio_formato character varying, error_configuracion text)
  LANGUAGE plpgsql
  STABLE
 AS $function$

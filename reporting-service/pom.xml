@@ -81,6 +81,10 @@
             POI directo, que ademas es lo correcto para este caso.
         -->
         <dependency>
+            <groupId>com.github.ben-manes.caffeine</groupId>
+            <artifactId>caffeine</artifactId>
+        </dependency>
+        <dependency>
             <groupId>net.sf.jasperreports</groupId>
             <artifactId>jasperreports</artifactId>
             <version>${jasperreports.version}</version>
@@ -93,6 +97,13 @@
         <dependency>
             <groupId>net.sf.jasperreports</groupId>
             <artifactId>jasperreports-jdt</artifactId>
+            <version>${jasperreports.version}</version>
+        </dependency>
+        <!-- Componente QRCode de las plantillas (QR de verificacion del
+             boletin). Trae ZXing; Jasper lo dibuja nativo, sin imagen previa. -->
+        <dependency>
+            <groupId>net.sf.jasperreports</groupId>
+            <artifactId>jasperreports-barcode4j</artifactId>
             <version>${jasperreports.version}</version>
         </dependency>
 

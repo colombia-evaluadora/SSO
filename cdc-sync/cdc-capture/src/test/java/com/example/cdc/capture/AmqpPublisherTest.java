@@ -5,6 +5,7 @@ import io.debezium.engine.ChangeEvent;
 import io.debezium.engine.DebeziumEngine;
 import org.junit.jupiter.api.Test;
 import org.springframework.amqp.core.MessagePostProcessor;
+import org.springframework.amqp.rabbit.connection.CorrelationData;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 
 import java.util.Map;
@@ -29,6 +30,11 @@ class AmqpPublisherTest {
             (DebeziumEngine.RecordCommitter<ChangeEvent<String, String>>)
                 (DebeziumEngine.RecordCommitter<?>) mock(DebeziumEngine.RecordCommitter.class);
         CaptureMetrics metrics = mock(CaptureMetrics.class);
+        org.mockito.Mockito.doAnswer(inv -> {
+            ((CorrelationData) inv.getArgument(4)).getFuture().complete(new CorrelationData.Confirm(true, null));
+            return null;
+        }).when(template).convertAndSend(any(String.class), any(String.class), any(Object.class),
+                any(MessagePostProcessor.class), any(CorrelationData.class));
         AmqpPublisher publisher = new AmqpPublisher(template, metrics, "cdc.events");
 
         Map<String, Object> payload = Map.of(
@@ -55,7 +61,8 @@ class AmqpPublisherTest {
             eq("cdc.events"),
             eq("public.clientes"),
             any(Object.class),
-            any(MessagePostProcessor.class)
+            any(MessagePostProcessor.class),
+            any(CorrelationData.class)
         );
     }
 }

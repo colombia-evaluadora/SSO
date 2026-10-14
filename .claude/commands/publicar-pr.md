@@ -41,7 +41,7 @@ git diff --stat
   commits distintos. Si hay duda sobre qué entra, pregunta antes de commitear.
 - Si el diff toca `postgres/migrations/`, corre
   `python scripts/migration-analysis lint <ficheros>` y confirma que el `V<n>` sigue
-  libre en todas las ramas (`bash .claude/skills/next-migration-number/scan.sh`).
+  libre en todas las ramas (`python scripts/migration-analysis hueco --panorama`: avisa de colisiones).
   Si el lint falla, para.
 
 ## 3. Commit

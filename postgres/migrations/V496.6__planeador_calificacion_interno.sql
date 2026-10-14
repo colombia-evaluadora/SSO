@@ -22,7 +22,7 @@ DROP FUNCTION IF EXISTS academico_test.fn_actividad_nota_calificar_cotejo(BIGINT
 DROP FUNCTION IF EXISTS academico_test.fn_actividad_nota_calificar_escala(BIGINT, BIGINT, BIGINT, NUMERIC, DATE);
 DROP FUNCTION IF EXISTS academico_test.fn_actividad_nota_calificar_escala_criterios(BIGINT, BIGINT, JSONB, DATE);
 DROP FUNCTION IF EXISTS academico_test.fn_actividad_nota_calificar_otro(BIGINT, BIGINT, NUMERIC, DATE);
--- Cambia el tipo de retorno (estado, momento, enlace, resultados_completos).
+-- Cambia el tipo de retorno (estado, momento, enlace, resultados_completos, solicitud pendiente).
 DROP FUNCTION IF EXISTS academico_test.fn_actividad_estudiantes_calificaciones_listar_interno(BIGINT, DATE, VARCHAR);
 
 -- ---------------------------------------------------------------------------
@@ -1598,10 +1598,15 @@ RETURNS TABLE (pk_tactividad_estudiante BIGINT, pk_tmatricula BIGINT, nombre_est
                valoracion VARCHAR, formato_valor VARCHAR, resultado_instrumento JSONB,
                estado_resultado VARCHAR, momento VARCHAR, evidencia_enlace VARCHAR, resultados_completos BOOLEAN,
                tipo_asistencia_valor VARCHAR, asistencia_justificada BOOLEAN, origen_asistencia VARCHAR,
-               asistencia_editable BOOLEAN)
-LANGUAGE sql
+               asistencia_editable BOOLEAN, solicitud_pendiente BOOLEAN, nota_propuesta_homologada NUMERIC,
+               calificacion_propuesta JSONB)
+-- plpgsql: TSOLICITUD_APROBACION nace en V496.18, después de esta migración.
+LANGUAGE plpgsql
 STABLE
 AS $$
+#variable_conflict use_column
+BEGIN
+    RETURN QUERY
     WITH act AS (
         SELECT a.PK_TACTIVIDAD, a.FK_TASIGNATURA, lv.VALOR AS instrumento,
                academico_test.fn_actividad_es_formativa(a.PK_TACTIVIDAD) AS formativa,
@@ -1625,7 +1630,8 @@ AS $$
            COALESCE(lve.VALOR, CASE WHEN n.CALIFICACION IS NOT NULL THEN 'CALIFICADO' ELSE 'PENDIENTE' END)::VARCHAR,
            lvm.VALOR::VARCHAR, n.EVIDENCIA_ENLACE, act.completos,
            s.tipo_valor, s.justificada, s.origen,
-           NOT COALESCE(n.CALIFICACION IS NOT NULL OR lve.VALOR = 'CALIFICADO', FALSE)
+           NOT COALESCE(n.CALIFICACION IS NOT NULL OR lve.VALOR = 'CALIFICADO', FALSE),
+           (sp.pk IS NOT NULL), hp.nota_homologada, sp.calificacion
       FROM base b
      CROSS JOIN act
       -- Asistencia de la actividad (primer día, todos los bloques; congelada con resultado).
@@ -1636,8 +1642,25 @@ AS $$
       LEFT JOIN academico_test.TLISTA_VALOR lvm ON lvm.PK_LISTA_VALOR = n.FK_TLV_MOMENTO
       LEFT JOIN LATERAL academico_test.fn_nota_homologar(
                     COALESCE(n.DEFINITIVA, n.CALIFICACION), act.FK_TASIGNATURA, act.grado) h ON TRUE
+      -- Corrección pendiente de aprobación (Regla 55), igual que en la planilla.
+      LEFT JOIN LATERAL (
+          SELECT s2.PK_TSOLICITUD_APROBACION AS pk,
+                 (s2.VALOR_PROPUESTO->>'porcentaje')::NUMERIC AS porcentaje,
+                 -- Solo una captura completa sirve para precargar el form.
+                 CASE WHEN s2.VALOR_PROPUESTO->'capturas'->-1->>'operacion' = 'CALIFICAR'
+                      THEN s2.VALOR_PROPUESTO->'capturas'->-1->'calificacion' END AS calificacion
+            FROM academico_test.TSOLICITUD_APROBACION s2
+           WHERE s2.TABLA_OBJETO = 'TACTIVIDAD_ESTUDIANTE'
+             AND s2.FK_OBJETO = b.PK_TACTIVIDAD_ESTUDIANTE
+             AND s2.FK_TLV_TIPO = academico_test.fn_tlv_solicitud_tipo_pk('CORRECCION_RESULTADO')
+             AND s2.FK_TLV_ESTADO = academico_test.fn_tlv_solicitud_estado_pk('PENDIENTE')
+             AND s2.ACTIVE = TRUE
+           LIMIT 1
+      ) sp ON TRUE
+      LEFT JOIN LATERAL academico_test.fn_nota_homologar(sp.porcentaje, act.FK_TASIGNATURA, act.grado) hp ON TRUE
      WHERE NULLIF(TRIM(p_search), '') IS NULL OR b.nombre ILIKE '%' || TRIM(p_search) || '%'
      ORDER BY b.nombre, b.PK_TACTIVIDAD_ESTUDIANTE;
+END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_actividad_instrumento_definir_interno(BIGINT, BIGINT, JSONB)
@@ -1657,7 +1680,7 @@ COMMENT ON FUNCTION academico_test.fn_actividad_nota_calificar_interno(BIGINT, B
 COMMENT ON FUNCTION academico_test.fn_actividad_nota_obtener_interno(BIGINT)
     IS 'INTERNO: detalle de la nota de un estudiante (instrumento, %, captura cruda, soportes, homologación y resultado con etiquetas). Lo usa fn_actividad_nota_obtener.';
 COMMENT ON FUNCTION academico_test.fn_actividad_estudiantes_calificaciones_listar_interno(BIGINT, DATE, VARCHAR)
-    IS 'INTERNO: estudiantes de la actividad con la asistencia de la actividad (fn_actividad_asistencia_estudiante: fecha fin o primer día, bloques agregados, la Vista predomina, congelada con resultado; tipo_asistencia_valor 1/2/5, asistencia_justificada, origen_asistencia ASISTENCIA/PLANEADOR, asistencia_editable = sin resultado registrado), nota, homologación, resultado del instrumento, estado de resultado, momento, enlace de evidencia y resultados_completos (Regla 58, igual en todas las filas). Lo usa fn_actividad_estudiantes_calificaciones_listar.';
+    IS 'INTERNO: estudiantes de la actividad con la asistencia de la actividad (fn_actividad_asistencia_estudiante: fecha fin o primer día, bloques agregados, la Vista predomina, congelada con resultado; tipo_asistencia_valor 1/2/5, asistencia_justificada, origen_asistencia ASISTENCIA/PLANEADOR, asistencia_editable = sin resultado registrado), nota, homologación, resultado del instrumento, estado de resultado, momento, enlace de evidencia y resultados_completos (Regla 58) y la corrección pendiente (Regla 55). Lo usa fn_actividad_estudiantes_calificaciones_listar.';
 COMMENT ON FUNCTION academico_test.fn_actividad_resultado_estado_set_interno(BIGINT, BIGINT, VARCHAR)
     IS 'INTERNO: fija el estado de resultado a mano (PENDIENTE o NO_PRESENTO; No asistido sale de la asistencia) de un estudiante y borra su CALIFICACION (Regla 62); No presentó exige que no haya nota ni inasistencia (fn_actividad_validar_estado_transicion). Lo usan fn_actividad_resultado_estado_set y su variante en bloque.';
 COMMENT ON FUNCTION academico_test.fn_actividad_resultado_estado_set_bulk_interno(BIGINT, BIGINT, VARCHAR, BIGINT[])

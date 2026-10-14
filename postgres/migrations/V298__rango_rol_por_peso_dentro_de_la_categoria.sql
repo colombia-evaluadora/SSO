@@ -114,10 +114,11 @@ BEGIN
          WHERE e.ACTIVE = TRUE AND f.ACTIVE = TRUE
            AND f.FK_TUSUARIO = p_pk_tusuario
         UNION
-        SELECT 9
+        SELECT r.PK_TROL
           FROM academico_test.TESTABLECIMIENTO e
           JOIN academico_test.TFUNCIONARIO f
             ON f.PK_TFUNCIONARIO = e.FK_TFUNCIONARIO_SECRETARIA
+          JOIN academico_test.TROL r ON r.CODIGO = 'JEFE_SISTEMA_ESTABLECIMIENTO'
          WHERE e.ACTIVE = TRUE AND f.ACTIVE = TRUE
            AND f.FK_TUSUARIO = p_pk_tusuario
     )
@@ -133,7 +134,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_usuario_peso_categoria(BIGINT)
-    IS 'Peso de autoridad de un usuario DENTRO de su categoria de rol mas alta: MIN(TROL.PESO_CATEGORIA) entre los roles que tiene hoy y que caen en esa categoria (menor peso = mas autoridad). Los roles se toman igual que en fn_cat_roles_listar (V121): TSEDE_USUARIO activas mas los punteros FK_TFUNCIONARIO_RECTOR (rol 7) y FK_TFUNCIONARIO_SECRETARIA (rol 9) de los EE activos, porque hay establecimientos donde la vinculacion vive solo en el puntero. NULL si el usuario no tiene ningun rol activo (nivel NULL) o si los roles de su categoria no tienen peso sembrado -- en ambos casos quien consulta debe tratarlo como "no autorizado", igual que hace el select de roles. La categoria se resuelve con fn_usuario_categoria_rol_nivel, que solo mira TSEDE_USUARIO: el peso solo se consulta cuando el nivel ya quedo resuelto por ahi. V298: extraido de fn_assert_rango_rol_otorgable (V295) para que el rango de AFECTAR y el rango de OTORGAR usen el mismo criterio y no puedan divergir.';
+    IS 'Peso de autoridad de un usuario DENTRO de su categoria de rol mas alta: MIN(TROL.PESO_CATEGORIA) entre los roles que tiene hoy y que caen en esa categoria (menor peso = mas autoridad). Los roles se toman igual que en fn_cat_roles_listar (V121): TSEDE_USUARIO activas mas los punteros FK_TFUNCIONARIO_RECTOR (rol 7) y FK_TFUNCIONARIO_SECRETARIA (Jefe de sistema, por CODIGO) de los EE activos, porque hay establecimientos donde la vinculacion vive solo en el puntero. NULL si el usuario no tiene ningun rol activo (nivel NULL) o si los roles de su categoria no tienen peso sembrado -- en ambos casos quien consulta debe tratarlo como "no autorizado", igual que hace el select de roles. La categoria se resuelve con fn_usuario_categoria_rol_nivel, que solo mira TSEDE_USUARIO: el peso solo se consulta cuando el nivel ya quedo resuelto por ahi. V298: extraido de fn_assert_rango_rol_otorgable (V295) para que el rango de AFECTAR y el rango de OTORGAR usen el mismo criterio y no puedan divergir.';
 
 
 -- ---------------------------------------------------------------------------
@@ -284,3 +285,72 @@ $$;
 
 COMMENT ON FUNCTION academico_test.fn_assert_rango_rol_otorgable(BIGINT, BIGINT)
     IS 'Assertion de RANGO al OTORGAR un rol. Nivel 0 (SUPER_ADMIN) otorga cualquiera; un solicitante sin rol activo no otorga ninguno. V295: tres tramos en vez de "categoria igual o superior -> 42501" a secas -- categoria SUPERIOR se rechaza, INFERIOR se permite, y en la MISMA categoria decide TROL.PESO_CATEGORIA: solo se otorga un rol de peso estrictamente MAYOR (menor autoridad) que el propio. Es el mismo criterio que el select de roles de fn_cat_roles_listar (V121), asi que el backend autoriza exactamente lo que el front ofrece; sigue impidiendo que un rector nombre a otro rector. V298: el peso del solicitante se pide a fn_usuario_peso_categoria en vez de repetir la consulta aqui, para que este rango y el de fn_assert_rango_rol no puedan divergir. Relajarlo es seguro porque la autoridad sobre la SEDE la validan los llamadores: fn_fun_permisos_actualizar por operacion contra v_sedes_plenas / v_sedes_coord, y fn_sede_usuario_crear via fn_assert_permiso_seccion con sede y jornada.';
+
+
+-- ---------------------------------------------------------------------------
+-- 4) Rango DENTRO de un establecimiento, para los permisos de sede.
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION academico_test.fn_usuario_rango_en_ee(
+    p_pk_tusuario           BIGINT,
+    p_pk_ee                 BIGINT,
+    p_excluir_tsede_usuario BIGINT DEFAULT NULL,
+    p_con_punteros          BOOLEAN DEFAULT TRUE
+)
+RETURNS TABLE (nivel INT, peso NUMERIC)
+LANGUAGE sql
+STABLE
+AS $$
+    WITH roles AS (
+        SELECT su.FK_TROL AS pk_trol
+          FROM academico_test.TSEDE_USUARIO su
+          JOIN academico_test.TSEDE s ON s.PK_TSEDE = su.FK_TSEDE
+         WHERE su.FK_TUSUARIO = p_pk_tusuario
+           AND su.ACTIVE = TRUE
+           AND s.FK_TESTABLECIMIENTO = p_pk_ee
+           AND su.PK_TSEDE_USUARIO IS DISTINCT FROM p_excluir_tsede_usuario
+        UNION
+        SELECT r.PK_TROL
+          FROM academico_test.TESTABLECIMIENTO e
+          JOIN academico_test.TFUNCIONARIO f ON f.PK_TFUNCIONARIO = e.FK_TFUNCIONARIO_RECTOR
+          JOIN academico_test.TROL r ON r.CODIGO = 'RECTOR'
+         WHERE e.PK_ESTABLECIMIENTO = p_pk_ee AND e.ACTIVE = TRUE
+           AND f.ACTIVE = TRUE AND f.FK_TUSUARIO = p_pk_tusuario
+           AND p_con_punteros
+        UNION
+        SELECT r.PK_TROL
+          FROM academico_test.TESTABLECIMIENTO e
+          JOIN academico_test.TFUNCIONARIO f ON f.PK_TFUNCIONARIO = e.FK_TFUNCIONARIO_SECRETARIA
+          JOIN academico_test.TROL r ON r.CODIGO = 'JEFE_SISTEMA_ESTABLECIMIENTO'
+         WHERE e.PK_ESTABLECIMIENTO = p_pk_ee AND e.ACTIVE = TRUE
+           AND f.ACTIVE = TRUE AND f.FK_TUSUARIO = p_pk_tusuario
+           AND p_con_punteros
+    )
+    SELECT academico_test.fn_rol_categoria_nivel(r.PK_TROL), r.PESO_CATEGORIA
+      FROM roles
+      JOIN academico_test.TROL r ON r.PK_TROL = roles.pk_trol AND r.ACTIVE = TRUE
+     ORDER BY 1 NULLS LAST, 2 NULLS LAST
+     LIMIT 1;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_usuario_rango_en_ee(BIGINT, BIGINT, BIGINT, BOOLEAN)
+    IS 'El rol de mas autoridad de un usuario DENTRO de un establecimiento: nivel de categoria (fn_rol_categoria_nivel) y TROL.PESO_CATEGORIA, entre sus TSEDE_USUARIO activas en sedes de ese EE y los punteros de rector y secretaria (Jefe de sistema) de ese EE. Ninguna fila si no tiene rol ahi. p_excluir_tsede_usuario deja fuera un permiso, para saber que rango le quedaria al quitarlo; p_con_punteros = FALSE cuenta solo los permisos de sede, que son los que dan menus y acceso. Lo que pasa en otro establecimiento no cuenta: un docente de este EE que es rector en otro es docente aqui. Lo usa fn_fun_permisos_actualizar por operacion.';
+
+CREATE OR REPLACE FUNCTION academico_test.fn_rango_supera(
+    p_nivel_a INT, p_peso_a NUMERIC,
+    p_nivel_b INT, p_peso_b NUMERIC
+)
+RETURNS BOOLEAN
+LANGUAGE sql
+IMMUTABLE
+AS $$
+    SELECT CASE
+             WHEN p_nivel_b IS NULL THEN TRUE
+             WHEN p_nivel_a IS NULL THEN FALSE
+             WHEN p_nivel_a < p_nivel_b THEN TRUE
+             WHEN p_nivel_a > p_nivel_b THEN FALSE
+             ELSE p_peso_a IS NOT NULL AND p_peso_b IS NOT NULL AND p_peso_b > p_peso_a
+           END;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_rango_supera(INT, NUMERIC, INT, NUMERIC)
+    IS 'TRUE si el rango A tiene estrictamente mas autoridad que el B: categoria mas alta (nivel menor) o, en la misma categoria, peso menor; un B sin rol se supera siempre y un A sin rol no supera a nadie. Es la comparacion de fn_assert_rango_rol y fn_assert_rango_rol_otorgable, sin la busqueda de roles.';

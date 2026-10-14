@@ -22,6 +22,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import subprocess
 import unicodedata
 from dataclasses import dataclass, field
 from functools import cached_property
@@ -55,7 +56,7 @@ class Finding:
         """Identidad estable frente a cambios de linea. Las reglas de volumen
         (comentarios/cabecera) se identifican solo por archivo: su mensaje
         lleva porcentajes que cambian en cuanto alguien edita el fichero."""
-        if self.rule in ("COMENTARIOS", "CABECERA"):
+        if self.rule in ("COMENTARIOS", "CABECERA", "COMMENT-LARGO"):
             return f"{self.rel}|{self.rule}"
         return f"{self.rel}|{self.rule}|{self.msg}"
 
@@ -72,6 +73,10 @@ class Archivo:
     path: Path
     raw: str
     stmts: list = field(default_factory=list)
+
+    @property
+    def rel(self) -> str:
+        return str(self.path.relative_to(REPO)).replace("\\", "/")
 
     @property
     def version(self) -> str:
@@ -96,6 +101,25 @@ class Archivo:
 class Contexto:
     """Lo que las reglas saben del resto del historial (el modelo del analizador)."""
     arities: dict[str, dict[int, str]] = field(default_factory=dict)
+    # Migraciones que todavia no estan en origin/dev. En ellas el presupuesto de
+    # comentarios es error: la deuda vieja va al baseline, la nueva no nace.
+    nuevas: set[str] = field(default_factory=set)
+
+
+def migraciones_nuevas(paths: list[Path]) -> set[str]:
+    """Las de `paths` que no existen en origin/dev. Sin git u origin, ninguna:
+    endurecer una regla por no poder comprobar seria inventar el fallo."""
+    try:
+        r = subprocess.run(["git", "ls-tree", "-r", "--name-only", "origin/dev", "--",
+                            "postgres/migrations"], cwd=REPO, capture_output=True,
+                           text=True, timeout=20)
+    except (subprocess.SubprocessError, OSError):
+        return set()
+    if r.returncode != 0:
+        return set()
+    en_dev = set(r.stdout.split())
+    rels = {str(p.relative_to(REPO)).replace("\\", "/") for p in paths}
+    return rels - en_dev
 
 
 def live_arities(model: dict | None) -> dict[str, dict[int, str]]:
@@ -141,8 +165,9 @@ class Regla:
     def revisar(self, a: Archivo, ctx: Contexto) -> Iterator[Finding]:
         raise NotImplementedError
 
-    def hallazgo(self, a: Archivo, line: int, msg: str, codigo: str | None = None) -> Finding:
-        return Finding(a.path, line, codigo or self.codigo, msg)
+    def hallazgo(self, a: Archivo, line: int, msg: str, codigo: str | None = None,
+                 severidad: str | None = None) -> Finding:
+        return Finding(a.path, line, codigo or self.codigo, msg, severidad)
 
 
 class Mojibake(Regla):
@@ -159,10 +184,13 @@ class Mojibake(Regla):
 
 class Comentarios(Regla):
     """Presupuesto de comentarios: la prosa de investigacion envejece mal. Mismo
-    criterio que el informe de analisis, para que no se contradigan."""
+    criterio que el informe de analisis, para que no se contradigan. Aviso en lo
+    que ya esta en dev; error en una migracion nueva, que es cuando recortar es
+    gratis (V550-V552 entraron con cabeceras de 23-30 lineas siendo aviso)."""
     codigo = "COMENTARIOS"
 
     def revisar(self, a, ctx):
+        sev = "error" if a.rel in ctx.nuevas else None
         lines = a.raw.splitlines()
         if not lines:
             return
@@ -170,7 +198,7 @@ class Comentarios(Regla):
         ratio = 100 * commented // max(len(lines), 1)
         if ratio > 20 and commented > 20:
             yield self.hallazgo(a, 1, f"{ratio}% de lineas son comentario ({commented}/{len(lines)}); "
-                                      f"el presupuesto es 20%")
+                                      f"el presupuesto es 20%", severidad=sev)
         header = 0
         for l in lines:
             s = l.strip()
@@ -180,7 +208,7 @@ class Comentarios(Regla):
                 break
         if header > 14:
             yield self.hallazgo(a, 1, f"cabecera de {header} lineas; el presupuesto es 12 "
-                                      f"(que hace / por que aqui / depende de)", "CABECERA")
+                                      f"(que hace / por que aqui / depende de)", "CABECERA", sev)
 
 
 class QueryOnConflict(Regla):
@@ -412,11 +440,91 @@ class FnReporteDuplicada(Regla):
                                     f"wrapper + `_interno` si hace falta")
 
 
+RE_COMMENT_FN = re.compile(r"COMMENT\s+ON\s+FUNCTION\s+([\w.]+)\s*\([^)]*\)\s+IS\s+'((?:[^']|'')*)'",
+                           re.I | re.S)
+
+
+class ComentarioLargo(Regla):
+    """El presupuesto de `--` no cuenta los COMMENT ON, y la prosa se mudo ahi:
+    895 COMMENT ON FUNCTION, 83 de mas de 1000 caracteres. Un COMMENT es
+    contrato -- ruta o INTERNO:, que devuelve, gate, errores -- no la historia."""
+    codigo = "COMMENT-LARGO"
+    LIMITE = 600
+
+    def revisar(self, a, ctx):
+        for m in RE_COMMENT_FN.finditer(a.raw):
+            n = len(m.group(2))
+            if n > self.LIMITE:
+                fn = m.group(1).rsplit(".", 1)[-1]
+                yield self.hallazgo(a, a.linea(m.start()),
+                                    f"COMMENT ON FUNCTION {fn} tiene {n} caracteres (limite "
+                                    f"{self.LIMITE}): deja el contrato (ruta o INTERNO:, que devuelve, "
+                                    f"gate, errores) y lleva el razonamiento al commit o al PR")
+
+
+RE_BIND = re.compile(r"(?<![:\w]):((?:QUERY|BODY|BODY_RAW|PATH|HEADER)\.[A-Za-z0-9_.]+)")
+RE_TIPO_DECLARADO = re.compile(r'"((?:QUERY|BODY|BODY_RAW|PATH|HEADER)\.[A-Za-z0-9_.]+)"\s*:')
+
+
+class BindSinTipo(Regla):
+    """Un bind del SQL de un endpoint sin entrada en `param_types` no se ignora:
+    llega como texto y sin validar, asi que una entrada mala es un 500 de la
+    base en vez del 400 del ParamBinder. Los nombres van en MAYUSCULAS: el
+    binder busca la clave canonica."""
+    codigo = "BIND-SIN-TIPO"
+
+    def revisar(self, a, ctx):
+        for st in a.stmts:
+            if not re.search(r"INTO\s+PUBLIC\.QUERY\b", st.head):
+                continue
+            if "param_types" not in st.text.lower():
+                continue
+            declarados = {k.upper() for k in RE_TIPO_DECLARADO.findall(st.text)}
+            for b in sorted(set(RE_BIND.findall(st.text))):
+                if b != b.upper():
+                    yield self.hallazgo(a, st.line, f":{b} no va en MAYUSCULAS: el ParamBinder "
+                                                    f"busca la clave canonica (:{b.upper()})")
+                elif b not in declarados:
+                    yield self.hallazgo(a, st.line, f":{b} se usa en el SQL pero no esta en "
+                                                    f"param_types: llega sin tipo ni validacion "
+                                                    f"(500 de la base en vez de 400)")
+
+
+RE_FILTRO_OPCIONAL = re.compile(r"\(\s*p_\w+\s+IS\s+NULL\s+OR\b", re.I)
+RE_ESCRIBE = re.compile(r"\b(?:INSERT\s+INTO|UPDATE\s+[\w.\"]+\s+SET|DELETE\s+FROM)\b", re.I)
+
+
+class ListadoPlanGenerico(Regla):
+    """PL/pgSQL cachea el plan de cada sentencia y, tras unas llamadas, puede
+    pasar al plan generico. Con filtros opcionales `(p_x IS NULL OR col = p_x)`
+    el generico no puede elegir el indice de cada filtro: si las primeras
+    llamadas venian sin filtros, las selectivas siguen con el Seq Scan. `SET
+    plan_cache_mode = force_custom_plan` en la funcion replanifica por llamada."""
+    codigo = "LISTADO-PLAN-GENERICO"
+    MINIMO = 3
+
+    def revisar(self, a, ctx):
+        for st, short in a.funciones_creadas:
+            if not re.search(r"LANGUAGE\s+plpgsql", st.text, re.I) or RE_ESCRIBE.search(st.text):
+                continue  # el plan que importa es el de las lecturas
+            n = len(RE_FILTRO_OPCIONAL.findall(st.text))
+            if n < self.MINIMO or "plan_cache_mode" in st.text.lower():
+                continue
+            if re.search(rf"ALTER\s+FUNCTION\s+[\w.]*{re.escape(short)}\b[^;]*plan_cache_mode",
+                         a.raw, re.I):
+                continue
+            yield self.hallazgo(a, st.line,
+                                f"{short}() tiene {n} filtros opcionales `p_x IS NULL OR ...` sin "
+                                f"`SET plan_cache_mode = force_custom_plan`: con plan generico ningun "
+                                f"filtro usa su indice (skill optimizando-consultas)")
+
+
 # El orden es el del informe.
 REGLAS: list[Regla] = [
     Mojibake(), Comentarios(), QueryOnConflict(), GateTildes(), FirmaSinDrop(), TablaSinCdc(),
     PkCatalogo(), SeedPorCodigo(), AutoReferencia(), GateEnLinea(), WrapperGordo(),
-    BorradoSinGuarda(), FnReporteDuplicada(),
+    BorradoSinGuarda(), FnReporteDuplicada(), ComentarioLargo(), BindSinTipo(),
+    ListadoPlanGenerico(),
 ]
 SEVERITY = {r.codigo: r.severidad for r in REGLAS} | {"CABECERA": "aviso"}
 
@@ -432,6 +540,60 @@ def lint_file(path: Path, ctx: Contexto) -> list[Finding]:
     except Exception as exc:  # el parser es el unico punto fragil
         return [Finding(path, 1, "PARSE", f"no se pudo partir el SQL: {exc}", "aviso")]
     return [f for r in REGLAS for f in r.revisar(a, ctx)]
+
+
+def _baseline() -> set[str]:
+    try:
+        return set(json.loads(BASELINE.read_text(encoding="utf-8")))
+    except (OSError, ValueError):
+        return set()
+
+
+def _escribir_baseline(huellas: set[str]) -> None:
+    """Atomica: el hook de lint puede leerla mientras el informe de fondo la poda."""
+    tmp = BASELINE.with_suffix(".tmp")
+    tmp.write_text(json.dumps(sorted(huellas), ensure_ascii=False, indent=1), encoding="utf-8")
+    tmp.replace(BASELINE)
+
+
+def resumen(model: dict) -> dict:
+    """Lint de todo el historial para el informe, con el modelo ya construido
+    (no lo vuelve a cargar). Separa lo nuevo de la deuda congelada."""
+    paths = sorted(MIGRATIONS.glob("V*.sql"), key=version_of)
+    ctx = Contexto(arities=live_arities(model), nuevas=migraciones_nuevas(paths))
+    findings = [f for p in paths for f in lint_file(p, ctx)]
+    known = _baseline()
+    reglas: dict[str, dict] = {}
+    nuevos = []
+    for f in findings:
+        r = reglas.setdefault(f.rule, {"severidad": f.severity, "nuevos": 0, "deuda": 0,
+                                       "doc": ""})
+        if f.severity == "error":
+            r["severidad"] = "error"
+        if f.fingerprint() in known:
+            r["deuda"] += 1
+        else:
+            r["nuevos"] += 1
+            nuevos.append(f.as_dict())
+    for regla in REGLAS:
+        if regla.codigo in reglas:
+            reglas[regla.codigo]["doc"] = (regla.__doc__ or "").strip().split("\n")[0]
+    vivas = {f.fingerprint() for f in findings}
+    por_version: dict[str, dict[str, int]] = {}
+    todos: list[list] = []
+    for f in findings:  # todo, deuda incluida: Categorias lo agrega por categoria y Autoria por linea
+        v = re.match(r"V(\d+(?:\.\d+)*)", f.path.name)
+        if v:
+            r = por_version.setdefault(v.group(1), {})
+            r[f.rule] = r.get(f.rule, 0) + 1
+            todos.append([v.group(1), f.line, f.rule, f.severity])
+    return {"reglas": dict(sorted(reglas.items(), key=lambda kv: (-kv[1]["nuevos"], kv[0]))),
+            "por_version": por_version,
+            "todos": todos,
+            "nuevos": sorted(nuevos, key=lambda d: (d["severity"] != "error", d["file"],
+                                                    d["line"]))[:400],
+            "total_nuevos": len(nuevos),
+            "baseline": len(known), "baseline_corregida": len(known - vivas)}
 
 
 def version_of(path: Path) -> float:
@@ -452,6 +614,12 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--quiet-ok", action="store_true", help="no imprime nada si todo pasa")
     ap.add_argument("--baseline-write", action="store_true",
                     help="congela los hallazgos actuales como deuda aceptada")
+    ap.add_argument("--baseline-regla", action="append", metavar="CODIGO",
+                    help="congela solo los hallazgos de esa regla (repetible): para cuando "
+                         "una regla nace o cambia, sin congelar la deuda de las demas")
+    ap.add_argument("--baseline-podar", action="store_true",
+                    help="con --all: quita de la baseline la deuda que ya no aparece (se "
+                         "corrigio). Nunca anade: lo nuevo no se congela solo")
     ap.add_argument("--no-baseline", action="store_true",
                     help="reporta tambien la deuda historica ya congelada")
     args = ap.parse_args(argv)
@@ -468,8 +636,34 @@ def main(argv: list[str] | None = None) -> int:
     if not paths:
         return 0
 
-    ctx = Contexto(arities=live_arities(load_model(args.refresh)))
+    ctx = Contexto(arities=live_arities(load_model(args.refresh)),
+                   nuevas=migraciones_nuevas(paths))
     findings = [f for p in paths for f in lint_file(p, ctx)]
+
+    if args.baseline_podar:
+        if not args.all:
+            ap.error("--baseline-podar necesita --all: con menos ficheros borraria deuda viva")
+        known = _baseline()
+        vivas = {f.fingerprint() for f in findings}
+        corregida = known - vivas
+        if corregida:
+            _escribir_baseline(known & vivas)
+        print(f"baseline: {len(corregida)} hallazgo(s) ya corregidos fuera; "
+              f"quedan {len(known & vivas)}.")
+        return 0
+
+    if args.baseline_regla:
+        reglas = set(args.baseline_regla)
+        try:
+            known = set(json.loads(BASELINE.read_text(encoding="utf-8")))
+        except (OSError, ValueError):
+            known = set()
+        nuevos = {f.fingerprint() for f in findings if f.rule in reglas} - known
+        BASELINE.write_text(json.dumps(sorted(known | nuevos), ensure_ascii=False, indent=1),
+                            encoding="utf-8")
+        print(f"baseline: {len(nuevos)} hallazgo(s) de {', '.join(sorted(reglas))} congelados; "
+              f"el resto de reglas no se toca.")
+        return 0
 
     if args.baseline_write:
         BASELINE.write_text(json.dumps(sorted(f.fingerprint() for f in findings),

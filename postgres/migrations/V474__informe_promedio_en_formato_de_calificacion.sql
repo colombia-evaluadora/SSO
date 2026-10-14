@@ -27,6 +27,7 @@ AS $function$
 DECLARE
     v_fmt    RECORD;
     v_escala BIGINT;
+    v_modo   VARCHAR;
 BEGIN
     -- Sin porcentaje no hay nada que homologar. Se devuelve la fila con todo
     -- en NULL y no cero filas, para que un LEFT JOIN LATERAL no pierda al
@@ -54,9 +55,17 @@ BEGIN
     v_escala := COALESCE(v_fmt.fk_tescala,
                          academico_test.fn_grado_escala_aplicable(p_fk_tgrado));
 
+    -- Regla 30: el modo de redondeo del criterio (Hacia arriba / abajo / No
+    -- redondear / al mas cercano), el mismo que imprime el boletin.
+    SELECT lv.NOMBRE INTO v_modo
+      FROM academico_test.TCRITERIO_EVALUACION ce
+      JOIN academico_test.TLISTA_VALOR lv ON lv.PK_LISTA_VALOR = ce.FK_TLV_MODO_REDONDEAR
+     WHERE ce.PK_TCRITERIO_EVALUACION = p_fk_tperiodo_academico;
+
     RETURN QUERY
     SELECT CASE WHEN v_fmt.es_numerico
-                THEN ROUND(p_porcentaje / 100 * v_fmt.nota_maxima, v_fmt.decimales)
+                THEN TRUNC(academico_test.fn_nota_redondear(p_porcentaje / 100 * v_fmt.nota_maxima,
+                                                      v_fmt.decimales, v_modo), v_fmt.decimales)
            END,
            v_fmt.formato_valor,
            v_fmt.es_numerico,
@@ -70,4 +79,4 @@ END;
 $function$;
 
 COMMENT ON FUNCTION academico_test.fn_promedio_homologar(NUMERIC, BIGINT, BIGINT)
-    IS 'Convierte un PROMEDIO en porcentaje 0-100 al FORMATO DE CALIFICACION configurado en el criterio de evaluacion GENERAL de un periodo academico, y devuelve ademas la banda de la escala en la que cae. Hermana de fn_nota_homologar (V227/V428) para el grano en el que no hay una asignatura de la que sacar el formato: un promedio agrega varias, y cada una podria resolver por la cadena de V428 a un formato distinto. El criterio general se lee con fn_criterio_evaluacion_formato del PK del periodo academico, porque TCRITERIO_EVALUACION comparte PK con TPERIODO_ACADEMICO (V22). En los formatos numericos (CINCO/DIEZ/CIEN) devuelve el numero redondeado a los decimales configurados; en LITERAL/SIMBOLO/CARITA devuelve promedio NULL y lo que vale es la valoracion, igual que hace fn_nota_homologar con las notas. Sin criterio o sin formato configurado devuelve el porcentaje CRUDO -- no hay formato al que convertir y anularlo borraria el dato. Nunca devuelve cero filas: con porcentaje NULL devuelve la fila en NULL, para que un LEFT JOIN LATERAL no pierda al estudiante sin calificar. Con P_FK_TGRADO, si el criterio del periodo no tiene escala las bandas salen de la del nivel del grado (fn_grado_escala_aplicable); la banda se busca con fn_escala_valoracion_banda. Punto unico de esta conversion; la consumen fn_informe_grupo_listar_interno (promedios) y el boletin de notas (areas).';
+    IS 'Convierte un PROMEDIO en porcentaje 0-100 al FORMATO DE CALIFICACION configurado en el criterio de evaluacion GENERAL de un periodo academico, y devuelve ademas la banda de la escala en la que cae. Hermana de fn_nota_homologar (V227/V428) para el grano en el que no hay una asignatura de la que sacar el formato: un promedio agrega varias, y cada una podria resolver por la cadena de V428 a un formato distinto. El criterio general se lee con fn_criterio_evaluacion_formato del PK del periodo academico, porque TCRITERIO_EVALUACION comparte PK con TPERIODO_ACADEMICO (V22). En los formatos numericos (CINCO/DIEZ/CIEN) devuelve el numero con los decimales y el modo de redondeo (FK_TLV_MODO_REDONDEAR, fn_nota_redondear) configurados; en LITERAL/SIMBOLO/CARITA devuelve promedio NULL y lo que vale es la valoracion, igual que hace fn_nota_homologar con las notas. Sin criterio o sin formato configurado devuelve el porcentaje CRUDO -- no hay formato al que convertir y anularlo borraria el dato. Nunca devuelve cero filas: con porcentaje NULL devuelve la fila en NULL, para que un LEFT JOIN LATERAL no pierda al estudiante sin calificar. Con P_FK_TGRADO, si el criterio del periodo no tiene escala las bandas salen de la del nivel del grado (fn_grado_escala_aplicable); la banda se busca con fn_escala_valoracion_banda. Punto unico de esta conversion; la consumen fn_informe_grupo_listar_interno (promedios) y el boletin de notas (areas).';

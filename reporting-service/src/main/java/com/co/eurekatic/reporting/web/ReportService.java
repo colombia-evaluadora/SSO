@@ -7,8 +7,11 @@ import com.co.eurekatic.reporting.render.ExcelRenderer;
 import com.co.eurekatic.reporting.render.Fechas;
 import com.co.eurekatic.reporting.render.ReportMeta;
 import com.co.eurekatic.reporting.render.PdfRenderer;
+import com.co.eurekatic.reporting.verificacion.EmisionBoletines;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
@@ -19,6 +22,8 @@ import java.time.format.DateTimeFormatter;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.concurrent.Semaphore;
+import java.util.concurrent.TimeUnit;
 
 /**
  * Arma un reporte: resuelve la definicion, pide las filas y las
@@ -35,17 +40,81 @@ public class ReportService {
     private final FileServiceClient fileService;
     private final PdfRenderer pdf;
     private final ExcelRenderer excel;
+    /** Limita las exportaciones en vuelo de esta instancia (memoria). */
+    private final Semaphore permisos;
+    /** Registra el boletin impreso y le pone el QR; null = sin verificacion. */
+    private final EmisionBoletines emisiones;
 
     public ReportService(ReportingProperties props,
                          QueryServiceClient queryService,
                          FileServiceClient fileService,
                          PdfRenderer pdf,
                          ExcelRenderer excel) {
+        this(props, queryService, fileService, pdf, excel, null);
+    }
+
+    @Autowired
+    public ReportService(ReportingProperties props,
+                         QueryServiceClient queryService,
+                         FileServiceClient fileService,
+                         PdfRenderer pdf,
+                         ExcelRenderer excel,
+                         EmisionBoletines emisiones) {
         this.props = props;
         this.queryService = queryService;
         this.fileService = fileService;
         this.pdf = pdf;
         this.excel = excel;
+        this.emisiones = emisiones;
+        this.permisos = new Semaphore(Math.max(1, props.getMaxConcurrentExports()));
+    }
+
+    /**
+     * Arma el PDF de un boletin con filas ya obtenidas (la copia publica de
+     * verificacion), bajo el mismo tope de exportaciones simultaneas.
+     */
+    public byte[] renderBoletin(String variante, List<Map<String, Object>> rows,
+                                Map<String, Object> extra) {
+        ReportingProperties.Report def = props.getReports().get(variante);
+        if (def == null) {
+            throw new IllegalStateException("La variante '" + variante + "' no esta configurada.");
+        }
+        adquirir();
+        try {
+            FileServiceClient.Sesion imagenes =
+                    def.getImageFields() == null || def.getImageFields().isEmpty()
+                            ? null
+                            : fileService.nuevaSesion();
+            return pdf.render(variante, def, rows, null, null, imagenes, extra);
+        } finally {
+            permisos.release();
+        }
+    }
+
+    /** 429 con Retry-After: el cliente puede reintentar en unos segundos. */
+    private static final class Saturado extends ResponseStatusException {
+        Saturado() {
+            super(HttpStatus.TOO_MANY_REQUESTS,
+                    "Hay demasiadas exportaciones en curso. Intenta de nuevo en unos segundos.");
+        }
+
+        @Override
+        public HttpHeaders getHeaders() {
+            HttpHeaders h = new HttpHeaders();
+            h.set(HttpHeaders.RETRY_AFTER, "5");
+            return h;
+        }
+    }
+
+    private void adquirir() {
+        try {
+            if (!permisos.tryAcquire(props.getExportAcquireTimeout().toMillis(), TimeUnit.MILLISECONDS)) {
+                throw new Saturado();
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new Saturado();
+        }
     }
 
     /**
@@ -86,6 +155,15 @@ public class ReportService {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND,
                     "No existe el reporte '" + clave + "'.");
         }
+        // El boletin (la clave que agrupa sus variantes) es el unico que lleva
+        // QR de verificacion; el nivel pedido es el que se registra.
+        String nivelBoletin = null;
+        if (props.getVerificacion() != null
+                && clave.equals(props.getVerificacion().getReporte())
+                && def.getVariantParam() != null && query != null) {
+            String n = query.get(def.getVariantParam());
+            nivelBoletin = n == null ? null : n.trim().toLowerCase(Locale.ROOT);
+        }
         if (def.getVariants() != null && !def.getVariants().isEmpty()) {
             clave = variante(clave, def, query);
             def = props.getReports().get(clave);
@@ -108,14 +186,27 @@ public class ReportService {
                     + ". Formatos disponibles: " + String.join(", ", admitidos) + ".");
         }
 
+        adquirir();
+        try {
+            return generar(clave, def, formato, request, bearer, usuario, nivelBoletin);
+        } finally {
+            permisos.release();
+        }
+    }
+
+    private Rendered generar(String clave, ReportingProperties.Report def, Formato formato,
+                             ReportRequest request, String bearer, String usuario,
+                             String nivelBoletin) {
         long inicio = System.currentTimeMillis();
         List<Map<String, Object>> rows = queryService.fetchRows(
                 def.getBaseUrl(),
                 def.getPath(),
                 bearer,
                 request == null ? Map.of() : request.filters(),
-                request == null ? null : request.sorting());
+                request == null ? null : request.sorting(),
+                props.getMaxRows());
 
+        // Red de seguridad: el cliente ya corta en streaming al superar el tope.
         if (rows.size() > props.getMaxRows()) {
             // Se corta ACA y no despues de generar: el archivo de un
             // resultado desmedido puede tardar minutos y ocupar cientos
@@ -126,6 +217,11 @@ public class ReportService {
             throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY,
                     "El reporte devolvio " + rows.size() + " registros y el maximo es "
                     + props.getMaxRows() + ". Agrega filtros para acotarlo.");
+        }
+
+        if (nivelBoletin != null && emisiones != null) {
+            rows = emisiones.marcar(nivelBoletin,
+                    request == null ? Map.of() : request.filters(), rows, bearer);
         }
 
         // El reporte lleva impreso con que filtros salio: un PDF exportado

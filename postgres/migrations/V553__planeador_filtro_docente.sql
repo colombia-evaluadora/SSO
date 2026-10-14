@@ -2,8 +2,10 @@
 -- V553 — Planeador de un docente elegido (solo lectura) para super admin y
 --   coordinador: GET /planeador/docentes y ?funcionario= en las lecturas del
 --   tablero (mias, calendario, stats, tabs, unidades, unidades/tabs,
---   docentes/*); mias, calendario y unidades traen el docente de cada fila.
+--   docentes/*); mias, calendario, unidades y el detalle traen el docente.
 --   ?sede=&periodo= (filtro avanzado, V553.1) acotan el alcance y las lecturas.
+--   ?instrumento= (pk_lista_valor) en mias, calendario y stats; ?estados= y
+--   ?search= tambien en calendario (stats: ?search=) (filtros "Estado"/"Instrumento" del popover del tablero).
 -- Que hace: el alcance (sedes + pares sede/jornada del nivel 3 resueltos a
 --   periodos academicos), la validacion del docente pedido y el selector de
 --   docentes; los wrappers que lo usan se editaron en su migracion dueña
@@ -460,13 +462,14 @@ UPDATE public.query q
     string_to_array(NULLIF(TRIM(CAST(:QUERY.GRADO_ASIGNATURA_PARES AS VARCHAR)), ''), ','),
     CAST(:QUERY.FUNCIONARIO AS BIGINT),
     CAST(:QUERY.SEDE AS BIGINT),
-    CAST(:QUERY.PERIODO AS BIGINT)
+    CAST(:QUERY.PERIODO AS BIGINT),
+    CAST(:QUERY.INSTRUMENTO AS BIGINT)
 ) WITH ORDINALITY f
   LEFT JOIN LATERAL academico_test.fn_actividad_docente_dicta(
            f.pk_tactividad,
            academico_test.fn_funcionario_actual(public.fn_get_academico_usuario_id(:CONTEXT.USER_ID::BIGINT))) d ON TRUE
  ORDER BY f.ordinality;$q$,
-       param_types = COALESCE(q.param_types, '{}'::jsonb) || '{"QUERY.FUNCIONARIO": "BIGINT", "QUERY.SEDE": "BIGINT", "QUERY.PERIODO": "BIGINT"}'::jsonb
+       param_types = COALESCE(q.param_types, '{}'::jsonb) || '{"QUERY.FUNCIONARIO": "BIGINT", "QUERY.SEDE": "BIGINT", "QUERY.PERIODO": "BIGINT", "QUERY.INSTRUMENTO": "BIGINT"}'::jsonb
   FROM public.microservice m
  WHERE m.id_microservice = q.microservice_id
    AND m.serviceid       = 'eval-col'
@@ -487,19 +490,43 @@ UPDATE public.query q
     string_to_array(NULLIF(TRIM(CAST(:QUERY.GRADO_ASIGNATURA_PARES AS VARCHAR)), ''), ','),
     CAST(:QUERY.FUNCIONARIO AS BIGINT),
     CAST(:QUERY.SEDE AS BIGINT),
-    CAST(:QUERY.PERIODO AS BIGINT)
+    CAST(:QUERY.PERIODO AS BIGINT),
+    string_to_array(NULLIF(TRIM(CAST(:QUERY.ESTADOS AS VARCHAR)), ''), ','),
+    CAST(:QUERY.INSTRUMENTO AS BIGINT),
+    CAST(:QUERY.SEARCH AS VARCHAR)
 ) WITH ORDINALITY c
   LEFT JOIN LATERAL academico_test.fn_actividad_docente_dicta(
            c.pk_tactividad,
            academico_test.fn_funcionario_actual(public.fn_get_academico_usuario_id(:CONTEXT.USER_ID::BIGINT))) d ON TRUE
  ORDER BY c.ordinality;$q$,
-       param_types = COALESCE(q.param_types, '{}'::jsonb) || '{"QUERY.FUNCIONARIO": "BIGINT", "QUERY.SEDE": "BIGINT", "QUERY.PERIODO": "BIGINT"}'::jsonb
+       param_types = COALESCE(q.param_types, '{}'::jsonb) || '{"QUERY.FUNCIONARIO": "BIGINT", "QUERY.SEDE": "BIGINT", "QUERY.PERIODO": "BIGINT", "QUERY.ESTADOS": "VARCHAR", "QUERY.INSTRUMENTO": "BIGINT", "QUERY.SEARCH": "VARCHAR"}'::jsonb
   FROM public.microservice m
  WHERE m.id_microservice = q.microservice_id
    AND m.serviceid       = 'eval-col'
    AND q.path_template   = '/planeador/actividades/calendario'
    AND q.http_method     = 'GET'
    AND q.query LIKE '%fn_actividad_calendario_docente%';
+
+-- El detalle tambien dice de quien es la actividad (seccion "Identificacion"
+-- del panel), con el mismo criterio que las filas de mias y calendario.
+UPDATE public.query q
+   SET query = $q$SELECT d.*,
+       academico_test.fn_actividad_es_formativa(d.pk_tactividad) AS es_formativa,
+       dd.fk_tfuncionario_docente, dd.docente_nombre, COALESCE(dd.es_propia, 'N') AS es_propia
+  FROM academico_test.fn_actividad_buscar_por_pk(
+    public.fn_get_academico_usuario_id(:CONTEXT.USER_ID::BIGINT),
+    CAST(:PARAM.ID AS BIGINT),
+    COALESCE(CAST(:QUERY.DIAS_GRACIA AS INT), 2)
+) d
+  LEFT JOIN LATERAL academico_test.fn_actividad_docente_dicta(
+           d.pk_tactividad,
+           academico_test.fn_funcionario_actual(public.fn_get_academico_usuario_id(:CONTEXT.USER_ID::BIGINT))) dd ON TRUE;$q$
+  FROM public.microservice m
+ WHERE m.id_microservice = q.microservice_id
+   AND m.serviceid       = 'eval-col'
+   AND q.path_template   = '/planeador/actividades/:ID'
+   AND q.http_method     = 'GET'
+   AND q.query LIKE '%fn_actividad_buscar_por_pk%';
 
 UPDATE public.query q
    SET query = $q$SELECT t.pendientes_por_evaluar AS pending,
@@ -522,9 +549,11 @@ UPDATE public.query q
     string_to_array(NULLIF(TRIM(CAST(:QUERY.GRADO_ASIGNATURA_PARES AS VARCHAR)), ''), ','),
     CAST(:QUERY.FUNCIONARIO AS BIGINT),
     CAST(:QUERY.SEDE AS BIGINT),
-    CAST(:QUERY.PERIODO AS BIGINT)
+    CAST(:QUERY.PERIODO AS BIGINT),
+    CAST(:QUERY.INSTRUMENTO AS BIGINT),
+    CAST(:QUERY.SEARCH AS VARCHAR)
 ) t;$q$,
-       param_types = COALESCE(q.param_types, '{}'::jsonb) || '{"QUERY.FUNCIONARIO": "BIGINT", "QUERY.SEDE": "BIGINT", "QUERY.PERIODO": "BIGINT"}'::jsonb
+       param_types = COALESCE(q.param_types, '{}'::jsonb) || '{"QUERY.FUNCIONARIO": "BIGINT", "QUERY.SEDE": "BIGINT", "QUERY.PERIODO": "BIGINT", "QUERY.INSTRUMENTO": "BIGINT", "QUERY.SEARCH": "VARCHAR"}'::jsonb
   FROM public.microservice m
  WHERE m.id_microservice = q.microservice_id
    AND m.serviceid       = 'eval-col'
@@ -611,7 +640,7 @@ BEGIN
     SELECT string_agg(r.ruta, ', ')
       INTO v_faltan
       FROM (VALUES ('/planeador/actividades/mias'), ('/planeador/actividades/calendario'),
-                   ('/planeador/unidades')) AS r(ruta)
+                   ('/planeador/unidades'), ('/planeador/actividades/:ID')) AS r(ruta)
      WHERE NOT EXISTS (SELECT 1 FROM public.query q
                         WHERE q.path_template = r.ruta AND q.http_method = 'GET'
                           AND q.query LIKE '%docente_nombre%es_propia%');

@@ -97,6 +97,14 @@ DECLARE
     v_perm           RECORD;
     v_fk_sede_op     BIGINT;
     v_fk_rol_op      BIGINT;
+    v_fk_usuario_op  BIGINT;
+    v_ee             BIGINT;
+    v_existe         BOOLEAN;
+    v_nivel_actor    INT;
+    v_peso_actor     NUMERIC;
+    v_nivel_obj      INT;
+    v_peso_obj       NUMERIC;
+    v_pk_trol_director BIGINT;
 BEGIN
     -- =====================================================================
     -- 1. Validar existencia y estado del TFUNCIONARIO. Resolver PK_TUSUARIO
@@ -151,8 +159,6 @@ BEGIN
     -- =====================================================================
     PERFORM academico_test.fn_assert_permiso_seccion(
         p_pk_usuario_solicitante, 'FUNCIONARIOS', 'EDITAR');
-    PERFORM academico_test.fn_assert_rango_rol(
-        p_pk_usuario_solicitante, p_pk_funcionario);
 
     -- v_es_super sigue siendo necesario mas abajo: distingue "sin
     -- restriccion de sede" del resto para la validacion POR OPERACION del
@@ -161,6 +167,20 @@ BEGIN
     -- nivel 1 ADMINISTRATIVOS_TERRITORIALES) en vez de la lista fija
     -- fn_puede_afectar_establecimiento (FK_TROL IN (1,2,3)).
     v_es_super := (academico_test.fn_usuario_categoria_rol_nivel(p_pk_usuario_solicitante) <= 1);
+
+    -- El rango se compara DENTRO del establecimiento de cada operacion (abajo):
+    -- ser rector en otro colegio no protege un permiso de docente en este.
+    -- Super admin y territoriales no estan atados a un EE: rango global.
+    IF v_es_super THEN
+        PERFORM academico_test.fn_assert_rango_rol(
+            p_pk_usuario_solicitante, p_pk_funcionario);
+    END IF;
+
+    -- El director de grupo lo asigna y lo quita el grupo (fn_grupo_director_rol_sync_interno):
+    -- aqui no se otorga ni se quita, para que el permiso no quede desalineado del grupo.
+    SELECT r.PK_TROL INTO v_pk_trol_director
+      FROM academico_test.TROL r
+     WHERE r.CODIGO = 'DIRECTOR_GRUPO';
 
     IF p_permisos IS NULL OR jsonb_typeof(p_permisos) <> 'array' THEN
         RAISE EXCEPTION 'p_permisos debe ser un JSON array'
@@ -222,14 +242,10 @@ BEGIN
                 CONTINUE;
             END IF;
 
-            -- Capa 3 (CU-86e2w4xdt): no se puede OTORGAR un rol de
-            -- categoria igual o superior a la propia. Lanza 42501 y aborta
-            -- la llamada completa -- a diferencia de los 'error:*' de
-            -- abajo, esto no es un dato invalido de una fila sino un
-            -- intento de escalada de privilegios. El super admin (nivel 0)
-            -- pasa siempre.
-            PERFORM academico_test.fn_assert_rango_rol_otorgable(
-                p_pk_usuario_solicitante, v_perm.fk_rol);
+            IF v_perm.fk_rol = v_pk_trol_director THEN
+                RAISE EXCEPTION 'El rol de director de grupo no se asigna desde funcionarios: se asigna eligiendo el director en el grupo.'
+                    USING ERRCODE = '22023';
+            END IF;
 
             IF NOT v_es_super
                AND NOT (v_perm.fk_sede = ANY(v_sedes_plenas))
@@ -239,6 +255,37 @@ BEGIN
                 status := 'error:sin_permiso_en_sede';
                 RETURN NEXT;
                 CONTINUE;
+            END IF;
+
+            -- Capa 3 (CU-86e2w4xdt): no se OTORGA un rol de rango igual o
+            -- superior al propio, ni se tocan los permisos de quien lo tenga.
+            -- Lanza 42501 y aborta la llamada: es un intento de escalada, no
+            -- un dato invalido de una fila. Fuera de super admin y
+            -- territoriales, el rango es el de este establecimiento.
+            IF v_es_super THEN
+                PERFORM academico_test.fn_assert_rango_rol_otorgable(
+                    p_pk_usuario_solicitante, v_perm.fk_rol);
+            ELSE
+                v_ee := (SELECT s.FK_TESTABLECIMIENTO FROM academico_test.TSEDE s WHERE s.PK_TSEDE = v_perm.fk_sede);
+                SELECT nivel, peso INTO v_nivel_actor, v_peso_actor
+                  FROM academico_test.fn_usuario_rango_en_ee(p_pk_usuario_solicitante, v_ee);
+                IF NOT academico_test.fn_rango_supera(
+                        v_nivel_actor, v_peso_actor,
+                        academico_test.fn_rol_categoria_nivel(v_perm.fk_rol),
+                        (SELECT r.PESO_CATEGORIA FROM academico_test.TROL r WHERE r.PK_TROL = v_perm.fk_rol)) THEN
+                    RAISE EXCEPTION 'No puede asignar el rol "%" en %: es de igual o mayor rango que el suyo en ese establecimiento.',
+                        (SELECT r.NOMBRE FROM academico_test.TROL r WHERE r.PK_TROL = v_perm.fk_rol), (SELECT e.NOMBRE FROM academico_test.TESTABLECIMIENTO e WHERE e.PK_ESTABLECIMIENTO = v_ee)
+                        USING ERRCODE = '42501';
+                END IF;
+                IF v_pk_usuario <> p_pk_usuario_solicitante THEN
+                    SELECT nivel, peso INTO v_nivel_obj, v_peso_obj
+                      FROM academico_test.fn_usuario_rango_en_ee(v_pk_usuario, v_ee);
+                    IF NOT academico_test.fn_rango_supera(v_nivel_actor, v_peso_actor, v_nivel_obj, v_peso_obj) THEN
+                        RAISE EXCEPTION 'No puede modificar los permisos de % en %: tiene un rol de igual o mayor rango que el suyo en ese establecimiento.',
+                            v_nombre_actual, (SELECT e.NOMBRE FROM academico_test.TESTABLECIMIENTO e WHERE e.PK_ESTABLECIMIENTO = v_ee)
+                            USING ERRCODE = '42501';
+                    END IF;
+                END IF;
             END IF;
 
             id := academico_test.fn_sede_usuario_crear(
@@ -261,11 +308,35 @@ BEGIN
                 CONTINUE;
             END IF;
 
-            SELECT FK_TSEDE, FK_TROL INTO v_fk_sede_op, v_fk_rol_op
+            SELECT FK_TSEDE, FK_TROL, FK_TUSUARIO INTO v_fk_sede_op, v_fk_rol_op, v_fk_usuario_op
               FROM academico_test.TSEDE_USUARIO
              WHERE PK_TSEDE_USUARIO = v_perm.id;
+            v_existe := FOUND;
 
-            IF FOUND AND NOT v_es_super
+            -- Uno puede quitarse permisos propios, pero no el que le da su rango
+            -- mas alto en ese establecimiento: se quedaria sin la autoridad para
+            -- devolverselo. Si otro permiso le deja el mismo rango, si puede. Solo
+            -- cuentan los permisos de sede (dan menus y acceso), no los punteros.
+            IF v_existe AND v_fk_usuario_op = p_pk_usuario_solicitante THEN
+                v_ee := (SELECT s.FK_TESTABLECIMIENTO FROM academico_test.TSEDE s WHERE s.PK_TSEDE = v_fk_sede_op);
+                SELECT nivel, peso INTO v_nivel_actor, v_peso_actor
+                  FROM academico_test.fn_usuario_rango_en_ee(p_pk_usuario_solicitante, v_ee, NULL, FALSE);
+                SELECT nivel, peso INTO v_nivel_obj, v_peso_obj
+                  FROM academico_test.fn_usuario_rango_en_ee(p_pk_usuario_solicitante, v_ee, v_perm.id, FALSE);
+                IF academico_test.fn_rango_supera(v_nivel_actor, v_peso_actor, v_nivel_obj, v_peso_obj) THEN
+                    RAISE EXCEPTION 'No puede quitarse su rol de mayor rango (%) en %: otra persona con autoridad tendría que hacerlo.',
+                        (SELECT r.NOMBRE FROM academico_test.TROL r WHERE r.PK_TROL = v_fk_rol_op),
+                        (SELECT e.NOMBRE FROM academico_test.TESTABLECIMIENTO e WHERE e.PK_ESTABLECIMIENTO = v_ee)
+                        USING ERRCODE = '42501';
+                END IF;
+            END IF;
+
+            IF v_fk_rol_op = v_pk_trol_director THEN
+                RAISE EXCEPTION 'El rol de director de grupo no se quita desde funcionarios: se quita cambiando o quitando el director en el grupo.'
+                    USING ERRCODE = '22023';
+            END IF;
+
+            IF v_existe AND NOT v_es_super
                AND NOT (v_fk_sede_op = ANY(v_sedes_plenas))
                AND NOT (v_fk_sede_op = ANY(v_sedes_coord)
                         AND academico_test.fn_rol_categoria_nivel(v_fk_rol_op) = 3)
@@ -273,6 +344,21 @@ BEGIN
                 status := 'error:sin_permiso_en_sede';
                 RETURN NEXT;
                 CONTINUE;
+            END IF;
+
+            IF v_existe AND NOT v_es_super THEN
+                v_ee := (SELECT s.FK_TESTABLECIMIENTO FROM academico_test.TSEDE s WHERE s.PK_TSEDE = v_fk_sede_op);
+                SELECT nivel, peso INTO v_nivel_actor, v_peso_actor
+                  FROM academico_test.fn_usuario_rango_en_ee(p_pk_usuario_solicitante, v_ee);
+                IF v_fk_usuario_op <> p_pk_usuario_solicitante THEN
+                    SELECT nivel, peso INTO v_nivel_obj, v_peso_obj
+                      FROM academico_test.fn_usuario_rango_en_ee(v_fk_usuario_op, v_ee);
+                    IF NOT academico_test.fn_rango_supera(v_nivel_actor, v_peso_actor, v_nivel_obj, v_peso_obj) THEN
+                        RAISE EXCEPTION 'No puede modificar los permisos de % en %: tiene un rol de igual o mayor rango que el suyo en ese establecimiento.',
+                            v_nombre_actual, (SELECT e.NOMBRE FROM academico_test.TESTABLECIMIENTO e WHERE e.PK_ESTABLECIMIENTO = v_ee)
+                            USING ERRCODE = '42501';
+                    END IF;
+                END IF;
             END IF;
 
             PERFORM academico_test.fn_sede_usuario_soft_delete(v_perm.id, p_pk_usuario_solicitante);

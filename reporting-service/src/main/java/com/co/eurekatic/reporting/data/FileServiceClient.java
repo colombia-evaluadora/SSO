@@ -9,6 +9,7 @@ import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
 
+import java.io.InputStream;
 import java.time.Duration;
 import java.util.HashMap;
 import java.util.Map;
@@ -110,8 +111,30 @@ public class FileServiceClient {
             byte[] datos = cliente.get()
                     .uri("/files/download/{id}", pkTarchivo)
                     .header("X-Internal-Token", tokenInterno)
-                    .retrieve()
-                    .body(byte[].class);
+                    .exchange((req, res) -> {
+                        if (!res.getStatusCode().is2xxSuccessful()) {
+                            log.warn("file-service respondio {} para el archivo {}",
+                                    res.getStatusCode(), pkTarchivo);
+                            return null;
+                        }
+                        // Se decide ANTES de leer el cuerpo: con Content-Length
+                        // se aborta sin bajar nada; sin el, se lee con tope.
+                        long largo = res.getHeaders().getContentLength();
+                        if (largo > maxBytes) {
+                            log.warn("El archivo {} pesa {} bytes y el maximo por imagen es {}: se omite",
+                                    pkTarchivo, largo, maxBytes);
+                            return null;
+                        }
+                        try (InputStream in = res.getBody()) {
+                            byte[] leidos = in.readNBytes(maxBytes + 1);
+                            if (leidos.length > maxBytes) {
+                                log.warn("El archivo {} supera el maximo por imagen de {} bytes: se omite",
+                                        pkTarchivo, maxBytes);
+                                return null;
+                            }
+                            return leidos;
+                        }
+                    });
 
             if (datos == null || datos.length == 0) {
                 log.warn("El archivo {} vino vacio", pkTarchivo);

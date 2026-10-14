@@ -112,10 +112,11 @@ AS $$
          WHERE e.ACTIVE = TRUE AND f.ACTIVE = TRUE
            AND f.FK_TUSUARIO = p_pk_usuario_solicitante
         UNION
-        SELECT 9 -- Auxiliar administrativo / secretaria (idem)
+        SELECT r.PK_TROL -- secretaria: Jefe de sistema, por CODIGO
           FROM academico_test.TESTABLECIMIENTO e
           JOIN academico_test.TFUNCIONARIO f
             ON f.PK_TFUNCIONARIO = e.FK_TFUNCIONARIO_SECRETARIA
+          JOIN academico_test.TROL r ON r.CODIGO = 'JEFE_SISTEMA_ESTABLECIMIENTO'
          WHERE e.ACTIVE = TRUE AND f.ACTIVE = TRUE
            AND f.FK_TUSUARIO = p_pk_usuario_solicitante
     ),

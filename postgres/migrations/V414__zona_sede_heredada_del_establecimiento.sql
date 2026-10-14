@@ -321,7 +321,7 @@ BEGIN
          WHERE CODIGO = p_codigo
            AND ACTIVE = TRUE
     ) THEN
-        RAISE EXCEPTION 'Ya existe una TSEDE activa con CODIGO %', p_codigo
+        RAISE EXCEPTION 'Ya existe una sede activa con el código %.', p_codigo
             USING ERRCODE = '23505',
                   HINT    = 'Use una consulta directa sobre TSEDE para localizar el registro';
     END IF;
@@ -415,8 +415,11 @@ BEGIN
            AND f.ACTIVE = TRUE;
 
         IF v_fk_usuario_rector IS NULL THEN
-            RAISE EXCEPTION 'El rector del establecimiento (TFUNCIONARIO %) no tiene un usuario activo; no se le pudo dar permiso en la sede nueva',
-                v_pk_rector
+            RAISE EXCEPTION 'El rector del establecimiento, %, no tiene un usuario activo, así que no se le pudo dar permiso en la sede nueva.',
+                (SELECT CONCAT_WS(' ', u.PRIMER_NOMBRE, u.SEGUNDO_NOMBRE, u.PRIMER_APELLIDO, u.SEGUNDO_APELLIDO)
+                   FROM academico_test.TFUNCIONARIO f
+                   JOIN academico_test.TUSUARIO u ON u.PK_TUSUARIO = f.FK_TUSUARIO
+                  WHERE f.PK_TFUNCIONARIO = v_pk_rector)
                 USING ERRCODE = 'P0002';
         END IF;
 
@@ -444,8 +447,11 @@ BEGIN
            AND f.ACTIVE = TRUE;
 
         IF v_fk_usuario_secretaria IS NULL THEN
-            RAISE EXCEPTION 'La secretaria del establecimiento (TFUNCIONARIO %) no tiene un usuario activo; no se le pudo dar permiso en la sede nueva',
-                v_pk_secretaria
+            RAISE EXCEPTION 'La secretaria del establecimiento, %, no tiene un usuario activo, así que no se le pudo dar permiso en la sede nueva.',
+                (SELECT CONCAT_WS(' ', u.PRIMER_NOMBRE, u.SEGUNDO_NOMBRE, u.PRIMER_APELLIDO, u.SEGUNDO_APELLIDO)
+                   FROM academico_test.TFUNCIONARIO f
+                   JOIN academico_test.TUSUARIO u ON u.PK_TUSUARIO = f.FK_TUSUARIO
+                  WHERE f.PK_TFUNCIONARIO = v_pk_secretaria)
                 USING ERRCODE = 'P0002';
         END IF;
 
@@ -599,7 +605,7 @@ BEGIN
            AND ACTIVE  = TRUE
            AND PK_TSEDE <> p_pk_sede
     ) THEN
-        RAISE EXCEPTION 'Ya existe otra TSEDE activa con CODIGO %', p_codigo
+        RAISE EXCEPTION 'Ya existe otra sede activa con el código %.', p_codigo
             USING ERRCODE = '23505',
                   HINT    = 'Use una consulta directa sobre TSEDE para localizar el registro que ya lo usa';
     END IF;
@@ -612,7 +618,8 @@ BEGIN
            AND ACTIVE              = TRUE
            AND PK_TSEDE           <> p_pk_sede
     ) THEN
-        RAISE EXCEPTION 'Ya existe otra TSEDE activa con NOMBRE % para el EE %', p_nombre, v_fk_ee
+        RAISE EXCEPTION 'Ya existe otra sede activa llamada "%" en el establecimiento %.', p_nombre,
+            (SELECT e.NOMBRE FROM academico_test.TESTABLECIMIENTO e WHERE e.PK_ESTABLECIMIENTO = v_fk_ee)
             USING ERRCODE = '23505',
                   HINT    = 'Dentro de un EE el NOMBRE de sede debe ser unico entre activas';
     END IF;
@@ -770,7 +777,7 @@ BEGIN
         SELECT 1 FROM academico_test.TESTABLECIMIENTO
         WHERE NIT = p_nit AND ACTIVE = TRUE
     ) THEN
-        RAISE EXCEPTION 'Ya existe un TESTABLECIMIENTO activo con NIT %', p_nit
+        RAISE EXCEPTION 'Ya existe un establecimiento activo con el NIT %.', p_nit
             USING ERRCODE = '23505',
                   HINT    = 'Use fn_est_buscar_por_nit('') para obtener el registro existente';
     END IF;
@@ -783,7 +790,7 @@ BEGIN
         SELECT 1 FROM academico_test.TESTABLECIMIENTO
         WHERE CODIGO = p_codigo AND ACTIVE = TRUE
     ) THEN
-        RAISE EXCEPTION 'Ya existe un TESTABLECIMIENTO activo con CODIGO %', p_codigo
+        RAISE EXCEPTION 'Ya existe un establecimiento activo con el código DANE %.', p_codigo
             USING ERRCODE = '23505',
                   HINT    = 'Use fn_est_buscar_por_nit('') o un SELECT directo para localizarlo';
     END IF;

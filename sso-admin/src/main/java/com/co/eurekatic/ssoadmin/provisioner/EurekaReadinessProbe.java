@@ -52,17 +52,26 @@ public class EurekaReadinessProbe {
     private static final Logger log = LoggerFactory.getLogger(EurekaReadinessProbe.class);
 
     /** Poll interval — must be ≤ Eureka fetch interval or we'll miss heartbeats. */
-    private static final Duration POLL_INTERVAL = Duration.ofSeconds(1);
+    private final Duration pollInterval;
 
     /** Total wait before giving up. Generous because the
      *  JVM warm-up window is the dominant cost in dev
      *  (the sso query-service takes ~30s to be UP). */
-    private static final Duration TIMEOUT = Duration.ofSeconds(45);
+    private final Duration timeout;
 
     private final DiscoveryClient discoveryClient;
 
-    public EurekaReadinessProbe(DiscoveryClient discoveryClient) {
+    @org.springframework.beans.factory.annotation.Autowired
+    public EurekaReadinessProbe(DiscoveryClient discoveryClient,
+            @org.springframework.beans.factory.annotation.Value("${SSO_ADMIN_EUREKA_READY_TIMEOUT:45s}") Duration timeout,
+            @org.springframework.beans.factory.annotation.Value("${SSO_ADMIN_EUREKA_POLL_INTERVAL:1s}") Duration pollInterval) {
         this.discoveryClient = discoveryClient;
+        this.timeout = timeout;
+        this.pollInterval = pollInterval;
+    }
+
+    public EurekaReadinessProbe(DiscoveryClient discoveryClient) {
+        this(discoveryClient, Duration.ofSeconds(45), Duration.ofSeconds(1));
     }
 
     /**
@@ -74,7 +83,7 @@ public class EurekaReadinessProbe {
      *                  (e.g. {@code query-service-oracle-dev}).
      */
     public void waitForInstance(String serviceId) {
-        Instant deadline = Instant.now().plus(TIMEOUT);
+        Instant deadline = Instant.now().plus(timeout);
         // Probe both cases per poll: Eureka stores app names
         // uppercase in the wire, but Spring Cloud
         // DiscoveryClient doesn't normalize a lowercase
@@ -82,7 +91,7 @@ public class EurekaReadinessProbe {
         // of the cache actually serves the request.
         String upper = serviceId.toUpperCase(Locale.ROOT);
         log.info("Waiting up to {} for {} (or {}) to register with Eureka",
-                TIMEOUT, serviceId, upper);
+                timeout, serviceId, upper);
         while (Instant.now().isBefore(deadline)) {
             List<ServiceInstance> instances = firstNonEmpty(
                     discoveryClient.getInstances(upper),
@@ -94,7 +103,7 @@ public class EurekaReadinessProbe {
                         instances.get(0).getPort());
                 return;
             }
-            sleep(POLL_INTERVAL);
+            sleep(pollInterval);
         }
         // No log at the throw site — the caller (and the
         // GlobalExceptionHandler) will surface it. But we
@@ -106,7 +115,7 @@ public class EurekaReadinessProbe {
                 serviceId, discoveryClient.getServices());
         throw new ProvisioningException(
                 ProvisioningException.Code.EUREKA_TIMEOUT,
-                serviceId + " no se registró en Eureka dentro de " + TIMEOUT);
+                serviceId + " no se registró en Eureka dentro de " + timeout);
     }
 
     @SafeVarargs

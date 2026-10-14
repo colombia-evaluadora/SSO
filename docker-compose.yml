@@ -88,6 +88,13 @@
 #     -H "Authorization: Bearer $TOKEN"
 # =============================================================================
 
+# Bloque común de logging: rota los logs json-file para que no llenen el disco.
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "${DOCKER_LOG_MAX_SIZE:-20m}"
+    max-file: "${DOCKER_LOG_MAX_FILE:-5}"
+
 services:
 
   postgres:
@@ -111,18 +118,19 @@ services:
       - max_wal_senders=4
     container_name: sso-postgres
     restart: unless-stopped
+    logging: *default-logging
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: ${POSTGRES_DB}
     ports:
-      # BIND_IP (default 0.0.0.0 = todo interface) gobierna qué tan
+      # BIND_IP (default 127.0.0.1 = solo loopback) gobierna qué tan
       # expuestos quedan los puertos que NO son el ingress público.
-      # En el servidor de pruebas .env fija BIND_IP=127.0.0.1: Docker
+      # Con 127.0.0.1 (default) o en el servidor: Docker
       # publica puertos saltándose ufw/firewalld, así que el bind a
       # loopback es la única barrera real. Solo el api-gateway (8080)
       # queda deliberadamente fuera de este patrón.
-      - "${BIND_IP:-0.0.0.0}:${POSTGRES_PORT:-5432}:5432"
+      - "${BIND_IP:-127.0.0.1}:${POSTGRES_PORT:-5432}:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
     healthcheck:
@@ -147,6 +155,7 @@ services:
     image: alpine:3.20
     container_name: sso-tsesion-web-gc
     restart: unless-stopped
+    logging: *default-logging
     # Alpine + dcron + postgresql16-client (la 16 matchea con la
     # imagen de Postgres del cluster). No usamos la imagen de
     # debezium/postgres para esto -- sería sobredimensionada
@@ -226,6 +235,8 @@ services:
     image: ${IMAGE_PREFIX:-eurekatic}/eurekaserver:${IMAGE_TAG:-1.0.0-SNAPSHOT}
     container_name: sso-eureka
     restart: unless-stopped
+    stop_grace_period: ${JAVA_STOP_GRACE_PERIOD:-40s}
+    logging: *default-logging
     # Cap the cgroup memory so MaxRAMPercentage=75 inside the JVM
     # translates to a sane heap (180MB instead of "whatever the
     # host has"). On a 1.9GiB colima with 5 JVMs this is the
@@ -233,11 +244,13 @@ services:
     mem_limit: 384m
     mem_reservation: 256m
     ports:
-      - "${BIND_IP:-0.0.0.0}:${EUREKA_PORT:-8761}:8761"
+      - "${BIND_IP:-127.0.0.1}:${EUREKA_PORT:-8761}:8761"
     environment:
       # Standalone Eureka — does not register with itself.
       EUREKA_CLIENT_REGISTER_WITH_EUREKA: "false"
       EUREKA_CLIENT_FETCH_REGISTRY: "false"
+      EUREKA_RENEWAL_THRESHOLD: "${EUREKA_RENEWAL_THRESHOLD:-0.85}"
+      EUREKA_EVICTION_INTERVAL_MS: "${EUREKA_EVICTION_INTERVAL_MS:-30000}"
       # Observability: push OTLP to Alloy
       OTEL_EXPORTER_OTLP_ENDPOINT: "${OTEL_EXPORTER_OTLP_ENDPOINT:-http://alloy:4318}"
       # Interruptor de telemetria: con el perfil de observabilidad
@@ -245,6 +258,7 @@ services:
       # reintentarian contra un endpoint muerto. Nombres verificados
       # contra el spring-configuration-metadata.json de los jars.
       MANAGEMENT_TRACING_EXPORT_ENABLED: "${SSO_TELEMETRY_ENABLED:-false}"
+      OTEL_TRACING_SAMPLE_RATE: "${OTEL_TRACING_SAMPLE_RATE:-0.1}"
       MANAGEMENT_OTLP_METRICS_EXPORT_ENABLED: "${SSO_TELEMETRY_ENABLED:-false}"
       MANAGEMENT_LOGGING_EXPORT_OTLP_ENABLED: "${SSO_TELEMETRY_ENABLED:-false}"
     healthcheck:
@@ -256,16 +270,15 @@ services:
 
   # Backing store for the rotating refresh-token flow. Internal-only:
   # no host port mapping (Redis is reachable solely from auth-center
-  # over the compose network). Persistence is intentionally disabled
-  # (`--save "" --appendonly no`): refresh tokens have a 30-day TTL
-  # set on every key, so if Redis loses state the worst case is
-  # every active session gets a forced re-login once. This is the
-  # correct trade-off for an admin SPA — we never want stale
-  # refresh tokens surviving a Redis crash.
+  # over the compose network). Persistencia AOF (everysec) sobre el
+  # volumen redis-data: un reinicio del contenedor ya no cierra todas
+  # las sesiones. Si Redis pierde el estado, el peor caso sigue siendo
+  # un re-login forzado una vez (refresh tokens con TTL de 30 días).
   redis:
     image: redis:7-alpine
     container_name: sso-redis
     restart: unless-stopped
+    logging: *default-logging
     mem_limit: 256m
     mem_reservation: 128m
     # Mapped to 127.0.0.1 so the host (and an IDE on the host)
@@ -275,11 +288,30 @@ services:
     # deployments may need to remove or firewall this mapping.
     ports:
       - "127.0.0.1:${REDIS_PORT:-6379}:6379"
-    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+      REDIS_MAXMEMORY: ${REDIS_MAXMEMORY:-200mb}
+      REDIS_MAXMEMORY_POLICY: ${REDIS_MAXMEMORY_POLICY:-volatile-lru}
+    # AOF (everysec) + volumen: las sesiones sobreviven a un reinicio del
+    # contenedor. --requirepass solo se añade si REDIS_PASSWORD no está
+    # vacío (con vacío, Redis arranca sin autenticación como antes).
+    # maxmemory < mem_limit; volatile-lru solo expulsa claves con TTL.
+    # `$$` evita la interpolación de compose; la expansión es del shell.
+    command:
+      - sh
+      - -c
+      - >-
+        exec redis-server --save ""
+        --appendonly yes --appendfsync everysec
+        --maxmemory "$$REDIS_MAXMEMORY"
+        --maxmemory-policy "$$REDIS_MAXMEMORY_POLICY"
+        $${REDIS_PASSWORD:+--requirepass "$$REDIS_PASSWORD"}
+    volumes:
+      - redis-data:/data
     healthcheck:
-      # `redis-cli ping` returns "PONG" when the server is ready
-      # to accept commands.
-      test: ["CMD", "redis-cli", "ping"]
+      # PONG = listo. Con contraseña, REDISCLI_AUTH evita el aviso de -a y
+      # no deja la clave en la línea de comandos.
+      test: ["CMD-SHELL", "[ -z \"$$REDIS_PASSWORD\" ] || export REDISCLI_AUTH=\"$$REDIS_PASSWORD\"; redis-cli ping | grep -q PONG"]
       interval: 5s
       timeout: 3s
       retries: 10
@@ -292,18 +324,14 @@ services:
     image: ${IMAGE_PREFIX:-eurekatic}/auth-center:${IMAGE_TAG:-1.0.0-SNAPSHOT}
     container_name: sso-auth-center
     restart: unless-stopped
-    # Subido de 640m a 896m el 2026-09-09. En el servidor de pruebas el
-    # contenedor estaba estable en 583MiB — el 91% de los 640m — y es el
-    # único servicio cuya caída deja a TODO el mundo fuera: es quien
-    # firma los tokens. Un pico de logins lo dejaba a un OOM-kill de
-    # distancia, y `restart: unless-stopped` habría hecho el corte
-    # visible (todas las sesiones en curso fallando el refresh).
-    #
-    # mem_limit no reserva nada: sólo pone el techo del cgroup, así que
-    # subirlo no le quita memoria a nadie mientras auth-center no la
-    # use. Lo que sí reserva es mem_reservation, y por eso sube menos
-    # (512m -> 640m): justo por encima del consumo observado.
-    mem_limit: 896m
+    stop_grace_period: ${JAVA_STOP_GRACE_PERIOD:-40s}
+    logging: *default-logging
+    # Sin mem_limit ni límite de CPU: es quien firma los tokens y su caída
+    # deja a todo el mundo fuera. Con 896m, 10 logins concurrentes
+    # (Argon2id, 19 MiB por hash) llevaban el RSS a 894/896 MiB y el
+    # cgroup lo mataba (benchmark local, 2026-10-13). La concurrencia de
+    # hashes la acota el semáforo de JsonLoginFilter, no el contenedor.
+    # mem_reservation no limita: solo es la reserva blanda bajo presión.
     mem_reservation: 640m
     depends_on:
       flyway:
@@ -315,8 +343,19 @@ services:
       eurekaserver:
         condition: service_started
     ports:
-      - "${BIND_IP:-0.0.0.0}:${AUTH_CENTER_PORT:-8081}:8081"
+      - "${BIND_IP:-127.0.0.1}:${AUTH_CENTER_PORT:-8081}:8081"
     environment:
+      # Logins concurrentes (0 = 2 por núcleo, acotado por heap) y espera por permiso.
+      SSO_LOGIN_MAX_CONCURRENT: ${SSO_LOGIN_MAX_CONCURRENT:-0}
+      SSO_LOGIN_ACQUIRE_TIMEOUT_MS: ${SSO_LOGIN_ACQUIRE_TIMEOUT_MS:-200}
+      # JVM acotada aunque el contenedor no tenga mem_limit: sin -Xmx la JVM
+      # toma el 75% de la RAM del host y, con la basura de Argon2, llegó a
+      # 4,4 GiB y p99 de login de 6,9s. Con esto (benchmark local, 10 logins
+      # concurrentes): pico 869 MiB, 547 MiB en reposo y p99 436 ms.
+      # G1PeriodicGCInterval devuelve heap al SO en reposo (JEP 346);
+      # MALLOC_ARENA_MAX limita las arenas de glibc por hilo.
+      JAVA_TOOL_OPTIONS: ${AUTH_CENTER_JAVA_OPTS:--Xmx512m -XX:G1PeriodicGCInterval=15000 -Xss512k -XX:ReservedCodeCacheSize=64m -XX:MaxDirectMemorySize=64m}
+      MALLOC_ARENA_MAX: ${AUTH_CENTER_MALLOC_ARENA_MAX:-2}
       SPRING_DATASOURCE_URL: "jdbc:postgresql://${DB_URL}/${DB_NAME}?sslmode=${DB_SSLMODE:-require}&channel_binding=${DB_CHANNEL_BINDING:-prefer}"
       DB_USER: ${DB_USER}
       DB_PASSWORD: ${DB_PASSWORD}
@@ -369,6 +408,7 @@ services:
       # reintentarian contra un endpoint muerto. Nombres verificados
       # contra el spring-configuration-metadata.json de los jars.
       MANAGEMENT_TRACING_EXPORT_ENABLED: "${SSO_TELEMETRY_ENABLED:-false}"
+      OTEL_TRACING_SAMPLE_RATE: "${OTEL_TRACING_SAMPLE_RATE:-0.1}"
       MANAGEMENT_OTLP_METRICS_EXPORT_ENABLED: "${SSO_TELEMETRY_ENABLED:-false}"
       MANAGEMENT_LOGGING_EXPORT_OTLP_ENABLED: "${SSO_TELEMETRY_ENABLED:-false}"
     healthcheck:
@@ -393,8 +433,11 @@ services:
     image: ${IMAGE_PREFIX:-eurekatic}/api-gateway:${IMAGE_TAG:-1.0.0-SNAPSHOT}
     container_name: sso-api-gateway
     restart: unless-stopped
-    mem_limit: 512m
-    mem_reservation: 384m
+    stop_grace_period: ${JAVA_STOP_GRACE_PERIOD:-40s}
+    logging: *default-logging
+    # 768m: con 300-400 rps medidos en local el RSS rozaba los 512m.
+    mem_limit: 768m
+    mem_reservation: 512m
     depends_on:
       eurekaserver:
         condition: service_started
@@ -403,6 +446,11 @@ services:
     ports:
       - "${API_GATEWAY_PORT:-8080}:8080"
     environment:
+      # Timeouts del cliente HTTP del gateway (ver application.yml).
+      GATEWAY_RESPONSE_TIMEOUT: ${GATEWAY_RESPONSE_TIMEOUT:-180s}
+      GATEWAY_REPORTING_RESPONSE_TIMEOUT_MS: ${GATEWAY_REPORTING_RESPONSE_TIMEOUT_MS:-300000}
+      GATEWAY_AI_RESPONSE_TIMEOUT_MS: ${GATEWAY_AI_RESPONSE_TIMEOUT_MS:-125000}
+      GATEWAY_FILE_RESPONSE_TIMEOUT_MS: ${GATEWAY_FILE_RESPONSE_TIMEOUT_MS:-300000}
       # Sólo verifica: la pareja pública de la JWT_PRIVATE_KEY
       # de auth-center. El gateway no puede emitir tokens.
       JWT_PUBLIC_KEY: ${JWT_PUBLIC_KEY}
@@ -441,6 +489,7 @@ services:
       # reintentarian contra un endpoint muerto. Nombres verificados
       # contra el spring-configuration-metadata.json de los jars.
       MANAGEMENT_TRACING_EXPORT_ENABLED: "${SSO_TELEMETRY_ENABLED:-false}"
+      OTEL_TRACING_SAMPLE_RATE: "${OTEL_TRACING_SAMPLE_RATE:-0.1}"
       MANAGEMENT_OTLP_METRICS_EXPORT_ENABLED: "${SSO_TELEMETRY_ENABLED:-false}"
       MANAGEMENT_LOGGING_EXPORT_OTLP_ENABLED: "${SSO_TELEMETRY_ENABLED:-false}"
     healthcheck:
@@ -485,6 +534,7 @@ services:
     image: traefik:v3.5
     container_name: sso-traefik
     restart: unless-stopped
+    logging: *default-logging
     mem_limit: 256m
     mem_reservation: 128m
     command:
@@ -555,13 +605,15 @@ services:
     image: ${IMAGE_PREFIX:-eurekatic}/hello-service:${IMAGE_TAG:-1.0.0-SNAPSHOT}
     container_name: sso-hello-service
     restart: unless-stopped
+    stop_grace_period: ${JAVA_STOP_GRACE_PERIOD:-40s}
+    logging: *default-logging
     mem_limit: 256m
     mem_reservation: 192m
     depends_on:
       eurekaserver:
         condition: service_started
     ports:
-      - "${BIND_IP:-0.0.0.0}:${HELLO_SERVICE_PORT:-8082}:8082"
+      - "${BIND_IP:-127.0.0.1}:${HELLO_SERVICE_PORT:-8082}:8082"
     environment:
       EUREKA_URL: "http://eurekaserver:8761/eureka"
       # Observability: push OTLP to Alloy
@@ -571,6 +623,7 @@ services:
       # reintentarian contra un endpoint muerto. Nombres verificados
       # contra el spring-configuration-metadata.json de los jars.
       MANAGEMENT_TRACING_EXPORT_ENABLED: "${SSO_TELEMETRY_ENABLED:-false}"
+      OTEL_TRACING_SAMPLE_RATE: "${OTEL_TRACING_SAMPLE_RATE:-0.1}"
       MANAGEMENT_OTLP_METRICS_EXPORT_ENABLED: "${SSO_TELEMETRY_ENABLED:-false}"
       MANAGEMENT_LOGGING_EXPORT_OTLP_ENABLED: "${SSO_TELEMETRY_ENABLED:-false}"
     # No healthcheck on the public port — the gateway's
@@ -590,6 +643,8 @@ services:
     image: ${IMAGE_PREFIX:-eurekatic}/sso-admin:${IMAGE_TAG:-1.0.0-SNAPSHOT}
     container_name: sso-admin
     restart: unless-stopped
+    stop_grace_period: ${JAVA_STOP_GRACE_PERIOD:-40s}
+    logging: *default-logging
     # Bumped to 3g after JVM 25 + Spring Boot 4 + Spring Cloud
     # 2025.1.x exceeded 1.5g during startup under steady traffic
     # (Hibernate schema-validate + Eureka lease renewal + first
@@ -638,8 +693,9 @@ services:
         # refresh tokens, distinct key namespace.
         condition: service_healthy
     ports:
-      - "${BIND_IP:-0.0.0.0}:${SSO_ADMIN_PORT:-8083}:8083"
+      - "${BIND_IP:-127.0.0.1}:${SSO_ADMIN_PORT:-8083}:8083"
     environment:
+      SSO_ADMIN_VIRTUAL_THREADS: ${SSO_ADMIN_VIRTUAL_THREADS:-true}
       # Neon cloud DB. compose composes the JDBC URL inline from
       # DB_URL (host:port) + DB_NAME + DB_SSLMODE + DB_CHANNEL_BINDING
       # and overrides spring.datasource.url via the standard
@@ -709,6 +765,7 @@ services:
       # reintentarian contra un endpoint muerto. Nombres verificados
       # contra el spring-configuration-metadata.json de los jars.
       MANAGEMENT_TRACING_EXPORT_ENABLED: "${SSO_TELEMETRY_ENABLED:-false}"
+      OTEL_TRACING_SAMPLE_RATE: "${OTEL_TRACING_SAMPLE_RATE:-0.1}"
       MANAGEMENT_OTLP_METRICS_EXPORT_ENABLED: "${SSO_TELEMETRY_ENABLED:-false}"
       MANAGEMENT_LOGGING_EXPORT_OTLP_ENABLED: "${SSO_TELEMETRY_ENABLED:-false}"
       # App-access cache (SsoAdminAppAccessManager /
@@ -740,9 +797,10 @@ services:
     image: mailhog/mailhog:latest
     container_name: sso-mailhog
     restart: unless-stopped
+    logging: *default-logging
     ports:
-      - "${BIND_IP:-0.0.0.0}:${MAILHOG_SMTP_PORT:-1025}:1025"
-      - "${BIND_IP:-0.0.0.0}:${MAILHOG_WEB_PORT:-8025}:8025"
+      - "${BIND_IP:-127.0.0.1}:${MAILHOG_SMTP_PORT:-1025}:1025"
+      - "${BIND_IP:-127.0.0.1}:${MAILHOG_WEB_PORT:-8025}:8025"
 
   # ===========================================================================
   # rabbitmq — message broker for notification-service.
@@ -762,6 +820,7 @@ services:
     image: rabbitmq:3.13.7-management
     container_name: sso-rabbitmq
     restart: unless-stopped
+    logging: *default-logging
     hostname: rabbitmq
     # Custom entrypoint: renders the CDC user/password from .env into
     # definitions.json before the original rabbitmq entrypoint boots.
@@ -822,6 +881,8 @@ services:
     image: ${IMAGE_PREFIX:-eurekatic}/notification-service:${IMAGE_TAG:-1.0.0-SNAPSHOT}
     container_name: sso-notification-service
     restart: unless-stopped
+    stop_grace_period: ${JAVA_STOP_GRACE_PERIOD:-40s}
+    logging: *default-logging
     mem_limit: 640m
     mem_reservation: 512m
     depends_on:
@@ -866,6 +927,7 @@ services:
       # reintentarian contra un endpoint muerto. Nombres verificados
       # contra el spring-configuration-metadata.json de los jars.
       MANAGEMENT_TRACING_EXPORT_ENABLED: "${SSO_TELEMETRY_ENABLED:-false}"
+      OTEL_TRACING_SAMPLE_RATE: "${OTEL_TRACING_SAMPLE_RATE:-0.1}"
       MANAGEMENT_OTLP_METRICS_EXPORT_ENABLED: "${SSO_TELEMETRY_ENABLED:-false}"
       MANAGEMENT_LOGGING_EXPORT_OTLP_ENABLED: "${SSO_TELEMETRY_ENABLED:-false}"
       VONAGE_API_KEY: ${VONAGE_API_KEY:-}
@@ -937,6 +999,8 @@ services:
     image: ${IMAGE_PREFIX:-eurekatic}/query-service:${IMAGE_TAG:-1.0.0-SNAPSHOT}
     container_name: sso-query-service-postgres
     restart: unless-stopped
+    stop_grace_period: ${JAVA_STOP_GRACE_PERIOD:-40s}
+    logging: *default-logging
     mem_limit: 384m
     mem_reservation: 256m
     depends_on:
@@ -970,6 +1034,7 @@ services:
       # reintentarian contra un endpoint muerto. Nombres verificados
       # contra el spring-configuration-metadata.json de los jars.
       MANAGEMENT_TRACING_EXPORT_ENABLED: "${SSO_TELEMETRY_ENABLED:-false}"
+      OTEL_TRACING_SAMPLE_RATE: "${OTEL_TRACING_SAMPLE_RATE:-0.1}"
       MANAGEMENT_OTLP_METRICS_EXPORT_ENABLED: "${SSO_TELEMETRY_ENABLED:-false}"
       MANAGEMENT_LOGGING_EXPORT_OTLP_ENABLED: "${SSO_TELEMETRY_ENABLED:-false}"
       # Eureka + JWT (sólo la pública: verifica, no emite)
@@ -1024,6 +1089,8 @@ services:
     image: ${IMAGE_PREFIX:-eurekatic}/query-service:${IMAGE_TAG:-1.0.0-SNAPSHOT}
     container_name: sso-query-service-postgres-analytics
     restart: unless-stopped
+    stop_grace_period: ${JAVA_STOP_GRACE_PERIOD:-40s}
+    logging: *default-logging
     mem_limit: 384m
     mem_reservation: 256m
     depends_on:
@@ -1064,6 +1131,7 @@ services:
       # reintentarian contra un endpoint muerto. Nombres verificados
       # contra el spring-configuration-metadata.json de los jars.
       MANAGEMENT_TRACING_EXPORT_ENABLED: "${SSO_TELEMETRY_ENABLED:-false}"
+      OTEL_TRACING_SAMPLE_RATE: "${OTEL_TRACING_SAMPLE_RATE:-0.1}"
       MANAGEMENT_OTLP_METRICS_EXPORT_ENABLED: "${SSO_TELEMETRY_ENABLED:-false}"
       MANAGEMENT_LOGGING_EXPORT_OTLP_ENABLED: "${SSO_TELEMETRY_ENABLED:-false}"
     healthcheck:
@@ -1136,6 +1204,8 @@ services:
     image: ${IMAGE_PREFIX:-eurekatic}/provisioner:${IMAGE_TAG:-1.0.0-SNAPSHOT}
     container_name: sso-provisioner
     restart: unless-stopped
+    stop_grace_period: ${JAVA_STOP_GRACE_PERIOD:-40s}
+    logging: *default-logging
     mem_limit: 384m
     mem_reservation: 256m
     # PRIVILEGE BOUNDARY: the docker socket is the only path
@@ -1204,6 +1274,7 @@ services:
       # reintentarian contra un endpoint muerto. Nombres verificados
       # contra el spring-configuration-metadata.json de los jars.
       MANAGEMENT_TRACING_EXPORT_ENABLED: "${SSO_TELEMETRY_ENABLED:-false}"
+      OTEL_TRACING_SAMPLE_RATE: "${OTEL_TRACING_SAMPLE_RATE:-0.1}"
       MANAGEMENT_OTLP_METRICS_EXPORT_ENABLED: "${SSO_TELEMETRY_ENABLED:-false}"
       MANAGEMENT_LOGGING_EXPORT_OTLP_ENABLED: "${SSO_TELEMETRY_ENABLED:-false}"
       # El mismo interruptor, propagado a cada query-service que el
@@ -1214,6 +1285,26 @@ services:
       # Alloy con la telemetría apagada. Mismo patrón DOCKER_* de
       # relaxed-binding que DOCKER_JWT_PUBLIC_KEY.
       DOCKER_TELEMETRY_ENABLED: "${SSO_TELEMETRY_ENABLED:-false}"
+      # Recursos de cada query-service spawneado (HostConfig).
+      PROVISIONER_QUERY_MEM_LIMIT: ${PROVISIONER_QUERY_MEM_LIMIT:-768m}
+      PROVISIONER_QUERY_MEM_RESERVATION: ${PROVISIONER_QUERY_MEM_RESERVATION:-256m}
+      PROVISIONER_QUERY_CPUS: ${PROVISIONER_QUERY_CPUS:-}
+      # Tuning reenviado al query-service spawneado SOLO si está definido
+      # (vacío = no se reenvía y rige el default de su application.yml).
+      QUERY_BULKHEAD_MAX_CONCURRENT: ${QUERY_BULKHEAD_MAX_CONCURRENT:-}
+      QUERY_BULKHEAD_MAX_WAIT: ${QUERY_BULKHEAD_MAX_WAIT:-}
+      QUERY_RATE_LIMIT_RPS: ${QUERY_RATE_LIMIT_RPS:-}
+      QUERY_RATE_LIMIT_WINDOW: ${QUERY_RATE_LIMIT_WINDOW:-}
+      QUERY_TIMEOUT_SECONDS: ${QUERY_TIMEOUT_SECONDS:-}
+      QUERY_REPORT_TIMEOUT_SECONDS: ${QUERY_REPORT_TIMEOUT_SECONDS:-}
+      QUERY_LONG_PATH_PATTERN: ${QUERY_LONG_PATH_PATTERN:-}
+      QUERY_MAX_ROWS: ${QUERY_MAX_ROWS:-}
+      QUERY_DS_CONNECTION_TIMEOUT_MS: ${QUERY_DS_CONNECTION_TIMEOUT_MS:-}
+      QUERY_DS_STATEMENT_TIMEOUT_MS: ${QUERY_DS_STATEMENT_TIMEOUT_MS:-}
+      QUERY_CACHE_CATALOG_ENABLED: ${QUERY_CACHE_CATALOG_ENABLED:-}
+      QUERY_CACHE_METADATA_TTL_SECONDS: ${QUERY_CACHE_METADATA_TTL_SECONDS:-}
+      QUERY_CATALOG_CACHE_TTL_SECONDS: ${QUERY_CATALOG_CACHE_TTL_SECONDS:-}
+      JAVA_TOOL_OPTIONS: ${JAVA_TOOL_OPTIONS:-}
     healthcheck:
       # The provisioner image installs curl (it talks to
       # the Docker socket via curl --unix-socket) but not
@@ -1258,9 +1349,10 @@ services:
   # ===========================================================================
   alloy:
     profiles: ["observability"]
-    image: grafana/alloy:latest
+    image: grafana/alloy:v1.8.0
     container_name: sso-alloy
     restart: unless-stopped
+    logging: *default-logging
     mem_limit: 300m
     mem_reservation: 192m
     # The Grafana host user (root inside the container, see below) needs
@@ -1304,6 +1396,7 @@ services:
     image: grafana/tempo:2.10.7
     container_name: sso-tempo
     restart: unless-stopped
+    logging: *default-logging
     # Bumped from 512m after enabling metrics_generator (spans
     # processed into RED metrics + service graph; needs the
     # extra headroom on cold start when the WAL replays).
@@ -1316,9 +1409,10 @@ services:
 
   mimir:
     profiles: ["observability"]
-    image: grafana/mimir:latest
+    image: grafana/mimir:2.16.0
     container_name: sso-mimir
     restart: unless-stopped
+    logging: *default-logging
     mem_limit: 640m
     mem_reservation: 384m
     command: ["-config.file=/etc/mimir/mimir.yaml"]
@@ -1328,9 +1422,10 @@ services:
 
   loki:
     profiles: ["observability"]
-    image: grafana/loki:latest
+    image: grafana/loki:3.5.0
     container_name: sso-loki
     restart: unless-stopped
+    logging: *default-logging
     mem_limit: 512m
     mem_reservation: 256m
     command: ["-config.file=/etc/loki/loki-config.yaml"]
@@ -1340,20 +1435,21 @@ services:
 
   grafana:
     profiles: ["observability"]
-    image: grafana/grafana:latest
+    image: grafana/grafana:11.6.0
     container_name: sso-grafana
     restart: unless-stopped
+    logging: *default-logging
     mem_limit: 300m
     mem_reservation: 192m
     ports:
-      # Grafana corre con auth anónima en rol Admin (dev): en el
+      # Grafana: auth anónima apagada por defecto (GRAFANA_ANONYMOUS_ENABLED); en el
       # servidor SIEMPRE detrás de BIND_IP=127.0.0.1 + túnel SSH.
-      - "${BIND_IP:-0.0.0.0}:${GRAFANA_PORT:-3000}:3000"
+      - "${BIND_IP:-127.0.0.1}:${GRAFANA_PORT:-3000}:3000"
     environment:
-      # Dev convenience: no login wall, land straight on dashboards.
+      # Dev: GRAFANA_ANONYMOUS_ENABLED=true quita el login (rol GRAFANA_ANONYMOUS_ROLE).
       # PRODUCTION: remove anonymous auth and set a real admin password.
-      GF_AUTH_ANONYMOUS_ENABLED: "true"
-      GF_AUTH_ANONYMOUS_ORG_ROLE: "Admin"
+      GF_AUTH_ANONYMOUS_ENABLED: "${GRAFANA_ANONYMOUS_ENABLED:-false}"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: "${GRAFANA_ANONYMOUS_ROLE:-Viewer}"
       GF_AUTH_BASIC_ENABLED: "false"
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
       # Enable the built-in Explore + trace/log correlation UX.
@@ -1396,6 +1492,7 @@ services:
     image: clickhouse/clickhouse-server:24.8-alpine
     container_name: cdc-clickhouse
     restart: unless-stopped
+    logging: *default-logging
     environment:
       CLICKHOUSE_USER: ${CDC_CLICKHOUSE_USER:-default}
       CLICKHOUSE_PASSWORD: ${CDC_CLICKHOUSE_PASSWORD:-demopass}
@@ -1405,8 +1502,8 @@ services:
       - ./docker/clickhouse/clickhouse-init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
       - cdc-clickhouse-data:/var/lib/clickhouse
     ports:
-      - "${BIND_IP:-0.0.0.0}:${CDC_CLICKHOUSE_HTTP_PORT:-58123}:8123"
-      - "${BIND_IP:-0.0.0.0}:${CDC_CLICKHOUSE_NATIVE_PORT:-59000}:9000"
+      - "${BIND_IP:-127.0.0.1}:${CDC_CLICKHOUSE_HTTP_PORT:-58123}:8123"
+      - "${BIND_IP:-127.0.0.1}:${CDC_CLICKHOUSE_NATIVE_PORT:-59000}:9000"
     ulimits:
       nofile:
         soft: 262144
@@ -1425,6 +1522,8 @@ services:
     image: ${IMAGE_PREFIX:-eurekatic}/cdc-capture:${IMAGE_TAG:-1.0.0-SNAPSHOT}
     container_name: cdc-capture
     restart: unless-stopped
+    stop_grace_period: ${JAVA_STOP_GRACE_PERIOD:-40s}
+    logging: *default-logging
     mem_limit: 640m
     mem_reservation: 384m
     depends_on:
@@ -1445,6 +1544,7 @@ services:
       rabbitmq:
         condition: service_healthy
     environment:
+      CDC_LOG_LEVEL: ${CDC_LOG_LEVEL:-INFO}
       SPRING_PROFILES_ACTIVE: docker
       CDC_PG_URL: ${CDC_PG_URL:-jdbc:postgresql://postgres:5432/${POSTGRES_DB:-sso}}
       CDC_PG_USER: ${CDC_PG_USER:-${POSTGRES_USER}}
@@ -1464,8 +1564,15 @@ services:
       CDC_OFFSETS_DIR: ${CDC_OFFSETS_DIR:-/var/cdc-capture/offsets}
     volumes:
       - cdc-capture-offsets:${CDC_OFFSETS_DIR:-/var/cdc-capture/offsets}
+    # Sin HTTP: la app refresca /tmp/cdc-health mientras su salud agregada es UP.
+    healthcheck:
+      test: ["CMD-SHELL", "test -n \"$$(find /tmp/cdc-health -mmin -1 2>/dev/null)\""]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 120s
     ports:
-      - "${BIND_IP:-0.0.0.0}:${CDC_CAPTURE_PORT:-58081}:8081"
+      - "${BIND_IP:-127.0.0.1}:${CDC_CAPTURE_PORT:-58081}:8081"
 
   # One-shot init: create the `cdc_slot` logical replication slot after
   # Flyway has built the publication in V24. Runs as the postgres image
@@ -1513,6 +1620,8 @@ services:
     image: ${IMAGE_PREFIX:-eurekatic}/cdc-worker:${IMAGE_TAG:-1.0.0-SNAPSHOT}
     container_name: cdc-worker
     restart: unless-stopped
+    stop_grace_period: ${JAVA_STOP_GRACE_PERIOD:-40s}
+    logging: *default-logging
     mem_limit: 768m
     mem_reservation: 512m
     depends_on:
@@ -1521,6 +1630,8 @@ services:
       cdc-clickhouse:
         condition: service_healthy
     environment:
+      CDC_LOG_LEVEL: ${CDC_LOG_LEVEL:-INFO}
+      CDC_WORKER_PREFETCH: ${CDC_WORKER_PREFETCH:-10}
       SPRING_PROFILES_ACTIVE: docker
       CDC_AMQP_HOST: ${CDC_AMQP_HOST:-rabbitmq}
       CDC_AMQP_PORT: ${CDC_AMQP_PORT:-5672}
@@ -1535,7 +1646,16 @@ services:
       CDC_WORKER_CONCURRENCY_MIN: ${CDC_WORKER_CONCURRENCY_MIN:-1}
       CDC_WORKER_CONCURRENCY_MAX: ${CDC_WORKER_CONCURRENCY_MAX:-1}
     ports:
-      - "${BIND_IP:-0.0.0.0}:${CDC_WORKER_PORT:-58082}:8081"
+      - "${BIND_IP:-127.0.0.1}:${CDC_WORKER_PORT:-58082}:8080"
+    healthcheck:
+      # liveness, no /actuator/health: el agregado incluye el DataSource de
+      # Oracle, que existe aunque CDC_DEST_ORACLE=false y sin listener deja
+      # todo en DOWN (y el deploy con --wait esperaria a un worker sano).
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/localhost/8080; printf 'GET /actuator/health/liveness HTTP/1.0\r\n\r\n' >&3; grep -q UP <&3"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 90s
 
   # ===========================================================================
   # Almacenamiento de objetos (perfil `storage`) — APAGADO POR DEFECTO
@@ -1553,6 +1673,7 @@ services:
     image: dxflrs/garage:v1.0.1
     container_name: sso-garage
     restart: unless-stopped
+    logging: *default-logging
     volumes:
       - ./docker/garage/garage.toml:/etc/garage.toml:ro
       - garage-meta:/var/lib/garage/meta
@@ -1616,6 +1737,8 @@ services:
     image: ${IMAGE_PREFIX:-eurekatic}/file-service:${IMAGE_TAG:-1.0.0-SNAPSHOT}
     container_name: sso-file-service
     restart: unless-stopped
+    stop_grace_period: ${JAVA_STOP_GRACE_PERIOD:-40s}
+    logging: *default-logging
     depends_on:
       eurekaserver:
         condition: service_healthy
@@ -1651,6 +1774,10 @@ services:
       S3_ACCESS_KEY: "${S3_ACCESS_KEY:-}"
       S3_SECRET_KEY: "${S3_SECRET_KEY:-}"
       S3_PATH_STYLE: "${S3_PATH_STYLE:-true}"
+      S3_LEGADO_BUCKET: "${S3_LEGADO_BUCKET:-}"
+      S3_LEGADO_REGION: "${S3_LEGADO_REGION:-us-east-1}"
+      S3_LEGADO_ACCESS_KEY: "${S3_LEGADO_ACCESS_KEY:-}"
+      S3_LEGADO_SECRET_KEY: "${S3_LEGADO_SECRET_KEY:-}"
       # Sin límite, un cliente llena el disco: el servidor está al 85%.
       FILES_MAX_FILE_SIZE: "${FILES_MAX_FILE_SIZE:-25MB}"
       FILES_MAX_REQUEST_SIZE: "${FILES_MAX_REQUEST_SIZE:-30MB}"
@@ -1685,6 +1812,7 @@ services:
       # reintentarian contra un endpoint muerto. Nombres verificados
       # contra el spring-configuration-metadata.json de los jars.
       MANAGEMENT_TRACING_EXPORT_ENABLED: "${SSO_TELEMETRY_ENABLED:-false}"
+      OTEL_TRACING_SAMPLE_RATE: "${OTEL_TRACING_SAMPLE_RATE:-0.1}"
       MANAGEMENT_OTLP_METRICS_EXPORT_ENABLED: "${SSO_TELEMETRY_ENABLED:-false}"
       MANAGEMENT_LOGGING_EXPORT_OTLP_ENABLED: "${SSO_TELEMETRY_ENABLED:-false}"
     mem_limit: 512m
@@ -1718,6 +1846,8 @@ services:
     image: ${IMAGE_PREFIX:-eurekatic}/reporting-service:${IMAGE_TAG:-1.0.0-SNAPSHOT}
     container_name: sso-reporting-service
     restart: unless-stopped
+    stop_grace_period: ${JAVA_STOP_GRACE_PERIOD:-40s}
+    logging: *default-logging
     # PID 1 es el JVM crudo (sin tini/dumb-init), asi que no reapea hijos
     # huerfanos. El healthcheck de abajo forkea bash+grep cada intervalo;
     # si grep queda huerfano (carrera al cortar la sesion del exec antes
@@ -1735,6 +1865,7 @@ services:
       eurekaserver:
         condition: service_started
     environment:
+      REPORTING_MAX_CONCURRENT_EXPORTS: ${REPORTING_MAX_CONCURRENT_EXPORTS:-4}
       EUREKA_URL: "http://eurekaserver:8761/eureka"
       # Directo a la instancia del catalogo eval-col: es la que tiene
       # registradas las filas query de reporte (V67).
@@ -1758,11 +1889,20 @@ services:
       # imagenes, sin error visible. Vacio = no se bajan imagenes.
       REPORTING_FILE_INTERNAL_TOKEN: "${REPORTING_FILE_INTERNAL_TOKEN:-${FILES_INTERNAL_TOKEN:-}}"
       REPORTING_MAX_IMAGE_BYTES: "${REPORTING_MAX_IMAGE_BYTES:-4194304}"
+      # QR de verificacion del boletin: pagina publica del front por entorno
+      # (vacia = sin QR). Las lecturas publicas van al query-service eval-col
+      # (REPORTING_QUERY_SERVICE_URL) por /public/service, sin token.
+      BOLETIN_VERIFICACION_BASE_URL: "${BOLETIN_VERIFICACION_BASE_URL:-}"
+      BOLETIN_VERIFICACION_PDF_CACHE_TTL: "${BOLETIN_VERIFICACION_PDF_CACHE_TTL:-10m}"
+      BOLETIN_VERIFICACION_LIMITE_IP_MINUTO: "${BOLETIN_VERIFICACION_LIMITE_IP_MINUTO:-30}"
+      BOLETIN_VERIFICACION_INTENTOS_MAX: "${BOLETIN_VERIFICACION_INTENTOS_MAX:-5}"
+      BOLETIN_VERIFICACION_VENTANA_INTENTOS: "${BOLETIN_VERIFICACION_VENTANA_INTENTOS:-15m}"
       # Clave PUBLICA del par RS256: verifica firmas, no acuña tokens,
       # asi que no recibe (ni debe recibir) la privada.
       JWT_PUBLIC_KEY: ${JWT_PUBLIC_KEY}
       OTEL_EXPORTER_OTLP_ENDPOINT: "${OTEL_EXPORTER_OTLP_ENDPOINT:-http://alloy:4318}"
       MANAGEMENT_TRACING_EXPORT_ENABLED: "${SSO_TELEMETRY_ENABLED:-false}"
+      OTEL_TRACING_SAMPLE_RATE: "${OTEL_TRACING_SAMPLE_RATE:-0.1}"
       MANAGEMENT_OTLP_METRICS_EXPORT_ENABLED: "${SSO_TELEMETRY_ENABLED:-false}"
       MANAGEMENT_LOGGING_EXPORT_OTLP_ENABLED: "${SSO_TELEMETRY_ENABLED:-false}"
     healthcheck:
@@ -1783,6 +1923,8 @@ services:
     image: ${IMAGE_PREFIX:-eurekatic}/ai-control-service:${IMAGE_TAG:-1.0.0-SNAPSHOT}
     container_name: sso-ai-control-service
     restart: unless-stopped
+    stop_grace_period: ${JAVA_STOP_GRACE_PERIOD:-40s}
+    logging: *default-logging
     # tini como PID 1 para reapear los hijos del healthcheck (ver
     # reporting-service).
     init: true
@@ -1809,7 +1951,7 @@ services:
       AI_MAX_TOKENS: "${AI_MAX_TOKENS:-1500}"
       AI_TEMPERATURE: "${AI_TEMPERATURE:-0.6}"
       AI_TOP_P: "${AI_TOP_P:-0.95}"
-      AI_TIMEOUT: "${AI_TIMEOUT:-60s}"
+      AI_TIMEOUT: "${AI_TIMEOUT:-120s}"
       AI_MAX_RETRIES: "${AI_MAX_RETRIES:-1}"
       AI_EXTRA_BODY_JSON: '${AI_EXTRA_BODY_JSON:-{"thinking":{"type":"disabled"}}}'
       # Calibracion del servicio.
@@ -1821,6 +1963,7 @@ services:
       JWT_PUBLIC_KEY: ${JWT_PUBLIC_KEY}
       OTEL_EXPORTER_OTLP_ENDPOINT: "${OTEL_EXPORTER_OTLP_ENDPOINT:-http://alloy:4318}"
       MANAGEMENT_TRACING_EXPORT_ENABLED: "${SSO_TELEMETRY_ENABLED:-false}"
+      OTEL_TRACING_SAMPLE_RATE: "${OTEL_TRACING_SAMPLE_RATE:-0.1}"
       MANAGEMENT_OTLP_METRICS_EXPORT_ENABLED: "${SSO_TELEMETRY_ENABLED:-false}"
       MANAGEMENT_LOGGING_EXPORT_OTLP_ENABLED: "${SSO_TELEMETRY_ENABLED:-false}"
     healthcheck:
@@ -1838,6 +1981,7 @@ volumes:
     # volumen que se pierda en cada redespliegue agota la cuota en dos
     # días y deja el sitio sin TLS hasta la semana siguiente.
     name: sso-traefik-acme
+  redis-data:
   postgres-data:
     # Named volume keeps the database across `docker compose down`
     # but a `docker compose down -v` clears it (handy for dev).

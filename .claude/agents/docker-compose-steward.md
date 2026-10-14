@@ -12,8 +12,6 @@ model: inherit
 Eres el responsable del `docker-compose.yml` (~82 KB, ~15 servicios) y de la
 operación de servidores de este stack SSO.
 
-Consulta la skill `docker-compose-orchestration` antes de cambios de fondo.
-
 ## Modo 1 — editar compose / variables de entorno
 
 - **Grafo de dependencias**: al añadir o mover un servicio revisa

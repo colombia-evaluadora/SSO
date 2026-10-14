@@ -17,7 +17,6 @@ Exit 2 => la llamada no se ejecuta y el motivo vuelve al agente.
 """
 from __future__ import annotations
 
-import json
 import re
 import sys
 from pathlib import Path
@@ -44,26 +43,19 @@ def parece_ip(ip: str) -> bool:
     return not all(len(o) == 1 for o in partes)
 
 
-def main() -> int:
-    try:
-        data = json.load(sys.stdin)
-    except ValueError:
-        return 0
-    cmd = (data.get("tool_input") or {}).get("command") or ""
-    if not cmd:
-        return 0
-
+def revisar(cmd: str) -> str | None:
+    """El motivo del bloqueo, o None si el texto publicado no nombra servidores."""
     commit, pr, texto = publicado(cmd)
     if not (commit or pr):
-        return 0
+        return None
 
     hallazgos = [ip for ip in IPV4.findall(texto) if parece_ip(ip)]
     hallazgos += HOST_INFRA.findall(texto)
     if not hallazgos:
-        return 0
+        return None
 
     donde = "del commit" if commit else "del pull request"
-    sys.stderr.write(
+    return (
         f"BLOQUEADO: el texto {donde} publica una direccion de servidor: "
         f"{hallazgos[0]}.\n\n"
         "Un commit y una descripcion de PR salen del repo, y el historial no se\n"
@@ -71,7 +63,15 @@ def main() -> int:
         "\"produccion\" -- en vez de por su direccion.\n\n"
         "Dentro del repo (CLAUDE.md, reglas, configuracion) esa direccion si\n"
         "puede estar: este hook solo mira lo que se publica.\n")
-    return 2
+
+
+def main() -> int:
+    from comando import comando_de_stdin
+    motivo = revisar(comando_de_stdin())
+    if motivo:
+        sys.stderr.write(motivo)
+        return 2
+    return 0
 
 
 if __name__ == "__main__":

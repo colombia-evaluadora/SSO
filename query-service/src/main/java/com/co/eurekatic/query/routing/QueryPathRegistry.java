@@ -78,7 +78,13 @@ public class QueryPathRegistry {
      * {@link QueryPathController} los necesita en el momento del
      * dispatch, sin un segundo round-trip al catálogo.
      */
-    public record RouteEntry(String uuid, boolean cacheable, int cacheTtlSeconds) {}
+    public record RouteEntry(String uuid, boolean cacheable, int cacheTtlSeconds,
+                             PathPattern pattern) {
+        /** Sin patrón precompilado: {@code matchAgainst} lo compila al vuelo (pruebas). */
+        public RouteEntry(String uuid, boolean cacheable, int cacheTtlSeconds) {
+            this(uuid, cacheable, cacheTtlSeconds, null);
+        }
+    }
     private final String instanceName;
     /**
      * Resolved at boot via {@code /internal/whoami}.
@@ -158,7 +164,7 @@ public class QueryPathRegistry {
      */
     @Scheduled(fixedDelayString = "${query.path-registry.refresh-ms:60000}",
                initialDelay = 0)
-    public void refresh() {
+    public synchronized void refresh() {
         // Re-resolve our microserviceId on every tick. Cheap
         // (one HTTP roundtrip to /internal/whoami)
         // and means a fresh deploy of sso-admin's catalog
@@ -190,8 +196,17 @@ public class QueryPathRegistry {
                     // POST/PUT/PATCH row cacheable) can't even reach
                     // the controller as true.
                     boolean cacheable = "GET".equals(method) && q.cacheable();
+                    // El patrón se compila una vez aquí, no en cada petición.
+                    PathPattern pattern;
+                    try {
+                        pattern = compile(q.pathTemplate());
+                    } catch (RuntimeException bad) {
+                        log.warn("QueryPathRegistry: plantilla inválida '{}' (uuid={}), se omite: {}",
+                                q.pathTemplate(), q.uuid(), bad.getMessage());
+                        continue;
+                    }
                     next.put(new RouteKey(method, q.pathTemplate()),
-                            new RouteEntry(q.uuid(), cacheable, q.cacheTtlSeconds()));
+                            new RouteEntry(q.uuid(), cacheable, q.cacheTtlSeconds(), pattern));
                 }
             }
             tableRef.set(Map.copyOf(next));
@@ -216,8 +231,8 @@ public class QueryPathRegistry {
      * literal. El orden de inserción (el {@code id_query} con que el
      * catálogo devuelve las filas) no es algo que el autor controle,
      * así que no puede ser el criterio. En empate (misma cantidad de
-     * variables — ambigüedad real de catálogo, no shadowing) gana el
-     * primero en orden de iteración.
+     * variables — ambigüedad real de catálogo, no shadowing) gana la
+     * plantilla menor en orden léxico: determinista.
      */
     public Optional<Match> match(String method, String path) {
         Optional<Match> result = matchAgainst(tableRef.get(), method, path);
@@ -238,15 +253,25 @@ public class QueryPathRegistry {
             return Optional.empty();
         }
         RouteEntry best = null;
+        String bestTemplate = null;
         Map<String, String> bestVars = null;
         int bestSpecificity = Integer.MAX_VALUE;
         for (Map.Entry<RouteKey, RouteEntry> e : table.entrySet()) {
             if (!e.getKey().method().equals(method)) {
                 continue;
             }
-            Optional<Map<String, String>> vars = matchTemplate(e.getKey().template(), path);
-            if (vars.isPresent() && vars.get().size() < bestSpecificity) {
-                bestSpecificity = vars.get().size();
+            String template = e.getKey().template();
+            Optional<Map<String, String>> vars = extract(patternOf(e), path);
+            if (vars.isEmpty()) {
+                continue;
+            }
+            int specificity = vars.get().size();
+            // Empate: gana la plantilla menor (orden léxico), para que el
+            // resultado no dependa del orden de iteración del Map.
+            if (specificity < bestSpecificity
+                    || (specificity == bestSpecificity && template.compareTo(bestTemplate) < 0)) {
+                bestSpecificity = specificity;
+                bestTemplate = template;
                 best = e.getValue();
                 bestVars = vars.get();
             }
@@ -265,9 +290,29 @@ public class QueryPathRegistry {
         if (path == null || path.isEmpty()) {
             return false;
         }
-        return tableRef.get().keySet().stream()
-                .filter(k -> !k.method().equals(method))
-                .anyMatch(k -> matchTemplate(k.template(), path).isPresent());
+        return tableRef.get().entrySet().stream()
+                .filter(e -> !e.getKey().method().equals(method))
+                .anyMatch(e -> extract(patternOf(e), path).isPresent());
+    }
+
+    private static PathPattern compile(String template) {
+        return PARSER.parse(PathTemplateSyntax.toBracePattern(template));
+    }
+
+    private static PathPattern patternOf(Map.Entry<RouteKey, RouteEntry> e) {
+        PathPattern p = e.getValue().pattern();
+        return p != null ? p : compile(e.getKey().template());
+    }
+
+    private static Optional<Map<String, String>> extract(PathPattern pattern, String path) {
+        String normalized = path.endsWith("/") && path.length() > 1
+                ? path.substring(0, path.length() - 1)
+                : path;
+        PathPattern.PathMatchInfo info =
+                pattern.matchAndExtract(PathContainer.parsePath(normalized));
+        return info == null
+                ? Optional.empty()
+                : Optional.of(info.getUriVariables());
     }
 
     /**
@@ -279,16 +324,7 @@ public class QueryPathRegistry {
      * mockear el catálogo.
      */
     static Optional<Map<String, String>> matchTemplate(String template, String path) {
-        String normalized = path.endsWith("/") && path.length() > 1
-                ? path.substring(0, path.length() - 1)
-                : path;
-        PathPattern pattern = PARSER.parse(
-                PathTemplateSyntax.toBracePattern(template));
-        PathPattern.PathMatchInfo info =
-                pattern.matchAndExtract(PathContainer.parsePath(normalized));
-        return info == null
-                ? Optional.empty()
-                : Optional.of(info.getUriVariables());
+        return extract(compile(template), path);
     }
 
     public int size() {

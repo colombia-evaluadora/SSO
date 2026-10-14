@@ -8,7 +8,7 @@ Esta carpeta antes vivía en `db-migrations/cdc-sync/` (repositorio hermano). Co
 
 ```
 cdc-sync/
-├── pom.xml                # parent Maven (Spring Boot 3.3.5 / Java 25)
+├── pom.xml                # parent Maven (Spring Boot 4.1.1 / Java 25)
 ├── cdc-common/            # DTOs, transformadores, ColumnTypeRegistry
 ├── cdc-capture/           # Debezium embedded engine → AMQP
 └── cdc-worker/            # AMQP consumer → ClickHouse + Oracle
@@ -40,7 +40,7 @@ El `postgres` ya viene configurado con `wal_level=logical` (debezium/postgres:16
 
 ## Por qué NO es un módulo del parent SSO
 
-El parent del SSO (`com.co.eurekatic:sso-parent`) corre **Spring Boot 4.0.7 / Java 25**. Los módulos CDC fueron validados sobre **Spring Boot 3.3.5 / Java 25** (ver `cdc-sync/pom.xml`). Mezclarlos en un mismo reactor Maven forzaría una actualización mayor de Debezium + ojdbc11 + clickhouse-jdbc, lo que está fuera del scope de la unificación.
+El parent del SSO (`com.co.eurekatic:sso-parent`) corre **Spring Boot 4.0.7 / Java 25**. Los módulos CDC fueron validados sobre **Spring Boot 4.1.1 / Java 25** (ver `cdc-sync/pom.xml`). Mezclarlos en un mismo reactor Maven forzaría una actualización mayor de Debezium + ojdbc11 + clickhouse-jdbc, lo que está fuera del scope de la unificación.
 
 Decisión: el sub-proyecto `cdc-sync/` mantiene su propio root pom (Spring Boot 3.3.5). En CI se compila por separado:
 

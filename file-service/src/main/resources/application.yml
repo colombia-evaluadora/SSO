@@ -96,6 +96,15 @@ files:
     # Obligatorio contra un endpoint local: no hay DNS por bucket, así
     # que el SDK debe pedir /bucket/objeto. Contra AWS se pone en false.
     path-style: ${S3_PATH_STYLE:true}
+    # Bucket del sistema anterior (AWS), solo lectura. Los TARCHIVO
+    # migrados guardan urls3 = s3://<este bucket>/<clave> o
+    # https://<este bucket>.s3.amazonaws.com/<clave> y se leen de aquí sin
+    # copiarlos. Vacío = desactivado.
+    legado:
+      bucket: ${S3_LEGADO_BUCKET:}
+      region: ${S3_LEGADO_REGION:us-east-1}
+      access-key: ${S3_LEGADO_ACCESS_KEY:}
+      secret-key: ${S3_LEGADO_SECRET_KEY:}
 
   # Cache de Redis para el blob de S3 detrás de GET
   # /files/download|view|public — ver CachedFileBlobService. Se

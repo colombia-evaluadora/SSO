@@ -50,7 +50,7 @@ PISTAS: list[tuple[str, str]] = [
      "-- y ojo, re-aplicar SOLO el fichero editado revive sus definiciones viejas y "
      "se lleva por delante las migraciones posteriores que las reescribieron "
      "(skill `reaplicando-migraciones`)."),
-    (r"404|Not Found",
+    (r"404",
      "Si es una ruta de query-service recien insertada en public.query: el registro "
      "de rutas se lee al arrancar, asi que la fila no existe hasta que se reinicia "
      "el contenedor query-service-<serviceid>. La ruta es api/<serviceid>/..."),

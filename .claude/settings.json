@@ -3,13 +3,6 @@
     "PYTHONUTF8": "1",
     "PYTHONIOENCODING": "utf-8"
   },
-  "skillOverrides": {
-    "rabbitmq-development": "off",
-    "github-actions-templates": "off",
-    "github-actions-efficiency": "name-only",
-    "java-springboot": "off",
-    "github-actions": "off"
-  },
   "attribution": {
     "commit": "",
     "pr": ""
@@ -21,14 +14,19 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/post-edit.sh\"",
-            "timeout": 120
-          },
+            "command": "python \"$CLAUDE_PROJECT_DIR/.claude/hooks/post_edit.py\"",
+            "timeout": 180,
+            "statusMessage": "Revisando el fichero editado..."
+          }
+        ]
+      },
+      {
+        "matcher": "Bash|PowerShell|Grep|Glob|Read|Write",
+        "hooks": [
           {
             "type": "command",
-            "command": "python \"$CLAUDE_PROJECT_DIR/.claude/hooks/migration_lint.py\"",
-            "timeout": 180,
-            "statusMessage": "Invariantes de la migracion..."
+            "command": "python \"$CLAUDE_PROJECT_DIR/.claude/hooks/reglas_por_ruta.py\"",
+            "timeout": 10
           }
         ]
       }
@@ -50,18 +48,9 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python \"$CLAUDE_PROJECT_DIR/.claude/hooks/no_coautoria.py\"",
-            "timeout": 15
-          },
-          {
-            "type": "command",
-            "command": "python \"$CLAUDE_PROJECT_DIR/.claude/hooks/no_prod.py\"",
-            "timeout": 15
-          },
-          {
-            "type": "command",
-            "command": "python \"$CLAUDE_PROJECT_DIR/.claude/hooks/no_fugas.py\"",
-            "timeout": 15
+            "command": "python \"$CLAUDE_PROJECT_DIR/.claude/hooks/pre_shell.py\"",
+            "timeout": 15,
+            "onFailure": "block"
           }
         ]
       }

@@ -43,8 +43,11 @@ public class HttpContainerProvisioner implements ContainerProvisioner {
     private final RestClient client;
 
     @org.springframework.beans.factory.annotation.Autowired
-    public HttpContainerProvisioner(ProvisionerClientConfig cfg) {
+    public HttpContainerProvisioner(ProvisionerClientConfig cfg,
+            @org.springframework.beans.factory.annotation.Value("${SSO_ADMIN_HTTP_CONNECT_TIMEOUT:2s}") java.time.Duration connectTimeout,
+            @org.springframework.beans.factory.annotation.Value("${SSO_ADMIN_PROVISIONER_READ_TIMEOUT:60s}") java.time.Duration readTimeout) {
         this(RestClient.builder()
+                .requestFactory(com.co.eurekatic.ssoadmin.client.HttpTimeouts.factory(connectTimeout, readTimeout))
                 .baseUrl(cfg.getBaseUrl())
                 .defaultHeader("Accept", MediaType.APPLICATION_JSON_VALUE));
     }

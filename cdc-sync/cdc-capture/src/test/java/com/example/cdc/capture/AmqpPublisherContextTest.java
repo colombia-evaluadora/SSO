@@ -9,6 +9,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.amqp.core.MessagePostProcessor;
+import org.springframework.amqp.rabbit.connection.CorrelationData;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 
 import java.nio.charset.StandardCharsets;
@@ -35,6 +36,11 @@ class AmqpPublisherContextTest {
     @BeforeEach
     void setUp() {
         template = mock(RabbitTemplate.class);
+        org.mockito.Mockito.doAnswer(inv -> {
+            ((CorrelationData) inv.getArgument(4)).getFuture().complete(new CorrelationData.Confirm(true, null));
+            return null;
+        }).when(template).convertAndSend(any(String.class), any(String.class), any(Object.class),
+                any(MessagePostProcessor.class), any(CorrelationData.class));
         metrics = mock(CaptureMetrics.class);
         cache = new AuditContextCache();
         publisher = new AmqpPublisher(template, metrics, "cdc.events", cache);
@@ -63,7 +69,7 @@ class AmqpPublisherContextTest {
         // MESSAGE events are correlation artifacts — they MUST NOT be published
         // as row events. The cache holds 1 entry until a matching row event calls
         // take(); we don't manually evict here.
-        verify(template, never()).convertAndSend(any(), any(), any(Object.class), any(MessagePostProcessor.class));
+        verify(template, never()).convertAndSend(any(), any(), any(Object.class), any(MessagePostProcessor.class), any(CorrelationData.class));
         assertThat(cache.size()).isEqualTo(1);
         // take() removes the entry on read.
         CdcEvent.Context cached = publisher.getContextCache().take(555L);
@@ -102,7 +108,7 @@ class AmqpPublisherContextTest {
 
         ArgumentCaptor<Object> bodyCaptor = ArgumentCaptor.forClass(Object.class);
         verify(template).convertAndSend(eq("cdc.events"), eq("public.tusuario"),
-                bodyCaptor.capture(), any(MessagePostProcessor.class));
+                bodyCaptor.capture(), any(MessagePostProcessor.class), any(CorrelationData.class));
 
         String json = mapper.writeValueAsString(bodyCaptor.getValue());
         Map<String, Object> envelope = mapper.readValue(json, new TypeReference<Map<String, Object>>() {});
@@ -127,7 +133,7 @@ class AmqpPublisherContextTest {
 
         ArgumentCaptor<Object> bodyCaptor = ArgumentCaptor.forClass(Object.class);
         verify(template).convertAndSend(eq("cdc.events"), eq("public.tusuario"),
-                bodyCaptor.capture(), any(MessagePostProcessor.class));
+                bodyCaptor.capture(), any(MessagePostProcessor.class), any(CorrelationData.class));
 
         String json = mapper.writeValueAsString(bodyCaptor.getValue());
         Map<String, Object> envelope = mapper.readValue(json, new TypeReference<Map<String, Object>>() {});
@@ -146,7 +152,7 @@ class AmqpPublisherContextTest {
 
         handleSingle(payload);
 
-        verify(template, never()).convertAndSend(any(), any(), any(Object.class), any(MessagePostProcessor.class));
+        verify(template, never()).convertAndSend(any(), any(), any(Object.class), any(MessagePostProcessor.class), any(CorrelationData.class));
     }
 
     @Test
@@ -168,7 +174,7 @@ class AmqpPublisherContextTest {
 
         handleSingle(payload);
 
-        verify(template, never()).convertAndSend(any(), any(), any(Object.class), any(MessagePostProcessor.class));
+        verify(template, never()).convertAndSend(any(), any(), any(Object.class), any(MessagePostProcessor.class), any(CorrelationData.class));
         verify(metrics).incrementSnapshotSkipped("tusuario");
     }
 

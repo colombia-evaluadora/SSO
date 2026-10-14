@@ -79,15 +79,10 @@ skills-lock*
 !.claude/skills/
 .claude/skills/*
 # Skills externas versionadas (ver skills-lock.json)
-!.claude/skills/flyway-migrations/
 !.claude/skills/plpgsql/
-!.claude/skills/postgresql/
-!.claude/skills/postman-collection-generator/
 !.claude/skills/java-spring-boot/
-!.claude/skills/java-springboot/
 !.claude/skills/spring-cloud-basics/
-!.claude/skills/docker-compose-orchestration/
-!.claude/skills/github-actions/
+!.claude/skills/github-actions-hardening/
 !.claude/skills/reviewing-oracle-to-postgres-migration/
 # Skills propias del repo
 !.claude/skills/next-migration-number/

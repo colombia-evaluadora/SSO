@@ -2,6 +2,7 @@ package com.co.eurekatic.query.web.path;
 
 import com.co.eurekatic.common.query.ParamNamespace;
 import com.co.eurekatic.query.read.QueryService;
+import com.co.eurekatic.query.resilience.QueryResilience;
 import com.co.eurekatic.query.routing.CatalogResultCacheService;
 import com.co.eurekatic.query.routing.QueryPathRegistry;
 import com.co.eurekatic.query.web.QueryRequest;
@@ -72,9 +73,12 @@ public class QueryPathController {
     private final QueryService service;
     private final QueryPathRegistry registry;
     private final CatalogResultCacheService resultCache;
+    private final QueryResilience resilience;
 
     public QueryPathController(QueryService service, QueryPathRegistry registry,
-                               CatalogResultCacheService resultCache) {
+                               CatalogResultCacheService resultCache,
+                               QueryResilience resilience) {
+        this.resilience = resilience;
         this.service = service;
         this.registry = registry;
         this.resultCache = resultCache;
@@ -128,6 +132,10 @@ public class QueryPathController {
             Map<String, String> queryParams,
             Map<String, Object> body) {
 
+        // Per-principal cap first, ahead of the cache: a cache hit is
+        // cheap but not free, and this path serves most of the traffic.
+        resilience.enforceRateLimit();
+
         String rawPath = (String) request.getAttribute(
                 org.springframework.web.servlet.HandlerMapping.PATH_WITHIN_HANDLER_MAPPING_ATTRIBUTE);
         // Spring sometimes includes a trailing slash or an empty
@@ -158,6 +166,10 @@ public class QueryPathController {
         boolean cacheable = "GET".equals(method) && match.cacheable();
         String cacheKey = null;
         if (cacheable) {
+            // Autorizar ANTES de mirar la caché de resultados: un acierto
+            // se devuelve sin pasar por execute(), así que sin esto un
+            // usuario sin acceso leería lo que cacheó otro con acceso.
+            service.authorize(match.uuid(), false);
             cacheKey = CatalogResultCacheService.keyFor(match.uuid(), fullPath, queryParams,
                     org.springframework.security.core.context.SecurityContextHolder
                             .getContext().getAuthentication());

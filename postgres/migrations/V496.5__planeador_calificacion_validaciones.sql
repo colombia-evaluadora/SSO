@@ -187,7 +187,6 @@ AS $$
                  ELSE 'NO_ASISTIO_NO_JUSTIFICADA' END)::VARCHAR;
 $$;
 
--- Redefine la de V450 para contar también lo marcado en esta actividad.
 CREATE OR REPLACE FUNCTION academico_test.fn_actividad_asistencia_fecha_resolver(
     p_fk_tmatricula BIGINT,
     p_pk_tactividad BIGINT

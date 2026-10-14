@@ -44,7 +44,7 @@ class PathRegistryNotifierTest {
         when(discovery.getInstances("query-service-eval-col"))
                 .thenReturn(List.of(instance("query-service-eval-col", 8084)));
 
-        new PathRegistryNotifier(discovery, "tok").invalidate();
+        new PathRegistryNotifier(discovery, "tok", java.time.Duration.ofSeconds(2), java.time.Duration.ofSeconds(5)).invalidate();
 
         // Se consultan las dos que sirven queries y ninguna más:
         // avisar a auth-center sería ruido, y no avisar a eval-col
@@ -64,8 +64,8 @@ class PathRegistryNotifierTest {
     void skipsEntirelyWhenTheInternalTokenIsMissing() {
         DiscoveryClient discovery = mock(DiscoveryClient.class);
 
-        new PathRegistryNotifier(discovery, "").invalidate();
-        new PathRegistryNotifier(discovery, null).invalidate();
+        new PathRegistryNotifier(discovery, "", java.time.Duration.ofSeconds(2), java.time.Duration.ofSeconds(5)).invalidate();
+        new PathRegistryNotifier(discovery, null, java.time.Duration.ofSeconds(2), java.time.Duration.ofSeconds(5)).invalidate();
 
         verify(discovery, never()).getServices();
     }
@@ -79,7 +79,7 @@ class PathRegistryNotifierTest {
         DiscoveryClient discovery = mock(DiscoveryClient.class);
         when(discovery.getServices()).thenReturn(List.of("sso-admin"));
 
-        assertThatCode(() -> new PathRegistryNotifier(discovery, "tok").invalidate())
+        assertThatCode(() -> new PathRegistryNotifier(discovery, "tok", java.time.Duration.ofSeconds(2), java.time.Duration.ofSeconds(5)).invalidate())
                 .doesNotThrowAnyException();
         verify(discovery, never()).getInstances(anyString());
     }
