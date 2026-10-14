@@ -59,6 +59,8 @@ public class EstructuraEsperadaHerramienta implements ProveedorHerramientasContr
         if (!(codigo instanceof String texto) || texto.isBlank()) {
             return "Indica el codigo de la accion o consulta.";
         }
+        // Las herramientas de control no quedan en ai.tool_invocacion: el log dice si el modelo la uso.
+        log.info("estructura_esperada pedida: codigo={} disponible={}", texto.trim(), turno.herramienta(texto.trim()).isPresent());
         return turno.herramienta(texto.trim())
                 .map(this::describir)
                 .orElse(EsquemaDeAccionHerramienta.NO_DISPONIBLE);
