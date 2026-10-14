@@ -260,5 +260,48 @@ public class ReportingProperties {
 
         public Map<String, String> getVariants() { return variants; }
         public void setVariants(Map<String, String> v) { this.variants = v; }
+
+        /** Tope de un encabezado pedido: un rotulo real ronda los 30. */
+        static final int MAX_ETIQUETA = 60;
+
+        /**
+         * Copia de esta definicion con los encabezados de {@code etiquetas}
+         * (el {@code columnLabels} del request). Solo renombra columnas YA
+         * declaradas, en su mismo orden: una clave desconocida no agrega una
+         * columna, por el mismo motivo que {@code columns} solo filtra. Un
+         * texto en blanco se ignora y uno largo se corta. Sin etiquetas
+         * aplicables devuelve esta misma instancia: la configuracion
+         * compartida nunca se modifica.
+         */
+        public Report conEtiquetas(Map<String, String> etiquetas) {
+            if (etiquetas == null || etiquetas.isEmpty() || columns == null || columns.isEmpty()) {
+                return this;
+            }
+            Map<String, String> renombradas = new LinkedHashMap<>(columns);
+            boolean cambio = false;
+            for (Map.Entry<String, String> e : etiquetas.entrySet()) {
+                String texto = e.getValue() == null ? "" : e.getValue().strip();
+                if (texto.isEmpty() || !renombradas.containsKey(e.getKey())) {
+                    continue;
+                }
+                renombradas.put(e.getKey(),
+                        texto.length() > MAX_ETIQUETA ? texto.substring(0, MAX_ETIQUETA) : texto);
+                cambio = true;
+            }
+            if (!cambio) {
+                return this;
+            }
+            Report copia = new Report();
+            copia.setPath(path);
+            copia.setBaseUrl(baseUrl);
+            copia.setTitle(title);
+            copia.setFileName(fileName);
+            copia.setColumns(renombradas);
+            copia.setImageFields(imageFields);
+            copia.setFormats(formats);
+            copia.setVariantParam(variantParam);
+            copia.setVariants(variants);
+            return copia;
+        }
     }
 }
