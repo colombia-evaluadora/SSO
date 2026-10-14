@@ -1,7 +1,7 @@
 # Mapa del dominio
 
 **Generado** por `python scripts/migration-analysis mapa` — no editar a mano.
-Estado: 497 migraciones (V1–V559.3), 1341 funciones vivas, 49 endpoints vivos. Ultima generacion: 2026-10-14.
+Estado: 497 migraciones (V1–V559.3), 1347 funciones vivas, 49 endpoints vivos. Ultima generacion: 2026-10-14.
 
 Para una **funcion**, la migracion dueña es la que hay que editar: es su ultima escritura viva, no la que la creo.
 
@@ -25,10 +25,10 @@ Las secciones son las categorias funcionales de `scripts/migration-analysis/anal
 - [Planeador (unidades, actividades)](#planeador) — 284 funcion(es), 15 endpoint(s)
 - [Auditoría](#auditoria) — 12 funcion(es), 9 endpoint(s)
 - [Periodos académicos](#periodos) — 113 funcion(es), 0 endpoint(s)
-- [Funcionarios](#funcionarios) — 40 funcion(es), 2 endpoint(s)
+- [Funcionarios](#funcionarios) — 42 funcion(es), 2 endpoint(s)
 - [Sedes](#sedes) — 29 funcion(es), 0 endpoint(s)
 - [Establecimiento](#establecimiento) — 14 funcion(es), 0 endpoint(s)
-- [Menús](#menus) — 27 funcion(es), 1 endpoint(s)
+- [Menús](#menus) — 31 funcion(es), 1 endpoint(s)
 - [Permisos](#permisos) — 23 funcion(es), 0 endpoint(s)
 - [Estructura académica](#academico) — 171 funcion(es), 0 endpoint(s)
 - [Plataforma SSO](#plataforma) — 52 funcion(es), 0 endpoint(s)
@@ -1209,6 +1209,8 @@ Las secciones son las categorias funcionales de `scripts/migration-analysis/anal
 | `academico_test.fn_plan_validar_renglon_removible` | 1 | V44.1 | V44.2 |
 | `academico_test.fn_plan_validar_renglon_sin_asignaciones` | 1 | V44.1 | — |
 | `academico_test.fn_plan_validar_sin_asignaciones` | 1 | V44.1 | V44.2 |
+| `academico_test.fn_rol_funcionarios_contar` | 2 | V498 | — |
+| `academico_test.fn_rol_funcionarios_contar_interno` | 1 | V498 | — |
 | `academico_test.fn_sed_listar_paginado` | 7 | V116 | V95 |
 | `academico_test.fn_usu_empleado_buscar_por_pk` | 2 | V444 | V93 |
 | `academico_test.fn_usu_empleados_contar` | 6 | V116 | — |
@@ -1286,10 +1288,14 @@ Las secciones son las categorias funcionales de `scripts/migration-analysis/anal
 | `academico_test.fn_delete_menu` | 2 | V115 | V126 |
 | `academico_test.fn_list_available_menus` | 1 | V498 | V119 |
 | `academico_test.fn_list_my_menus` | 1 | V193 | V194 |
+| `academico_test.fn_menu_catalogo_admin_listar` | 1 | V498 | — |
+| `academico_test.fn_menu_catalogo_admin_listar_interno` | 0 | V498 | — |
 | `academico_test.fn_menu_catalogo_listar_interno` | 0 | V498 | — |
 | `academico_test.fn_menu_codigo_canonico` | 1 | V29 | V113, V303, V396 |
 | `academico_test.fn_menu_codigo_desde_nombre` | 1 | V113 | — |
 | `academico_test.fn_menu_eliminar_interno` | 1 | V115 | — |
+| `academico_test.fn_menu_estado_cambiar` | 4 | V498 | — |
+| `academico_test.fn_menu_estado_cambiar_interno` | 3 | V498 | — |
 | `academico_test.fn_menu_grupo_de` | 1 | V396 | — |
 | `academico_test.fn_menu_validar_codigo_unico` | 1 | V113 | — |
 | `academico_test.fn_menu_validar_rama_no_visible` | 1 | V115 | — |
