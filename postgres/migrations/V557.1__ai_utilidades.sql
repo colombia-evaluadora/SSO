@@ -91,6 +91,53 @@ $$;
 COMMENT ON FUNCTION ai.fn_menus_usuario_interno(BIGINT) IS
     'INTERNO: permisos por menu (ver, crear, editar, eliminar) del usuario public.users p_user_id, reutilizando academico_test.fn_usuario_permisos_menu. El filtro por menus del agente es UX; la autoridad es el gate de cada ruta.';
 
+-- Estructura esperada de cualquier herramienta, sacada del codigo que ejecuta su endpoint: sigue las
+-- llamadas academico_test.fn_* desde public.query (3 niveles) y junta las claves JSON que leen (->> 'x')
+-- y los mensajes de sus validaciones. Gates y alcance quedan fuera: no son estructura.
+CREATE OR REPLACE FUNCTION ai.fn_herramienta_estructura_interno(p_herramienta_id BIGINT)
+RETURNS TABLE (
+    bloque       VARCHAR,
+    claves       TEXT[],
+    validaciones TEXT[]
+)
+LANGUAGE sql
+STABLE
+AS $$
+    WITH RECURSIVE fn (nombre, nivel) AS (
+        SELECT DISTINCT lower(m[1]), 0
+          FROM ai.herramienta h
+          JOIN public.query q ON q.uuid = h.query_uuid,
+               regexp_matches(q.query, 'academico_test\.(fn_[a-z0-9_]+)\s*\(', 'gi') m
+         WHERE h.id = p_herramienta_id
+        UNION
+        SELECT DISTINCT lower(m[1]), f.nivel + 1
+          FROM fn f
+          JOIN pg_proc p ON p.proname = f.nombre
+          JOIN pg_namespace n ON n.oid = p.pronamespace AND n.nspname = 'academico_test',
+               regexp_matches(pg_get_functiondef(p.oid), 'academico_test\.(fn_[a-z0-9_]+)\s*\(', 'gi') m
+         WHERE f.nivel < 3
+    ), cuerpos AS (
+        SELECT f.nombre, string_agg(pg_get_functiondef(p.oid), E'\n') AS def
+          FROM (SELECT DISTINCT nombre FROM fn) f
+          JOIN pg_proc p ON p.proname = f.nombre
+          JOIN pg_namespace n ON n.oid = p.pronamespace AND n.nspname = 'academico_test'
+         WHERE f.nombre !~ '(assert|permiso|alcance|gate|auditar|audit_|etiqueta|resolver_actor|categoria_rol)'
+         GROUP BY f.nombre
+    )
+    SELECT regexp_replace(c.nombre, '^fn_|_interno$', '', 'g')::VARCHAR,
+           ARRAY(SELECT DISTINCT k[1] FROM regexp_matches(c.def, '->>?\s*''([A-Za-z_][A-Za-z0-9_]*)''', 'g') k
+                 ORDER BY 1),
+           ARRAY(SELECT DISTINCT replace(replace(r[1], '''''', ''''), '%', '…')
+                   FROM regexp_matches(c.def, 'RAISE\s+EXCEPTION\s+''((?:[^'']|'''')*)''', 'gi') r
+                  ORDER BY 1)
+      FROM cuerpos c
+     WHERE c.def ~ '->>?\s*''[A-Za-z_]' OR c.def ~* 'RAISE\s+EXCEPTION'
+     ORDER BY 1;
+$$;
+
+COMMENT ON FUNCTION ai.fn_herramienta_estructura_interno(BIGINT) IS
+    'INTERNO: por bloque de codigo del endpoint de la herramienta, las claves JSON que lee y los mensajes de sus validaciones, recorriendo academico_test.fn_* desde public.query hasta 3 niveles. Generico para cualquier herramienta con ruta; sin gates. Lo usa la herramienta estructura_esperada del agente.';
+
 CREATE OR REPLACE FUNCTION ai.fn_funcionario_usuario_interno(p_user_id BIGINT)
 RETURNS BIGINT
 LANGUAGE sql

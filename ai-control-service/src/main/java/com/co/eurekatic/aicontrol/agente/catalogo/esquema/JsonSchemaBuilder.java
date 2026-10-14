@@ -62,6 +62,10 @@ public final class JsonSchemaBuilder {
     }
 
     private static void escalar(ObjectNode nodo, TipoSql tipo, Restriccion restriccion) {
+        if (tipo == TipoSql.OBJETO) {
+            nodo.putArray("type").add("object").add("array");
+            return;
+        }
         nodo.put("type", tipo.jsonType());
         if (tipo.formato() != null) {
             nodo.put("format", tipo.formato());
@@ -100,8 +104,12 @@ public final class JsonSchemaBuilder {
 
     private static String descripcion(ParametroDef parametro) {
         String base = parametro.descripcion().trim();
-        return parametro.resuelveCon()
+        String conOrigen = parametro.resuelveCon()
                 .map(herramienta -> (base + " (se obtiene con " + herramienta + ")").trim())
                 .orElse(base);
+        // Un JSON compuesto no se adivina: su forma la dice estructura_esperada, sacada del codigo del endpoint.
+        return parametro.tipo().base() == TipoSql.OBJETO
+                ? conOrigen + ". JSON compuesto: consulta su estructura con estructura_esperada antes de armarlo"
+                : conOrigen;
     }
 }
