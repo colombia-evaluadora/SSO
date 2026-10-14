@@ -1,5 +1,6 @@
 package com.co.eurekatic.aicontrol.agente.nucleo.turno;
 
+import com.co.eurekatic.aicontrol.agente.memoria.NotaDeMemoria;
 import com.co.eurekatic.aicontrol.agente.nucleo.respuesta.RespuestaAgente;
 import com.co.eurekatic.aicontrol.agente.persistencia.mensaje.MensajeStore;
 import com.co.eurekatic.aicontrol.agente.persistencia.mensaje.MensajeStore.NuevoMensaje;
@@ -58,7 +59,8 @@ public class RegistradorTurno {
                 uso.tokensSalida().orElse(null),
                 null,
                 conModelo ? (int) consumo.latenciaMs() : null));
-        memoria.add(conversacionId.toString(), new AssistantMessage(respuesta.texto()));
+        memoria.add(conversacionId.toString(),
+                new AssistantMessage(NotaDeMemoria.para(respuesta.tipo().name(), respuesta.texto())));
     }
 
     /**

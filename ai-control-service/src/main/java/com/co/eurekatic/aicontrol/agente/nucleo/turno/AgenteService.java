@@ -1,10 +1,10 @@
 package com.co.eurekatic.aicontrol.agente.nucleo.turno;
 
 import com.co.eurekatic.aicontrol.agente.comun.UsuarioAgente;
+import com.co.eurekatic.aicontrol.agente.memoria.NotaDeMemoria;
 import com.co.eurekatic.aicontrol.agente.nucleo.AccionPropuesta;
 import com.co.eurekatic.aicontrol.agente.nucleo.TurnoContexto;
 import com.co.eurekatic.aicontrol.agente.nucleo.acciones.AccionesService;
-import com.co.eurekatic.aicontrol.agente.nucleo.acciones.AfirmacionEnChat;
 import com.co.eurekatic.aicontrol.agente.nucleo.intencion.Intencion;
 import com.co.eurekatic.aicontrol.agente.nucleo.intencion.TipoIntencion;
 import com.co.eurekatic.aicontrol.agente.nucleo.respuesta.RespuestaAgente;
@@ -25,7 +25,7 @@ import java.util.UUID;
 public class AgenteService {
 
     static final String MENSAJE_SIN_PERMISO = "No tienes permiso para hacer esa acción desde el asistente.";
-    static final String TEXTO_CONFIRMACION = "Antes de hacerlo necesito tu confirmación: %s";
+    static final String TEXTO_CONFIRMACION = NotaDeMemoria.PREFIJO_CONFIRMACION + "%s";
     static final String TEXTO_USA_BOTON = "Para hacerlo, pulsa Confirmar en la acción pendiente: %s. "
             + "Escribirlo en el chat no la ejecuta.";
     private static final long NANOS_POR_MILISEGUNDO = 1_000_000L;
@@ -40,10 +40,12 @@ public class AgenteService {
     private final PresentadorAnalitica analitica;
     private final TurnosEnCurso enCurso;
     private final AlmacenSeudonimos almacenSeudonimos;
+    private final AtajosTurno atajos;
 
     public AgenteService(ConversacionesService conversaciones, PreparadorTurno preparador, RegistradorTurno registrador,
                          PromptTurno prompts, BucleAgente bucle, AccionesService acciones, SalidaTurno salida,
-                         PresentadorAnalitica analitica, TurnosEnCurso enCurso, AlmacenSeudonimos almacenSeudonimos) {
+                         PresentadorAnalitica analitica, TurnosEnCurso enCurso, AlmacenSeudonimos almacenSeudonimos,
+                         AtajosTurno atajos) {
         this.conversaciones = conversaciones;
         this.preparador = preparador;
         this.registrador = registrador;
@@ -54,6 +56,7 @@ public class AgenteService {
         this.analitica = analitica;
         this.enCurso = enCurso;
         this.almacenSeudonimos = almacenSeudonimos;
+        this.atajos = atajos;
     }
 
     /**
@@ -84,9 +87,7 @@ public class AgenteService {
         traza.pasar(EstadoTurno.VALIDADO);
         // Desde aqui todo lo que va al proveedor del modelo lleva los nombres conocidos como seudonimos.
         TablaSeudonimos seudonimos = almacenSeudonimos.cargar(conversacionId);
-        Optional<AccionPropuesta> pendiente = AfirmacionEnChat.es(texto)
-                ? acciones.pendienteVigente(conversacionId, usuario)
-                : Optional.empty();
+        Optional<AccionPropuesta> pendiente = atajos.confirmacionEscrita(conversacionId, usuario, texto);
         if (pendiente.isPresent()) {
             return recordarConfirmacion(conversacionId, usuario, seudonimos.ocultar(texto), pendiente.get(),
                     seudonimos, traza);
@@ -106,6 +107,7 @@ public class AgenteService {
     private RespuestaAgente turno(UUID conversacionId, UsuarioAgente usuario, Preparacion.Listo listo,
                                   String contextoUiJson, TablaSeudonimos seudonimos, TrazaTurno traza, long inicio) {
         traza.pasar(EstadoTurno.INTENCION);
+        traza.anotar(listo.intencion());
         RegistradorTurno.Inicio arranque = registrador.iniciar(conversacionId, listo.textoNormalizado());
         if (sinHerramientaDeEscritura(listo.intencion(), listo)) {
             return cerrar(conversacionId, usuario, new RespuestaAgente.SinPermiso(MENSAJE_SIN_PERMISO),
@@ -113,6 +115,10 @@ public class AgenteService {
         }
         traza.pasar(EstadoTurno.PERMISO_OK);
         traza.pasar(EstadoTurno.RECOLECTANDO);
+        Optional<RespuestaAgente.Ui> pantalla = atajos.pantalla(listo.intencion(), listo.textoNormalizado(), listo.menus());
+        if (pantalla.isPresent()) {
+            return cerrar(conversacionId, usuario, pantalla.get(), Consumo.NINGUNO, seudonimos, traza);
+        }
         TurnoContexto contexto = new TurnoContexto(listo.herramientas(), LectorContextoUi.leer(contextoUiJson),
                 listo.menus(), seudonimos);
         ResultadoBucle resultado = bucle.ejecutar(new BucleAgente.Entrada(
@@ -125,7 +131,8 @@ public class AgenteService {
                 contexto));
         Consumo consumo = new Consumo(resultado.uso(), resultado.modelo(), milisegundosDesde(inicio));
         RespuestaAgente respuesta = switch (resultado) {
-            case ResultadoBucle.Final fin -> analitica.presentar(fin.respuesta(), contexto, arranque.mensajeId());
+            case ResultadoBucle.Final fin -> analitica.presentar(GuardaDeAfirmaciones.revisar(fin.respuesta()), contexto,
+                    arranque.mensajeId());
             case ResultadoBucle.Propuesta propuesta -> confirmacion(conversacionId, usuario, propuesta);
         };
         return cerrar(conversacionId, usuario, respuesta, consumo, seudonimos, traza);

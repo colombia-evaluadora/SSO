@@ -19,6 +19,8 @@ import java.time.LocalDateTime;
 import com.co.eurekatic.aicontrol.agente.persistencia.analitica.ConsultaAnaliticaStore;
 import com.co.eurekatic.aicontrol.agente.seguridad.seudonimos.AlmacenSeudonimos;
 import com.co.eurekatic.aicontrol.agente.seguridad.seudonimos.TablaSeudonimos;
+import com.co.eurekatic.aicontrol.agente.ui.UiFixture;
+import com.co.eurekatic.aicontrol.agente.ui.registro.RegistroUiLoader;
 
 import java.util.List;
 import java.util.Map;
@@ -52,12 +54,15 @@ class AgenteServiceTest {
     private AccionesService acciones;
     private SalidaTurno salida;
     private AlmacenSeudonimos seudonimos;
+    private RegistroUiLoader registroUi;
     private AgenteService servicio;
 
     @BeforeEach
     void setUp() {
         seudonimos = mock(AlmacenSeudonimos.class);
         when(seudonimos.cargar(any())).thenReturn(TablaSeudonimos.vacia());
+        registroUi = mock(RegistroUiLoader.class);
+        when(registroUi.registro()).thenReturn(UiFixture.REGISTRO);
         conversaciones = mock(ConversacionesService.class);
         preparador = mock(PreparadorTurno.class);
         registrador = mock(RegistradorTurno.class);
@@ -70,7 +75,8 @@ class AgenteServiceTest {
                 new PromptTurno(new org.springframework.core.io.ClassPathResource("prompts/agente-sistema.st"),
                         PropiedadesAgenteFixture.propiedades().limites().textoMaxCaracteres()),
                 bucle, acciones, salida,
-                new PresentadorAnalitica(mock(ConsultaAnaliticaStore.class)), new TurnosEnCurso(), seudonimos);
+                new PresentadorAnalitica(mock(ConsultaAnaliticaStore.class)), new TurnosEnCurso(), seudonimos,
+                new AtajosTurno(acciones, registroUi));
     }
 
     @Test
@@ -167,6 +173,31 @@ class AgenteServiceTest {
                 new RespuestaAgente.Respuesta("¿Sí a qué?"), Uso.NINGUNO, "MiniMax-M3"));
 
         assertThat(servicio.procesar(CONVERSACION, USUARIO, "sí", "").texto()).isEqualTo("¿Sí a qué?");
+    }
+
+    @Test
+    void unaPreguntaDeDondeSeResuelveConElRegistroSinLlamarAlRazonador() {
+        Preparacion.Listo listo = new Preparacion.Listo("¿dónde califico las actividades?",
+                new Intencion(TipoIntencion.NAVEGACION, "", 0.9, Riesgo.BAJO), List.of(), List.of(), UiFixture.MENUS_DOCENTE);
+        when(preparador.preparar(CONVERSACION, USUARIO, "¿dónde califico las actividades?")).thenReturn(listo);
+
+        RespuestaAgente respuesta = servicio.procesar(CONVERSACION, USUARIO, "¿dónde califico las actividades?", "");
+
+        assertThat(respuesta).isInstanceOfSatisfying(RespuestaAgente.Ui.class,
+                ui -> assertThat(ui.texto()).contains("Planeador"));
+        verify(bucle, never()).ejecutar(any());
+    }
+
+    @Test
+    void unaConfirmacionEscritaPorElModeloSinPropuestaSeSustituye() {
+        Preparacion.Listo listo = listo(TipoIntencion.ACCION, List.of(LECTURA, ESCRITURA));
+        when(preparador.preparar(CONVERSACION, USUARIO, "cambia el titulo")).thenReturn(listo);
+        when(bucle.ejecutar(any())).thenReturn(new ResultadoBucle.Final(new RespuestaAgente.Respuesta(
+                "Antes de hacerlo necesito tu confirmación: Editar la actividad 7"), Uso.NINGUNO, "MiniMax-M3"));
+
+        RespuestaAgente respuesta = servicio.procesar(CONVERSACION, USUARIO, "cambia el titulo", "");
+
+        assertThat(respuesta.texto()).isEqualTo(GuardaDeAfirmaciones.SIN_ACCION);
     }
 
     private static Preparacion.Listo listo(TipoIntencion tipo, List<HerramientaDef> herramientas) {

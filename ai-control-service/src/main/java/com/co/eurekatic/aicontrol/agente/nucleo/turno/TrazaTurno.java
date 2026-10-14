@@ -1,5 +1,6 @@
 package com.co.eurekatic.aicontrol.agente.nucleo.turno;
 
+import com.co.eurekatic.aicontrol.agente.nucleo.intencion.Intencion;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -19,6 +20,7 @@ public final class TrazaTurno {
     private final UUID conversacionId;
     private final ObservadorTurno observador;
     private final List<EstadoTurno> pasos = new ArrayList<>();
+    private Intencion intencion;
 
     private TrazaTurno(UUID conversacionId, ObservadorTurno observador) {
         this.conversacionId = Objects.requireNonNull(conversacionId, "conversacionId");
@@ -59,8 +61,14 @@ public final class TrazaTurno {
         return pasos.get(pasos.size() - 1);
     }
 
-    /** Deja el recorrido en el log: estado final y pasos, sin contenido. */
+    /** Intencion clasificada: decide que herramientas vio el modelo, asi que sale en el log del turno. */
+    public void anotar(Intencion clasificada) {
+        this.intencion = clasificada;
+    }
+
+    /** Deja el recorrido en el log: estado final, pasos e intencion (tipo y riesgo), sin contenido. */
     public void cerrar() {
-        log.info("turno conversacion={} estado={} pasos={}", conversacionId, estado(), pasos);
+        log.info("turno conversacion={} estado={} pasos={} intencion={} riesgo={}", conversacionId, estado(), pasos,
+                intencion == null ? "-" : intencion.tipo(), intencion == null ? "-" : intencion.riesgo());
     }
 }

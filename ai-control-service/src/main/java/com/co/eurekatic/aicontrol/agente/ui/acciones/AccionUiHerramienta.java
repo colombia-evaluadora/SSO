@@ -49,7 +49,8 @@ public class AccionUiHerramienta implements ProveedorHerramientasControl {
             Maneja la pantalla de la persona: NAVEGAR a una pantalla (por su codigo, que da buscar_pantalla),
             RELLENAR campos de un formulario abierto (los de <contexto_ui>), LIMPIAR_CAMPO, RESALTAR un campo que
             falta, ABRIR_PESTANA o APLICAR_FILTROS de un listado. No existe enviar: la persona revisa y envia.
-            Preferible a preguntar en el chat cuando la persona ya esta en el formulario.
+            Es la unica forma de cambiar la pantalla: si no la llamas, no cambio nada. Usala siempre que la persona
+            pida llenar, cambiar o marcar algo del formulario abierto, aunque ya lo hayas hecho en un turno anterior.
             """;
 
     private static final String ESQUEMA = """
