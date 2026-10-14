@@ -112,6 +112,30 @@ def banda(alto, elementos, split='Prevent', when=None):
 # sin cache la segunda hoja del mismo estudiante saldria sin fondo.
 FONDO = [img(0, 0, 613, 894, '$F{fondo_archivo}', scale='FillFrame', cache=True)]
 
+# ------------------------------------------------- verificacion por QR
+# Cada boletin lleva en la esquina inferior izquierda un QR a la pagina
+# publica de verificacion y el codigo en texto. Los dos campos los agrega
+# reporting-service por estudiante; sin verificacion configurada llegan vacios
+# y el pie queda como antes. La copia que se descarga desde la verificacion
+# lleva una marca de agua (parametro MARCA_VERIFICACION) en el fondo, debajo
+# del contenido, para que no se confunda con el original.
+CAMPOS_VERIFICACION = ['codigo_verificacion', 'url_verificacion']
+PARAMETRO_MARCA = '\t<parameter name="MARCA_VERIFICACION" class="java.lang.String"/>\n'
+HAY_QR = '!"".equals($F{url_verificacion})'
+
+
+def qr(x, y, lado, expr, when=None):
+    return ('\t\t\t<element kind="component" %s>\n%s'
+            '\t\t\t\t<component kind="barcode4j:QRCode" margin="0" errorCorrectionLevel="M">\n'
+            '\t\t\t\t\t<codeExpression><![CDATA[%s]]></codeExpression>\n'
+            '\t\t\t\t</component>\n'
+            '\t\t\t</element>\n') % (_pos(x, y, lado, lado), _cuando(when), expr)
+
+
+FONDO.append(txt(266, 97, 80, 700, '$P{MARCA_VERIFICACION}', size=22, bold=True,
+                 align='Center', color='#B9C0CC', valign='Middle',
+                 when='$P{MARCA_VERIFICACION} != null', extra='rotation="Left"'))
+
 # ------------------------------------------------------------- cabecera
 # Se repite en cada hoja. En los 14 fondos la franja de color ocupa y=0..60 y
 # deja libre hasta x~345 antes de la diagonal; debajo, una banda de y=75..105
@@ -291,6 +315,13 @@ def firma(centro, campo, cargo, when, ancho=200, caja=300):
 # "1 de 2" en la esquina inferior derecha, en blanco sobre la pieza oscura
 # del fondo (en algunos fondos es estrecha: el texto va corto).
 PIE = [
+    rect(X0 - 2, 3, 54, 54, BLANCO, radius=3, when=HAY_QR),
+    qr(X0 + 1, 6, 48, '$F{url_verificacion}', when=HAY_QR),
+    rect(X0 + 56, 17, 190, 28, BLANCO, radius=3, when=HAY_QR),
+    static(X0 + 60, 19, 182, 11, 'Verifique este boletin escaneando el QR', size=7,
+           color=GRIS, when=HAY_QR),
+    txt(X0 + 60, 31, 182, 12, '"Codigo: " + $F{codigo_verificacion}', size=7.5, bold=True,
+        valign='Middle', when=HAY_QR),
     txt(X0 + ANCHO - 32, 38, 16, 12, '"" + $V{PAGE_NUMBER}', size=7.5, bold=True,
         align='Right', color=BLANCO, valign='Middle'),
     txt(X0 + ANCHO - 16, 38, 30, 12, '" de " + $V{PAGE_NUMBER}', size=7.5, bold=True,

@@ -98,6 +98,18 @@ reporting:
   # se omite esa imagen, no el reporte.
   max-image-bytes: ${REPORTING_MAX_IMAGE_BYTES:4194304}
 
+  # QR de verificacion del boletin. base-url es la pagina publica del front
+  # (el QR apunta a <base-url>/<codigo>); vacia = boletin sin QR y sin
+  # registrar emisiones. Las lecturas publicas van por /public/service del
+  # query-service SIN token: sus funciones solo aceptan el codigo (y los 4
+  # ultimos digitos del documento para los datos).
+  verificacion:
+    base-url: ${BOLETIN_VERIFICACION_BASE_URL:}
+    pdf-cache-ttl: ${BOLETIN_VERIFICACION_PDF_CACHE_TTL:10m}
+    limite-por-ip-minuto: ${BOLETIN_VERIFICACION_LIMITE_IP_MINUTO:30}
+    intentos-fallidos-max: ${BOLETIN_VERIFICACION_INTENTOS_MAX:5}
+    ventana-intentos: ${BOLETIN_VERIFICACION_VENTANA_INTENTOS:15m}
+
   # ---------------------------------------------------------------
   # Catalogo de reportes. `path` es el path_template de la fila
   # public.query creada en V67 — la que llama a fn_X_listar con las
@@ -697,6 +709,8 @@ reporting:
         director_documento: Documento del director
         rector_nombre: Rector
         rector_documento: Documento del rector
+        codigo_verificacion: Codigo de verificacion (lo agrega este servicio)
+        url_verificacion: URL del QR de verificacion (lo agrega este servicio)
     # -----------------------------------------------------------------
     # Boletin de notas (primaria, secundaria y media). path = fila
     # 'eval-col-informes-boletin-notas-001': fn_informe_boletin_notas (V540).
@@ -754,6 +768,8 @@ reporting:
         director_documento: Documento del director
         auxiliar_nombre: Auxiliar administrativo
         auxiliar_documento: Documento del auxiliar
+        codigo_verificacion: Codigo de verificacion (lo agrega este servicio)
+        url_verificacion: URL del QR de verificacion (lo agrega este servicio)
         sin_calificar: Areas sin calificar
         seccion: Seccion (1 consolidado, 2 detalle, 3 comportamientos, 4 escala)
         tipo: Tipo de fila
