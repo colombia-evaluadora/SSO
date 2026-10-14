@@ -77,6 +77,21 @@ class GuardaDeAfirmacionesTest {
     }
 
     @Test
+    void contarQueSeConsultoUnaHerramientaYLoQueDevolvioEsInventado() {
+        RespuestaAgente narrada = new RespuestaAgente.Respuesta("Pedi a la herramienta actividad_instrumento y "
+                + "actividad_detalle con los mismos parametros. La primera devolvio: Escala numerica. La segunda "
+                + "devolvio: total 25 estudiantes asignados.");
+
+        assertThat(GuardaDeAfirmaciones.objecion(narrada)).hasValueSatisfying(o -> assertThat(o).contains("no son reales"));
+        assertThat(GuardaDeAfirmaciones.revisar(narrada).texto()).isEqualTo(GuardaDeAfirmaciones.SIN_CONSULTA);
+        assertThat(GuardaDeAfirmaciones.revisar(new RespuestaAgente.Respuesta("Llamé a la herramienta de grupos.")).texto())
+                .isEqualTo(GuardaDeAfirmaciones.SIN_CONSULTA);
+        RespuestaAgente real = new RespuestaAgente.Respuesta(
+                "La actividad usa una escala numérica de 0 a 100 y está asignada a 15 estudiantes.");
+        assertThat(GuardaDeAfirmaciones.revisar(real)).isSameAs(real);
+    }
+
+    @Test
     void ofrecerConsultarEnVezDeHacerloSeObjetaPeroNoSeSustituye() {
         RespuestaAgente ofrece = new RespuestaAgente.Respuesta(
                 "Para ver los detalles, revísela en su pantalla. Si quiere, puedo consultarla y resumirle el instrumento.");

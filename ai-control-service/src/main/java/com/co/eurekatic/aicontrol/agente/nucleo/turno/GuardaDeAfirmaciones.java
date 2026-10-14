@@ -19,6 +19,7 @@ final class GuardaDeAfirmaciones {
             + "mostraré el botón para confirmarla.";
     static final String SIN_PANTALLA = "No llegué a aplicar ese cambio en tu pantalla. Pídemelo de nuevo.";
     static final String SIN_HERRAMIENTA = "No he podido completar esa petición. Prueba a pedirlo en pasos más concretos.";
+    static final String SIN_CONSULTA = "No he podido consultar esos datos. Pídemelo de nuevo.";
 
     /** El modelo escribio la llamada como texto (XML o marcas del proveedor) en vez de hacerla: nada se ejecuto. */
     private static final Pattern LLAMADA_EN_TEXTO = Pattern.compile(
@@ -99,6 +100,14 @@ final class GuardaDeAfirmaciones {
             + "buscar, pero lo que pidio sale de una consulta que tienes disponible. Haz la consulta ahora y respondele "
             + "con el dato.";
 
+    /**
+     * Contar que consulto una herramienta y lo que devolvio ("pedi a la herramienta actividad_detalle... la segunda
+     * devolvio: 25 estudiantes"): el modelo nunca nombra herramientas en una respuesta real, asi que es inventado.
+     */
+    private static final Pattern CONSULTA_NARRADA = Pattern.compile(
+            "\\b(pedi|llame|consulte|use|invoque|ejecute)( a)?( la| las)? herramientas?\\b"
+                    + "|\\b(la herramienta|la primera|la segunda|la consulta)( \\w+)? devolvio\\b");
+
     private static Optional<Afirmacion> afirmacion(RespuestaAgente respuesta) {
         if (!(respuesta instanceof RespuestaAgente.Respuesta texto)) {
             return Optional.empty();
@@ -107,6 +116,9 @@ final class GuardaDeAfirmaciones {
             return Optional.of(Afirmacion.LLAMADA);
         }
         String plegado = NormalizadorTexto.plegar(texto.texto());
+        if (CONSULTA_NARRADA.matcher(plegado).find() && !PREGUNTA_IMITADA.matcher(plegado).find()) {
+            return Optional.of(Afirmacion.CONSULTA);
+        }
         if (CONFIRMACION.matcher(plegado).find()) {
             return Optional.of(Afirmacion.ACCION);
         }
@@ -123,7 +135,10 @@ final class GuardaDeAfirmaciones {
                 + "no se puede, explicalo sin decir que lo hiciste."),
         LLAMADA(SIN_HERRAMIENTA, "Control del sistema: escribiste una llamada a herramienta como texto y no se "
                 + "ejecuto nada. Llama a la herramienta por la interfaz de herramientas, solo con las que se te ofrecen "
-                + "en este turno; nunca escribas XML ni etiquetas de herramienta en la respuesta.");
+                + "en este turno; nunca escribas XML ni etiquetas de herramienta en la respuesta."),
+        CONSULTA(SIN_CONSULTA, "Control del sistema: tu respuesta cuenta que consultaste herramientas y lo que "
+                + "devolvieron, pero en este turno no llamaste a ninguna: esos datos no son reales. Llama ahora a las "
+                + "consultas por la interfaz de herramientas y responde solo con lo que devuelvan, sin nombrarlas.");
 
         private final String sustituto;
         private final String objecion;
