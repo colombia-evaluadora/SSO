@@ -99,6 +99,13 @@
             <artifactId>jasperreports-jdt</artifactId>
             <version>${jasperreports.version}</version>
         </dependency>
+        <!-- Componente QRCode de las plantillas (QR de verificacion del
+             boletin). Trae ZXing; Jasper lo dibuja nativo, sin imagen previa. -->
+        <dependency>
+            <groupId>net.sf.jasperreports</groupId>
+            <artifactId>jasperreports-barcode4j</artifactId>
+            <version>${jasperreports.version}</version>
+        </dependency>
 
         <!-- Excel. SXSSF escribe por streaming manteniendo pocas filas
              en memoria: es justamente lo que necesita un reporte que por

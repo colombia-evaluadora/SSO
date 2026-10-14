@@ -132,6 +132,7 @@ campos += ['evidencia%d_titulo' % i for i in range(1, 7)]
 # Las fechas se declaran como TEXTO: el datasource las entrega ya
 # formateadas por CellValues, no como objetos de fecha.
 campos += ['evidencia%d_fecha' % i for i in range(1, 7)]
+campos += CAMPOS_VERIFICACION
 
 decl = ''.join('\t<field name="%s" class="java.lang.String"/>\n' % c for c in campos)
 decl += ''.join('\t<field name="%s" class="java.io.InputStream"/>\n' % c
@@ -192,7 +193,7 @@ cabecera = """<?xml version="1.0" encoding="UTF-8"?>
 \t<parameter name="TOTAL" class="java.lang.Integer"/>
 \t<parameter name="USUARIO" class="java.lang.String"/>
 \t<parameter name="FILTROS" class="java.lang.String"/>
-
+""" + PARAMETRO_MARCA + """
 """
 
 

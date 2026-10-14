@@ -68,6 +68,12 @@ public class SecurityConfig {
                         // token; sin permitAll el servicio se cae del doc
                         // unificado de /api/docs.
                         .requestMatchers("/v3/api-docs", "/v3/api-docs/**").permitAll()
+                        // Verificacion publica del boletin por QR: sin sesion.
+                        // Solo estas dos formas exactas; la autorizacion es el
+                        // codigo (y los 4 digitos del documento para el PDF),
+                        // que validan las funciones de la base.
+                        .requestMatchers(HttpMethod.GET, "/reportes/public/boletin/*").permitAll()
+                        .requestMatchers(HttpMethod.POST, "/reportes/public/boletin/*/pdf").permitAll()
                         .anyRequest().authenticated())
                 .addFilterBefore(jwtFilter, UsernamePasswordAuthenticationFilter.class)
                 .build();
