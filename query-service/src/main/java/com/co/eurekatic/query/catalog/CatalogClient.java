@@ -115,6 +115,18 @@ public class CatalogClient {
                 uri -> uri.path("/getQuery").queryParam("uuid", uuid).build());
     }
 
+    /**
+     * Definicion de una consulta {@code public_end} para un llamador SIN
+     * token. {@code /getQuery} exige JWT y rechaza al anonimo antes de mirar
+     * {@code publicEnd}; este endpoint interno solo devuelve filas publicas.
+     */
+    public QueryDefinition fetchPublicQuery(String uuid) {
+        requireInternalToken("fetchPublicQuery");
+        return call("publicQuery", QueryDefinition.class,
+                INTERNAL_HEADER, internalToken,
+                uri -> uri.path("/internal/publicQuery").queryParam("uuid", uuid).build());
+    }
+
     /** Fetches the write definition for {@code uuid}. Same contract as {@link #fetchQuery}. */
     public WriteDefinition fetchWrite(String bearer, String uuid) {
         return call("getWrite", WriteDefinition.class,

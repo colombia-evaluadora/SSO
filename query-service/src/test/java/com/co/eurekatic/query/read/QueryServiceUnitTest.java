@@ -363,6 +363,22 @@ class QueryServiceUnitTest {
                 .endsWith(") AS _orig;");
     }
 
+    /**
+     * jsonb_build_object es VARIADIC "any": un parametro bindeado como NULL
+     * sin tipo (SESION_ID/FAMILIA de un llamador anonimo en /public/service)
+     * hace fallar a Postgres con "could not determine data type of parameter".
+     * Cada argumento lleva su CAST explicito.
+     */
+    @Test
+    void wrapWithAuditContextCastsJsonbBuildObjectArgs() {
+        String wrapped = QueryService.wrapWithAuditContext(
+                "SELECT * FROM academico_test.fn_x(:BODY.CODIGO)");
+        assertThat(wrapped)
+                .contains("CAST(:CONTEXT.PATH AS TEXT)")
+                .contains("CAST(:CONTEXT.SESION_ID AS TEXT)")
+                .contains("CAST(:CONTEXT.FAMILIA AS TEXT)");
+    }
+
     @Test
     void wrapWithAuditContextStripsExistingTrailingSemicolon() {
         String wrapped = QueryService.wrapWithAuditContext(

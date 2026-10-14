@@ -66,4 +66,29 @@ class InternalGatewayControllerTest {
         assertEquals(1, InternalGatewayController.stripPrefixFrom("/sso-admin/**"));
         assertEquals(0, InternalGatewayController.stripPrefixFrom("/**"));
     }
+
+    @Test
+    void publicQueryServesOnlyPublicRows() {
+        com.co.eurekatic.common.repository.QueryRepository repo =
+                org.mockito.Mockito.mock(com.co.eurekatic.common.repository.QueryRepository.class);
+        com.co.eurekatic.common.entity.Query pub = new com.co.eurekatic.common.entity.Query();
+        pub.setUuid("pub");
+        pub.setQuery("SELECT 1");
+        pub.setPublicEnd(true);
+        com.co.eurekatic.common.entity.Query priv = new com.co.eurekatic.common.entity.Query();
+        priv.setUuid("priv");
+        priv.setQuery("SELECT 1");
+        org.mockito.Mockito.when(repo.findByUuid("pub")).thenReturn(java.util.Optional.of(pub));
+        org.mockito.Mockito.when(repo.findByUuid("priv")).thenReturn(java.util.Optional.of(priv));
+        org.mockito.Mockito.when(repo.findByUuid("nada")).thenReturn(java.util.Optional.empty());
+        InternalGatewayController c = new InternalGatewayController(null, repo);
+
+        assertEquals("pub", c.publicQuery("pub").uuid());
+        for (String uuid : java.util.List.of("priv", "nada")) {
+            org.springframework.web.server.ResponseStatusException e = org.junit.jupiter.api.Assertions
+                    .assertThrows(org.springframework.web.server.ResponseStatusException.class,
+                            () -> c.publicQuery(uuid));
+            assertEquals(403, e.getStatusCode().value());
+        }
+    }
 }

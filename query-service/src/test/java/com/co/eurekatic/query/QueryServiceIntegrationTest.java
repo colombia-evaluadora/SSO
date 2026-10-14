@@ -396,7 +396,8 @@ class QueryServiceIntegrationTest {
 
     @Test
     void publicServiceAllowsAnonymousForPublicEndQuery() throws Exception {
-        when(catalogClient.fetchQuery(any(), eq("q-public"))).thenReturn(
+        // Anonimo: sso-admin no acepta /getQuery sin JWT, va por /internal/publicQuery.
+        when(catalogClient.fetchPublicQuery(eq("q-public"))).thenReturn(
                 new QueryDefinition(4L, "q-public",
                         "SELECT count(*) AS n FROM users",
                         "postgres", true /* publicEnd */, false, null, null, null));
