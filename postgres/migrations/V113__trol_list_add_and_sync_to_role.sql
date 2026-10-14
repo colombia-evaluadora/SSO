@@ -1,12 +1,10 @@
 -- ===========================================================================
--- V113 - Gestion administrativa de TROL/TMENU/TLISTA_VALOR (academico_test)
--- servida por public.query. Quedan fn_assert_superadmin, fn_list_roles,
--- fn_add_trol + trigger de sincronizacion con public.role,
--- fn_list_menu_possibilities_for_rol, fn_dissociate_menus_from_rol,
--- fn_upsert_menu (+ _interno y codigo canonico), planes y semillas de ruta.
--- fn_associate_menus_to_rol, fn_list_available_menus, fn_delete_menu y
--- fn_reorder_menus se reescribieron en V115, V123 y V498; el rol lo crea V59
--- y las asignaciones rol-menu (TROL_MENU) las siembra V193.
+-- V113 - Gestion administrativa de TROL/TMENU/TLISTA_VALOR servida por
+-- public.query: fn_assert_superadmin, fn_list_roles, fn_add_trol + trigger de
+-- sincronizacion con public.role, fn_upsert_menu (+ _interno), planes, semillas
+-- de ruta y el acceso inicial de los roles en TROL_MENU.
+-- Elimina fn_list_menu_possibilities_for_rol, fn_dissociate_menus_from_rol y
+-- fn_delete_plan_from_value: no tienen endpoint ni llamadores.
 -- ===========================================================================
 
 
@@ -60,6 +58,9 @@ DROP FUNCTION IF EXISTS academico_test.fn_list_plans_from_value(BIGINT);
 DROP FUNCTION IF EXISTS academico_test.fn_create_plan_from_value(BIGINT, VARCHAR);
 
 DROP FUNCTION IF EXISTS academico_test.fn_delete_plan_from_value(BIGINT, VARCHAR);
+
+-- Sin endpoint ni llamadores: se eliminan tambien de los servidores.
+DROP FUNCTION IF EXISTS academico_test.fn_dissociate_menus_from_rol(BIGINT, BIGINT, BIGINT[]);
 
 CREATE OR REPLACE FUNCTION academico_test.fn_list_roles(
     p_user_pk BIGINT
@@ -181,140 +182,6 @@ CREATE TRIGGER trg_sync_trol_to_public_role
     AFTER INSERT ON academico_test.trol
     FOR EACH ROW
     EXECUTE FUNCTION academico_test.fn_sync_trol_to_public_role();
-
-CREATE OR REPLACE FUNCTION academico_test.fn_list_menu_possibilities_for_rol(
-    p_user_pk  BIGINT,
-    p_pk_trol  BIGINT
-)
-RETURNS TABLE (
-    pk_padre        BIGINT,
-    nombre_padre    VARCHAR,
-    icono_padre     VARCHAR,
-    orden_padre     NUMERIC,
-    pk_submenu      BIGINT,
-    nombre_submenu  VARCHAR,
-    url             VARCHAR,
-    visible         BOOLEAN,
-    orden_submenu   NUMERIC,
-    plan_id         BIGINT,
-    ya_asignado     BOOLEAN,
-    orden_rol       NUMERIC,
-    
-    
-    
-    
-    
-    solo_lectura    BOOLEAN
-)
-LANGUAGE plpgsql
-STABLE
-SET search_path = academico_test, public
-AS $$
-BEGIN
-    PERFORM academico_test.fn_assert_superadmin(p_user_pk);
-
-    IF p_pk_trol IS NULL
-       OR NOT EXISTS (
-           SELECT 1 FROM academico_test.trol
-            WHERE pk_trol = p_pk_trol AND active = TRUE
-       )
-    THEN
-        -- 400 (no hay 404 real en PostgresErrorMapper — ver nota del header).
-        -- ERRCODE='22023' (invalid_parameter_value): p_pk_trol no referencia
-        -- una fila valida, mismo tratamiento que el resto de referencias
-        -- invalidas en este archivo (consistencia de categoria de error).
-        RAISE EXCEPTION 'fn_list_menu_possibilities_for_rol: TROL pk=% no existe o no esta activo', p_pk_trol
-            USING ERRCODE = '22023';
-    END IF;
-
-    RETURN QUERY
-    SELECT
-        padre.pk_tmenu                  AS pk_padre,
-        padre.nombre                    AS nombre_padre,
-        padre.icono                     AS icono_padre,
-        padre.orden                     AS orden_padre,
-        hijo.pk_tmenu                   AS pk_submenu,
-        hijo.nombre                     AS nombre_submenu,
-        hijo.url                        AS url,
-        (hijo.visible = 'S')            AS visible,
-        hijo.orden                      AS orden_submenu,
-        hijo.fk_tplan                   AS plan_id,
-        (tm.pk_trol_menu IS NOT NULL)   AS ya_asignado,
-        tm.orden_rol                    AS orden_rol,
-        COALESCE(tm.solo_lectura = 'SI', FALSE) AS solo_lectura
-    FROM academico_test.tmenu padre
-    INNER JOIN academico_test.tmenu hijo
-           ON hijo.fk_tmenu  = padre.pk_tmenu
-          AND hijo.estado    = 'A'
-          AND hijo.active    = TRUE
-    LEFT JOIN academico_test.trol_menu tm
-           ON tm.fk_tmenu = hijo.pk_tmenu
-          AND tm.fk_trol  = p_pk_trol
-          AND tm.active   = TRUE
-    WHERE padre.fk_tmenu IS NULL
-      AND padre.estado   = 'A'
-      AND padre.active   = TRUE
-    ORDER BY
-        padre.orden NULLS LAST, padre.nombre,
-        hijo.orden  NULLS LAST, hijo.nombre;
-END;
-$$;
-
-CREATE OR REPLACE FUNCTION academico_test.fn_dissociate_menus_from_rol(
-    p_user_pk   BIGINT,
-    p_pk_trol   BIGINT,
-    p_pk_tmenus BIGINT[]
-)
-RETURNS TABLE (
-    pk_tmenu    BIGINT,
-    was_deleted BOOLEAN
-)
-LANGUAGE plpgsql
-VOLATILE
-SET search_path = academico_test, public
-AS $$
-DECLARE
-    v_tmenu BIGINT;
-    v_rows  INTEGER;
-BEGIN
-    PERFORM academico_test.fn_assert_superadmin(p_user_pk);
-
-    IF p_pk_trol IS NULL
-       OR NOT EXISTS (
-           SELECT 1 FROM academico_test.trol
-            WHERE pk_trol = p_pk_trol AND active = TRUE
-       )
-    THEN
-        RAISE EXCEPTION 'fn_dissociate_menus_from_rol: TROL pk=% no existe o no esta activo', p_pk_trol
-            USING ERRCODE = '22023';
-    END IF;
-
-    IF p_pk_tmenus IS NULL
-       OR array_length(p_pk_tmenus, 1) IS NULL
-    THEN
-        RAISE EXCEPTION 'fn_dissociate_menus_from_rol: p_pk_tmenus debe contener al menos un PK'
-            USING ERRCODE = '22023';
-    END IF;
-
-    FOREACH v_tmenu IN ARRAY p_pk_tmenus LOOP
-        pk_tmenu    := v_tmenu;
-        was_deleted := FALSE;
-
-        UPDATE academico_test.trol_menu
-           SET active      = FALSE,
-               modified_by = CURRENT_USER,
-               modified_at = CURRENT_TIMESTAMP
-         WHERE fk_trol  = p_pk_trol
-           AND fk_tmenu = v_tmenu
-           AND active   = TRUE;
-
-        GET DIAGNOSTICS v_rows = ROW_COUNT;
-        was_deleted := (v_rows > 0);
-
-        RETURN NEXT;
-    END LOOP;
-END;
-$$;
 
 -- El CODIGO de un menu nuevo se deriva de su nombre, siempre en forma
 -- canonica: "Matrícula" da MATRICULA, nunca MATRÍCULA.
@@ -807,58 +674,6 @@ BEGIN
 END;
 $$;
 
-CREATE OR REPLACE FUNCTION academico_test.fn_delete_plan_from_value(
-    p_user_pk BIGINT,
-    p_nombre  VARCHAR
-)
-RETURNS TABLE (
-    id          BIGINT,
-    name        VARCHAR,
-    was_deleted BOOLEAN
-)
-LANGUAGE plpgsql
-VOLATILE
-SET search_path = academico_test, public
-AS $$
-DECLARE
-    v_valor VARCHAR;
-    v_pk    BIGINT;
-    v_rows  INTEGER;
-BEGIN
-    PERFORM academico_test.fn_assert_superadmin(p_user_pk);
-
-    IF p_nombre IS NULL OR LENGTH(TRIM(p_nombre)) = 0 THEN
-        RAISE EXCEPTION 'fn_delete_plan_from_value: p_nombre es obligatorio';
-    END IF;
-
-    v_valor := UPPER(REGEXP_REPLACE(TRIM(p_nombre), '\s+', '_', 'g'));
-
-    SELECT lv.pk_lista_valor INTO v_pk
-      FROM academico_test.tlista_valor lv
-     WHERE lv.categoria = 'PLAN'
-       AND UPPER(TRIM(lv.valor)) = v_valor
-       AND lv.active = TRUE
-     LIMIT 1;
-
-    IF v_pk IS NOT NULL THEN
-        UPDATE academico_test.tlista_valor lv
-           SET active      = FALSE,
-               modified_by = CURRENT_USER,
-               modified_at = CURRENT_TIMESTAMP
-         WHERE lv.pk_lista_valor = v_pk;
-
-        GET DIAGNOSTICS v_rows = ROW_COUNT;
-        was_deleted := (v_rows > 0);
-    ELSE
-        was_deleted := FALSE;
-    END IF;
-
-    id          := v_pk;
-    name        := TRIM(p_nombre);
-    RETURN NEXT;
-END;
-$$;
-
 INSERT INTO academico_test.tlista_valor (categoria, nombre, valor, created_by)
 SELECT v.categoria, v.nombre, v.valor, 'V59_seed'
   FROM (VALUES
@@ -977,12 +792,6 @@ COMMENT ON FUNCTION academico_test.fn_sync_trol_to_public_role() IS
 COMMENT ON TRIGGER trg_sync_trol_to_public_role ON academico_test.trol IS
     'Dispara fn_sync_trol_to_public_role despues de cada INSERT en trol para mantener public.role sincronizado con el catalogo academico bajo el prefijo CEVAL-.';
 
-COMMENT ON FUNCTION academico_test.fn_list_menu_possibilities_for_rol(BIGINT, BIGINT) IS
-    'Devuelve TODAS las combinaciones padre -> submenu (2 niveles), con ya_asignado + orden_rol (de trol_menu) y plan_id (tmenu.fk_tplan del submenu). Pensada para la grilla "Submenus" del dialog "Agregar menu". REQUIERE p_user_pk (fn_assert_superadmin). El rol debe existir y estar activo.';
-
-COMMENT ON FUNCTION academico_test.fn_dissociate_menus_from_rol(BIGINT, BIGINT, BIGINT[]) IS
-    'Desvincula (soft-delete) TMENU puntuales de un rol sin afectar el resto. Utilidad de proposito general; PUT /roles/{roleId}/menus usa fn_associate_menus_to_rol(p_full_replace=TRUE) en su lugar.';
-
 COMMENT ON FUNCTION academico_test.fn_upsert_menu(BIGINT, VARCHAR, VARCHAR, VARCHAR, VARCHAR, VARCHAR, NUMERIC, BIGINT, BIGINT, BIGINT, JSONB) IS
     'POST /menus y PATCH /menus/{id}. Wrapper: gate de super admin (fn_assert_superadmin) y delega en fn_upsert_menu_interno. Tres modos: EDITAR (p_pk_tmenu_editar; p_id_padre actua como reparent, NULL mueve a raiz), HIJO (p_id_padre) y RAIZ con batch opcional de submenus (p_submenus).';
 
@@ -992,5 +801,52 @@ COMMENT ON FUNCTION academico_test.fn_list_plans_from_value(BIGINT) IS
 COMMENT ON FUNCTION academico_test.fn_create_plan_from_value(BIGINT, VARCHAR) IS
     'POST /plans -> PlanDto. p_created_by se deriva de CURRENT_USER. VALOR canonico derivado del nombre. Duplicado -> RAISE USING ERRCODE=''23505'' (409 Conflict). REQUIERE p_user_pk (fn_assert_superadmin).';
 
-COMMENT ON FUNCTION academico_test.fn_delete_plan_from_value(BIGINT, VARCHAR) IS
-    'Soft-delete por nombre sobre tlista_valor CATEGORIA=''PLAN''. Sin endpoint documentado todavia; utilidad general. REQUIERE p_user_pk (fn_assert_superadmin).';
+-- Acceso que los roles ya tenian (5 roles x 7 menus, los 4 permisos), para
+-- que el paso a permisos por menu no deje a nadie sin acceso. Con los grupos
+-- padre: PUT /roles/:ROLEID/menus rechaza un submenu sin su padre.
+DO $$
+DECLARE
+    v_insertadas INTEGER;
+BEGIN
+    INSERT INTO academico_test.trol_menu (
+        fk_trol, fk_tmenu, orden_rol, active, created_by
+    )
+    SELECT r.pk_trol,
+           m.pk_tmenu,
+           men.orden_rol,
+           TRUE,
+           'V113_seed_acceso'
+      FROM (VALUES
+                ('RECTOR'),
+                ('JEFE_SISTEMA_ESTABLECIMIENTO'),
+                ('AUXILIAR_ADMINISTRATIVO'),
+                ('DIRECTOR_ENTE_TERRITORIAL'),
+                ('JEFE_SISTEMA_ENTE_TERRITORIAL')
+           ) AS rol(codigo)
+      CROSS JOIN (VALUES
+                ('ESTABLECIMIENTO_EDUCATIVO', 1::NUMERIC),   -- grupo padre
+                ('ESTABLECIMIENTO',           2::NUMERIC),
+                ('SEDES_EDUCATIVAS',          3::NUMERIC),
+                ('FUNCIONARIOS',              4::NUMERIC),
+                ('PERIODOS_ACADEMICOS',       5::NUMERIC),
+                ('COBERTURA_EDUCATIVA',       6::NUMERIC),   -- grupo padre de Matricula
+                ('MATRICULA',                 7::NUMERIC)
+           ) AS men(codigo, orden_rol)
+      JOIN academico_test.trol r
+        ON r.codigo = rol.codigo
+       AND r.active = TRUE
+      JOIN academico_test.tmenu m
+        ON m.codigo = men.codigo
+       AND m.active = TRUE
+     WHERE NOT EXISTS (
+               SELECT 1
+                 FROM academico_test.trol_menu tm
+                WHERE tm.fk_trol  = r.pk_trol
+                  AND tm.fk_tmenu = m.pk_tmenu
+           );
+
+    GET DIAGNOSTICS v_insertadas = ROW_COUNT;
+
+    RAISE NOTICE 'V113_seed_acceso: % fila(s) insertadas en academico_test.trol_menu (esperadas 35 en instalacion limpia, 0 al reejecutar).', v_insertadas;
+END;
+$$;
