@@ -8,7 +8,7 @@ import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
-import org.springframework.http.client.SimpleClientHttpRequestFactory;
+import org.springframework.http.client.JdkClientHttpRequestFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.HttpStatusCodeException;
 import org.springframework.web.client.RestClient;
@@ -17,6 +17,7 @@ import org.springframework.web.server.ResponseStatusException;
 
 import java.net.URI;
 import java.net.URLEncoder;
+import java.net.http.HttpClient;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.List;
@@ -49,9 +50,10 @@ public class QueryServiceClient {
         String url = Objects.requireNonNull(props.queryServiceBaseUrl(),
                 "sso.ai.query-service-base-url es obligatorio");
         this.base = url.endsWith("/") ? url.substring(0, url.length() - 1) : url;
-        // Timeouts explicitos: el default de la fabrica simple es "sin limite".
-        SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
-        factory.setConnectTimeout(Duration.ofSeconds(10));
+        // HttpClient del JDK: la fabrica simple (HttpURLConnection) no admite PATCH, y editar_funcionario lo usa.
+        // Timeouts explicitos: sin ellos la espera no tiene limite.
+        JdkClientHttpRequestFactory factory = new JdkClientHttpRequestFactory(
+                HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build());
         factory.setReadTimeout(props.requestTimeout());
         this.rest = builder
                 .baseUrl(this.base)

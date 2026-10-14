@@ -89,6 +89,15 @@ class QueryServiceClientInvocarTest {
     }
 
     @Test
+    void unPatchLlegaComoPatchConSuCuerpo() {
+        RespuestaQuery r = cliente().invocar(HttpMethod.PATCH, "/establecimientos/funcionarios/7", Map.of(),
+                Map.of("PERSON", Map.of("PHONE", "3109876543")), "tkn");
+
+        assertThat(r).isInstanceOf(RespuestaQuery.Exito.class);
+        assertThat(recibidas.get(0)).startsWith("PATCH /establecimientos/funcionarios/7").contains("3109876543");
+    }
+
+    @Test
     void un4xxSeDevuelveConSuMensajeYUn5xxSinDetalle() {
         status = 403;
         respuesta = "{\"message\":\"Sin permiso para editar\"}";
