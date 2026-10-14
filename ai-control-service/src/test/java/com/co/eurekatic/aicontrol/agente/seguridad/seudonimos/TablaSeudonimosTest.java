@@ -56,6 +56,21 @@ class TablaSeudonimosTest {
     }
 
     @Test
+    void reconoceUnNombreEscritoAMediasSiNoEsAmbiguo() {
+        TablaSeudonimos tabla = TablaSeudonimos.desde(Map.of(
+                "Persona_1", "BRAYAN DE JESUS ALFARO BARRERA",
+                "Persona_2", "LUISA ALFARO GOMEZ",
+                "Persona_3", "ANA MARIA CORTES"));
+
+        assertThat(tabla.equivalencias("Califica a Brayan Alfaro con 85"))
+                .as("dos palabras del nombre").containsEntry("Persona_1", "brayan alfaro")
+                .doesNotContainKey("Persona_2");
+        assertThat(tabla.equivalencias("y a Cortés también")).as("apellido que solo tiene uno")
+                .containsExactly(Map.entry("Persona_3", "cortes"));
+        assertThat(tabla.equivalencias("ponle 70 a Alfaro")).as("apellido compartido: no adivina").isEmpty();
+    }
+
+    @Test
     void revelaLosArgumentosDelModeloTambienAnidados() {
         TablaSeudonimos tabla = TablaSeudonimos.desde(Map.of("Persona_1", "Ana Pérez"));
 

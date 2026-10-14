@@ -1,17 +1,22 @@
 package com.co.eurekatic.aicontrol.agente.seguridad.seudonimos;
 
+import com.co.eurekatic.aicontrol.agente.seguridad.NormalizadorTexto;
 import org.springframework.ai.chat.model.ToolContext;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 
 /**
  * Seudonimos de una conversacion: cada nombre de persona que sale de la base se sustituye por un alias
@@ -117,7 +122,41 @@ public final class TablaSeudonimos {
                 }
             }
         }
+        parciales(texto, fragmentoPorAlias);
         return fragmentoPorAlias;
+    }
+
+    /**
+     * La persona rara vez escribe el nombre completo: "Brayan Alfaro" por "BRAYAN DE JESUS ALFARO BARRERA". Un
+     * nombre compuesto cuenta si el texto trae dos de sus palabras, o una sola (de 4 letras o mas) que ningun
+     * otro nombre compuesto tiene. Si dos nombres encajan, salen los dos y el modelo pregunta.
+     */
+    private void parciales(String texto, Map<String, String> fragmentoPorAlias) {
+        Set<String> palabrasTexto = palabras(texto);
+        // Lo que ya tiene alias exacto ("Objetivo" es Persona_2) no se reparte ademas entre nombres compuestos.
+        fragmentoPorAlias.values().forEach(exacto -> palabrasTexto.removeAll(palabras(exacto)));
+        Map<String, Long> nombresPorPalabra = nombrePorAlias.values().stream()
+                .filter(nombre -> nombre.strip().contains(" "))
+                .flatMap(nombre -> palabras(nombre).stream())
+                .collect(Collectors.groupingBy(p -> p, Collectors.counting()));
+        nombrePorAlias.forEach((alias, nombre) -> {
+            if (fragmentoPorAlias.containsKey(alias) || !nombre.strip().contains(" ")) {
+                return;
+            }
+            List<String> encontradas = palabras(nombre).stream().filter(palabrasTexto::contains).toList();
+            boolean unicaYPropia = encontradas.size() == 1 && encontradas.getFirst().length() >= 4
+                    && nombresPorPalabra.getOrDefault(encontradas.getFirst(), 0L) == 1;
+            if (encontradas.size() >= 2 || unicaYPropia) {
+                fragmentoPorAlias.put(alias, String.join(" ", encontradas));
+            }
+        });
+    }
+
+    /** Palabras de 3 o mas letras, sin tildes ni mayusculas. */
+    private static Set<String> palabras(String texto) {
+        return Arrays.stream(NormalizadorTexto.plegar(texto).split("[^\\p{L}]+"))
+                .filter(p -> p.length() >= LONGITUD_MINIMA)
+                .collect(Collectors.toCollection(LinkedHashSet::new));
     }
 
     private static List<Map.Entry<String, String>> porLongitud(Map<String, String> nombrePorAlias) {
