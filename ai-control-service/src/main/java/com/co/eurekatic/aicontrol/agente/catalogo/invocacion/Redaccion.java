@@ -70,7 +70,7 @@ public final class Redaccion {
      * El nombre del campo para la persona, no la instruccion para el modelo: "Docente responsable; omitelo si
      * es la propia persona..." se lee "Docente responsable".
      */
-    static String etiqueta(ParametroDef parametro) {
+    public static String etiqueta(ParametroDef parametro) {
         String descripcion = parametro.descripcion();
         if (descripcion.isBlank()) {
             return parametro.clave();

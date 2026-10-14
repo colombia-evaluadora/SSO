@@ -83,7 +83,12 @@ public class FabricaToolCallbacks {
         Optional<TablaSeudonimos> seudonimos = TablaSeudonimos.de(contexto);
         Map<String, Object> reales = seudonimos.map(t -> revelar(t, argumentos)).orElse(argumentos);
         ResultadoHerramienta resultado = invocador.invocar(herramienta, reales, ContextoInvocacion.de(contexto));
-        ObservadorResultados.de(contexto).ifPresent(o -> o.alObtener(herramienta, resultado));
+        ObservadorResultados.de(contexto).ifPresent(o -> {
+            if (herramienta.tipo().escribe()) {
+                o.alIntentarEscritura(herramienta, argumentos);
+            }
+            o.alObtener(herramienta, resultado);
+        });
         ResultadoHerramienta paraModelo = seudonimos.map(t -> ocultar(t, resultado)).orElse(resultado);
         String texto = formateador.paraModelo(herramienta, paraModelo);
         return seudonimos.map(t -> texto + equivalencias(t, texto, ContextoInvocacion.de(contexto).textoUsuario()))

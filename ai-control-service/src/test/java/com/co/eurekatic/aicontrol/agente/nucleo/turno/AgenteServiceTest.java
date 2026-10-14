@@ -8,6 +8,7 @@ import com.co.eurekatic.aicontrol.agente.comun.UsuarioAgente;
 import com.co.eurekatic.aicontrol.agente.nucleo.AccionPropuesta;
 import com.co.eurekatic.aicontrol.agente.nucleo.TurnoContexto;
 import com.co.eurekatic.aicontrol.agente.nucleo.acciones.AccionesService;
+import com.co.eurekatic.aicontrol.agente.nucleo.borrador.BorradoresAccion;
 import com.co.eurekatic.aicontrol.agente.nucleo.intencion.Intencion;
 import com.co.eurekatic.aicontrol.agente.nucleo.intencion.TipoIntencion;
 import com.co.eurekatic.aicontrol.agente.nucleo.respuesta.RespuestaAgente;
@@ -77,7 +78,7 @@ class AgenteServiceTest {
                         PropiedadesAgenteFixture.propiedades().limites().textoMaxCaracteres()),
                 bucle, acciones, salida,
                 new PresentadorAnalitica(mock(ConsultaAnaliticaStore.class)), new TurnosEnCurso(), seudonimos,
-                new AtajosTurno(acciones, registroUi));
+                new AtajosTurno(acciones, registroUi), mock(BorradoresAccion.class));
     }
 
     @Test

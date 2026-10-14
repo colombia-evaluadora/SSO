@@ -1,5 +1,6 @@
 package com.co.eurekatic.aicontrol.agente.nucleo;
 
+import com.co.eurekatic.aicontrol.agente.nucleo.borrador.BorradorAccion;
 import com.co.eurekatic.aicontrol.agente.catalogo.dominio.HerramientaDef;
 import com.co.eurekatic.aicontrol.agente.catalogo.dominio.TipoHerramienta;
 import com.co.eurekatic.aicontrol.agente.catalogo.invocacion.ObservadorResultados;
@@ -39,6 +40,7 @@ public final class TurnoContexto implements ObservadorResultados {
     private final AtomicReference<TablaAnalitica> analitica = new AtomicReference<>();
     private final TablaSeudonimos seudonimos;
     private final AtomicInteger lecturas = new AtomicInteger();
+    private final AtomicReference<BorradorAccion> borrador = new AtomicReference<>();
     private final AtomicBoolean preguntaDevuelta = new AtomicBoolean();
 
     public TurnoContexto(List<HerramientaDef> herramientas, ContextoUi contextoUi, Map<String, AccesoMenu> menus,
@@ -78,6 +80,17 @@ public final class TurnoContexto implements ObservadorResultados {
         if (herramienta.tipo() == TipoHerramienta.ANALITICA && resultado instanceof ResultadoHerramienta.Datos datos) {
             analitica.set(new TablaAnalitica(herramienta.codigo(), datos.filas(), datos.truncado()));
         }
+    }
+
+    @Override
+    public void alIntentarEscritura(HerramientaDef herramienta, Map<String, Object> argumentosDelModelo) {
+        borrador.accumulateAndGet(BorradorAccion.de(herramienta, argumentosDelModelo),
+                (anterior, nuevo) -> anterior == null ? nuevo : anterior.seguidoDe(nuevo));
+    }
+
+    /** Lo que el modelo intento escribir en este turno, junto si repitio la misma herramienta. */
+    public Optional<BorradorAccion> borrador() {
+        return Optional.ofNullable(borrador.get());
     }
 
     /** Consultas que devolvieron datos en este turno. */

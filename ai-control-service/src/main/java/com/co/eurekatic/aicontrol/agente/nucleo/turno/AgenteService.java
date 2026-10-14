@@ -5,6 +5,8 @@ import com.co.eurekatic.aicontrol.agente.memoria.NotaDeMemoria;
 import com.co.eurekatic.aicontrol.agente.nucleo.AccionPropuesta;
 import com.co.eurekatic.aicontrol.agente.nucleo.TurnoContexto;
 import com.co.eurekatic.aicontrol.agente.nucleo.acciones.AccionesService;
+import com.co.eurekatic.aicontrol.agente.nucleo.borrador.BorradorAccion;
+import com.co.eurekatic.aicontrol.agente.nucleo.borrador.BorradoresAccion;
 import com.co.eurekatic.aicontrol.agente.nucleo.control.PedirDatosFaltantesHerramienta;
 import com.co.eurekatic.aicontrol.agente.nucleo.intencion.Intencion;
 import com.co.eurekatic.aicontrol.agente.nucleo.intencion.TipoIntencion;
@@ -45,11 +47,12 @@ public class AgenteService {
     private final TurnosEnCurso enCurso;
     private final AlmacenSeudonimos almacenSeudonimos;
     private final AtajosTurno atajos;
+    private final BorradoresAccion borradores;
 
     public AgenteService(ConversacionesService conversaciones, PreparadorTurno preparador, RegistradorTurno registrador,
                          PromptTurno prompts, BucleAgente bucle, AccionesService acciones, SalidaTurno salida,
                          PresentadorAnalitica analitica, TurnosEnCurso enCurso, AlmacenSeudonimos almacenSeudonimos,
-                         AtajosTurno atajos) {
+                         AtajosTurno atajos, BorradoresAccion borradores) {
         this.conversaciones = conversaciones;
         this.preparador = preparador;
         this.registrador = registrador;
@@ -61,6 +64,7 @@ public class AgenteService {
         this.enCurso = enCurso;
         this.almacenSeudonimos = almacenSeudonimos;
         this.atajos = atajos;
+        this.borradores = borradores;
     }
 
     /**
@@ -128,17 +132,20 @@ public class AgenteService {
         }
         TurnoContexto contexto = new TurnoContexto(listo.herramientas(), LectorContextoUi.leer(contextoUiJson),
                 listo.menus(), seudonimos);
+        Optional<BorradorAccion> borrador = borradores.cargar(conversacionId);
         ResultadoBucle resultado = bucle.ejecutar(new BucleAgente.Entrada(
                 usuario,
                 conversacionId,
                 arranque.mensajeId(),
                 listo.textoNormalizado(),
                 prompts.mensajes(arranque.historial(),
-                        conEquivalencias(listo.textoNormalizado(), seudonimos), contextoUiJson),
+                        conEquivalencias(listo.textoNormalizado(), seudonimos) + notaDeBorrador(borrador, listo),
+                        contextoUiJson),
                 listo.callbacks(),
                 contexto,
                 texto -> GuardaDeAfirmaciones.objecion(texto)
                         .or(() -> preguntaSinConsultar(texto, contexto))));
+        contexto.borrador().ifPresent(intento -> borradores.guardar(conversacionId, borrador, intento));
         Consumo consumo = new Consumo(resultado.uso(), resultado.modelo(), milisegundosDesde(inicio));
         RespuestaAgente respuesta = switch (resultado) {
             case ResultadoBucle.Final fin -> analitica.presentar(GuardaDeAfirmaciones.revisar(fin.respuesta()), contexto,
@@ -184,6 +191,15 @@ public class AgenteService {
         return respuesta instanceof RespuestaAgente.Respuesta texto && texto.texto().contains("?")
                 ? PedirDatosFaltantesHerramienta.preguntaSinConsultar(contexto)
                 : Optional.empty();
+    }
+
+    /** El borrador de turnos anteriores, solo si su herramienta se ofrece en este turno. */
+    static String notaDeBorrador(Optional<BorradorAccion> borrador, Preparacion.Listo listo) {
+        return borrador.flatMap(b -> listo.herramientas().stream()
+                        .filter(h -> h.codigo().equals(b.herramienta()))
+                        .findFirst()
+                        .map(b::nota))
+                .orElse("");
     }
 
     /** Accion sin ninguna herramienta de escritura disponible: no hay nada que proponer. */

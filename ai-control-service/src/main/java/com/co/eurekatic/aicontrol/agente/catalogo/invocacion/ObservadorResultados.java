@@ -3,6 +3,7 @@ package com.co.eurekatic.aicontrol.agente.catalogo.invocacion;
 import com.co.eurekatic.aicontrol.agente.catalogo.dominio.HerramientaDef;
 import org.springframework.ai.chat.model.ToolContext;
 
+import java.util.Map;
 import java.util.Optional;
 
 /**
@@ -17,6 +18,10 @@ public interface ObservadorResultados {
     String CLAVE = "observadorResultados";
 
     void alObtener(HerramientaDef herramienta, ResultadoHerramienta resultado);
+
+    /** Cada llamada a una escritura, aceptada o rechazada, con los argumentos tal como los mando el modelo. */
+    default void alIntentarEscritura(HerramientaDef herramienta, Map<String, Object> argumentosDelModelo) {
+    }
 
     static Optional<ObservadorResultados> de(ToolContext contexto) {
         return contexto != null && contexto.getContext().get(CLAVE) instanceof ObservadorResultados observador

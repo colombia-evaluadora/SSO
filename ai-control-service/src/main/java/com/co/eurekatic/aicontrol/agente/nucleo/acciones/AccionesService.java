@@ -13,6 +13,7 @@ import com.co.eurekatic.aicontrol.agente.comun.Huellas;
 import com.co.eurekatic.aicontrol.agente.comun.UsuarioAgente;
 import com.co.eurekatic.aicontrol.agente.memoria.NotaDeMemoria;
 import com.co.eurekatic.aicontrol.agente.nucleo.AccionPropuesta;
+import com.co.eurekatic.aicontrol.agente.nucleo.borrador.BorradoresAccion;
 import com.co.eurekatic.aicontrol.agente.nucleo.respuesta.RespuestaAgente;
 import com.co.eurekatic.aicontrol.agente.nucleo.turno.Consumo;
 import com.co.eurekatic.aicontrol.agente.nucleo.turno.EstadoTurno;
@@ -62,6 +63,7 @@ public class AccionesService {
     private final QueryServiceClient queryService;
     private final RegistradorTurno registrador;
     private final RegistroIds registroIds;
+    private final BorradoresAccion borradores;
     private final Duration expira;
     private final Clock reloj;
     private final JsonMapper json = JsonMapper.builder().build();
@@ -69,18 +71,20 @@ public class AccionesService {
     @Autowired
     public AccionesService(AccionPendienteStore acciones, CatalogoHerramientasLoader catalogo,
                            QueryServiceClient queryService, RegistradorTurno registrador, RegistroIds registroIds,
-                           AgenteProperties props) {
-        this(acciones, catalogo, queryService, registrador, registroIds, props.acciones().expira(),
+                           BorradoresAccion borradores, AgenteProperties props) {
+        this(acciones, catalogo, queryService, registrador, registroIds, borradores, props.acciones().expira(),
                 Clock.systemDefaultZone());
     }
 
     AccionesService(AccionPendienteStore acciones, CatalogoHerramientasLoader catalogo, QueryServiceClient queryService,
-                    RegistradorTurno registrador, RegistroIds registroIds, Duration expira, Clock reloj) {
+                    RegistradorTurno registrador, RegistroIds registroIds, BorradoresAccion borradores, Duration expira,
+                    Clock reloj) {
         this.acciones = acciones;
         this.catalogo = catalogo;
         this.queryService = queryService;
         this.registrador = registrador;
         this.registroIds = registroIds;
+        this.borradores = borradores;
         this.expira = expira;
         this.reloj = reloj;
     }
@@ -131,6 +135,7 @@ public class AccionesService {
         if (!acciones.transicionar(id, usuario.userId(), EstadoAccion.DESCARTADA, null)) {
             throw new ErrorAgente.AccionNoPendiente();
         }
+        borradores.borrar(accion.conversacionId());
         RespuestaAgente respuesta = new RespuestaAgente.Respuesta(MENSAJE_CANCELADA);
         registrador.registrar(accion.conversacionId(), respuesta, Consumo.NINGUNO);
         return respuesta;
@@ -165,6 +170,8 @@ public class AccionesService {
             case RespuestaQuery.Exito exito -> {
                 // Lo que la escritura crea (el pk de la unidad nueva) es un id que la conversacion ya conoce.
                 registroIds.registrar(accion.conversacionId().toString(), exito.filas());
+                // Hecha la accion, lo que se estaba armando ya no esta en curso. Si el servicio la rechaza, sigue.
+                borradores.borrar(accion.conversacionId());
                 yield cerrar(accion, EstadoAccion.EJECUTADA, mensajeHecho(accion.resumen()));
             }
             case RespuestaQuery.ErrorCliente error -> cerrar(accion, EstadoAccion.FALLIDA, InvocadorHerramientas.traducir(error));

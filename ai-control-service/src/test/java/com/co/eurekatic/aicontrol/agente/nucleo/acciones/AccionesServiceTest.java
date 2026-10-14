@@ -11,6 +11,7 @@ import com.co.eurekatic.aicontrol.agente.comun.ErrorAgente;
 import com.co.eurekatic.aicontrol.agente.comun.Huellas;
 import com.co.eurekatic.aicontrol.agente.comun.UsuarioAgente;
 import com.co.eurekatic.aicontrol.agente.nucleo.AccionPropuesta;
+import com.co.eurekatic.aicontrol.agente.nucleo.borrador.BorradoresAccion;
 import com.co.eurekatic.aicontrol.agente.nucleo.respuesta.RespuestaAgente;
 import com.co.eurekatic.aicontrol.agente.nucleo.turno.RegistradorTurno;
 import com.co.eurekatic.aicontrol.agente.persistencia.accion.AccionPendienteStore;
@@ -65,6 +66,7 @@ class AccionesServiceTest {
     private QueryServiceClient queryService;
     private RegistradorTurno registrador;
     private RegistroIds registroIds;
+    private BorradoresAccion borradores;
     private AccionesService servicio;
     private HerramientaDef escritura;
 
@@ -76,7 +78,9 @@ class AccionesServiceTest {
         registrador = mock(RegistradorTurno.class);
         Clock reloj = Clock.fixed(AHORA, ZoneOffset.UTC);
         registroIds = mock(RegistroIds.class);
-        servicio = new AccionesService(store, catalogo, queryService, registrador, registroIds, Duration.ofMinutes(10), reloj);
+        borradores = mock(BorradoresAccion.class);
+        servicio = new AccionesService(store, catalogo, queryService, registrador, registroIds, borradores,
+                Duration.ofMinutes(10), reloj);
         escritura = new HerramientaDef(HERRAMIENTA, "crear_funcionario", TipoHerramienta.ESCRITURA, "Crear funcionario",
                 List.of(), true, List.of(), 1, Optional.of("FUNCIONARIOS"),
                 Optional.of(new RutaQuery(HttpMethod.POST, "/funcionarios", Map.of(), Map.of())), Set.of());
@@ -128,6 +132,7 @@ class AccionesServiceTest {
         verify(registrador).registrar(eq(conversacionId), any(), any());
         // El pk creado queda como id conocido de la conversacion: el siguiente turno lo puede usar como fk.
         verify(registroIds).registrar(conversacionId.toString(), List.of(Map.of("fn_unidad_crear", 151)));
+        verify(borradores).borrar(conversacionId);
     }
 
     @Test
@@ -185,6 +190,7 @@ class AccionesServiceTest {
 
         assertThat(respuesta.texto()).startsWith("No tienes permiso");
         verify(store).completar(eq(accionId), eq(USUARIO), eq(EstadoAccion.FALLIDA), anyString());
+        verify(borradores, never()).borrar(any());
     }
 
     @Test
@@ -196,6 +202,7 @@ class AccionesServiceTest {
 
         assertThat(respuesta.texto()).startsWith("Acción cancelada");
         verify(queryService, never()).invocar(any(), any(), any(), any(), anyString());
+        verify(borradores).borrar(conversacionId);
     }
 
     @Test
