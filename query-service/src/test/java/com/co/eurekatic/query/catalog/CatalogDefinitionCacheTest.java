@@ -14,6 +14,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -82,8 +83,19 @@ class CatalogDefinitionCacheTest {
         CatalogClient client = mock(CatalogClient.class);
         when(client.fetchQuery(any(), any())).thenReturn(def("u1"));
         CatalogDefinitionCache c = cache(client, false);
-        c.query(null, "", "u1");
-        c.query(null, "", "u1");
+        c.query(user("a@x.co"), "", "u1");
+        c.query(user("a@x.co"), "", "u1");
         verify(client, times(2)).fetchQuery("", "u1");
+    }
+
+    @Test
+    void anonymousGoesThroughPublicEndpointNotGetQuery() {
+        CatalogClient client = mock(CatalogClient.class);
+        when(client.fetchPublicQuery(any())).thenReturn(def("u1"));
+        CatalogDefinitionCache c = cache(client, true);
+        c.query(null, "", "u1");
+        c.query(null, "", "u1");
+        verify(client, times(1)).fetchPublicQuery("u1");
+        verify(client, never()).fetchQuery(any(), any());
     }
 }
