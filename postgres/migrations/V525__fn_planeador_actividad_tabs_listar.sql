@@ -157,6 +157,16 @@ BEGIN
                                   WHERE rc3.PK_REFERENTE_CURRICULAR = cr.pk_referente), 'Actividad'))
                )::VARCHAR AS rotulo_plural
           FROM con_rotulo cr
+         -- Sin referente activo (los del nivel estan inactivos/borrados): no
+         -- abre pestana salvo que ya haya unidades/actividades de ese grado.
+         WHERE cr.pk_referente IS NOT NULL
+            OR EXISTS (SELECT 1 FROM academico_test.TUNIDAD u
+                        WHERE u.FK_TGRADO = cr.pk_tgrado AND u.ACTIVE = TRUE
+                          AND (cr.pk_tasignatura IS NULL OR u.FK_TASIGNATURA = cr.pk_tasignatura))
+            OR EXISTS (SELECT 1 FROM academico_test.TACTIVIDAD act
+                         JOIN academico_test.TGRUPO ga ON ga.PK_TGRUPO = act.FK_TGRUPO
+                        WHERE ga.FK_TGRADO = cr.pk_tgrado AND act.ACTIVE = TRUE
+                          AND (cr.pk_tasignatura IS NULL OR act.FK_TASIGNATURA = cr.pk_tasignatura))
     ), agrupado AS (
         SELECT cl.rotulo,
                MIN(cl.rotulo_plural)                                         AS rotulo_plural,
