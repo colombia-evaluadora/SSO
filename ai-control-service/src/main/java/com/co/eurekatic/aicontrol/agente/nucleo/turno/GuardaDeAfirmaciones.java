@@ -20,7 +20,8 @@ final class GuardaDeAfirmaciones {
     static final String SIN_PANTALLA = "No llegué a aplicar ese cambio en tu pantalla. Pídemelo de nuevo.";
 
     private static final Pattern CONFIRMACION = Pattern.compile(
-            "necesito tu confirmacion|pulsa confirmar|boton confirmar|prepare con la herramienta");
+            "necesito tu confirmacion|(espera|pendiente de|requiere) (de )?tu confirmacion|pulsa confirmar|boton confirmar"
+                    + "|prepare con la herramienta");
     private static final Pattern CAMBIO_HECHO = Pattern.compile(
             "^\\W*(listo|hecho|ya)\\b.{0,80}?\\b(rellene|resalte|llene|actualice|marque|escribi|cambie|te lleve|edite)\\b"
                     + "|\\bhice (fue )?(rellenar|resaltar|llenar|actualizar|marcar|escribir|cambiar|poner)\\b"

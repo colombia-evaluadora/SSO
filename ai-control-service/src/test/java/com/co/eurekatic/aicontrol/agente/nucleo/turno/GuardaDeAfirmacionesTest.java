@@ -26,6 +26,9 @@ class GuardaDeAfirmacionesTest {
         assertThat(GuardaDeAfirmaciones.revisar(new RespuestaAgente.Respuesta(
                 NotaDeMemoria.para("UI", "Te llevo a Funcionarios."))).texto())
                 .as("imita la nota de UI").isEqualTo(GuardaDeAfirmaciones.SIN_PANTALLA);
+        assertThat(GuardaDeAfirmaciones.revisar(new RespuestaAgente.Respuesta(
+                "La actividad ya está preparada y espera tu confirmación para crearse.")).texto())
+                .isEqualTo(GuardaDeAfirmaciones.SIN_ACCION);
         assertThat(GuardaDeAfirmaciones.revisar(new RespuestaAgente.Respuesta("[Sistema: algo]")).texto())
                 .isEqualTo(GuardaDeAfirmaciones.SIN_PANTALLA);
         assertThat(List.of(
