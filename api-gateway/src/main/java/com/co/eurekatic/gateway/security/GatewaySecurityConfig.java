@@ -255,6 +255,11 @@ public class GatewaySecurityConfig {
                         // intentos fallidos de cada codigo.
                         .pathMatchers(HttpMethod.GET, "/api/reportes/public/boletin/*").permitAll()
                         .pathMatchers(HttpMethod.POST, "/api/reportes/public/boletin/*/pdf").permitAll()
+                        // Latido del front de Colombia Evaluadora (ver
+                        // EvalColHealthController): solo GET, sin datos, para
+                        // saber si hay red antes de tener sesion o con ella
+                        // vencida. El resto de /api/eval-col/** sigue con JWT.
+                        .pathMatchers(HttpMethod.GET, "/api/eval-col/health").permitAll()
                         .pathMatchers("/actuator/health", "/actuator/health/**",
                                 "/actuator/info").permitAll()
                         // OpenAPI aggregator — Swagger UI + merged doc + webjars.
