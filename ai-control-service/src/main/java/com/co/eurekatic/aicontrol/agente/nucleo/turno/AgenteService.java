@@ -25,6 +25,8 @@ import java.util.UUID;
 public class AgenteService {
 
     static final String MENSAJE_SIN_PERMISO = "No tienes permiso para hacer esa acción desde el asistente.";
+    static final String MENSAJE_DATOS_CONCRETOS = "Para preparar esa acción dime los datos concretos que quieres usar "
+            + "(por ejemplo el valor del campo que falta) y la preparo.";
     static final String TEXTO_CONFIRMACION = NotaDeMemoria.PREFIJO_CONFIRMACION + "%s";
     static final String TEXTO_USA_BOTON = "Para hacerlo, pulsa Confirmar en la acción pendiente: %s. "
             + "Escribirlo en el chat no la ejecuta.";
@@ -110,8 +112,11 @@ public class AgenteService {
         traza.anotar(listo.intencion());
         RegistradorTurno.Inicio arranque = registrador.iniciar(conversacionId, listo.textoNormalizado());
         if (sinHerramientaDeEscritura(listo.intencion(), listo)) {
-            return cerrar(conversacionId, usuario, new RespuestaAgente.SinPermiso(MENSAJE_SIN_PERMISO),
-                    Consumo.NINGUNO, seudonimos, traza);
+            // Si lo que apaga las escrituras es el riesgo del mensaje, no es falta de permiso: decirlo asi confunde.
+            RespuestaAgente sinEscrituras = listo.intencion().riesgo().permiteEscritura()
+                    ? new RespuestaAgente.SinPermiso(MENSAJE_SIN_PERMISO)
+                    : new RespuestaAgente.Respuesta(MENSAJE_DATOS_CONCRETOS);
+            return cerrar(conversacionId, usuario, sinEscrituras, Consumo.NINGUNO, seudonimos, traza);
         }
         traza.pasar(EstadoTurno.PERMISO_OK);
         traza.pasar(EstadoTurno.RECOLECTANDO);
