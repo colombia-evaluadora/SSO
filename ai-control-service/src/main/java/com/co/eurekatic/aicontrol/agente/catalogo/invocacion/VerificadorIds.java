@@ -37,7 +37,9 @@ public class VerificadorIds {
             if (valor == null || !parametro.esIdentificador()) {
                 continue;
             }
-            Optional<String> entidad = ExtractorIds.entidadDeParametro(parametro.clave());
+            // Los catalogos (lista_valor) llegan en columnas de muchas formas: para ellos basta la presencia.
+            Optional<String> entidad = ExtractorIds.entidadDeParametro(parametro.clave())
+                    .filter(e -> !e.equals("lista_valor"));
             boolean justificado = elementos(valor).stream().allMatch(elemento -> {
                 String id = ExtractorIds.textoDe(elemento);
                 return id != null && (estaEnTexto(texto, id) || admite(entidad

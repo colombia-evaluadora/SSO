@@ -6,6 +6,7 @@ import com.co.eurekatic.aicontrol.agente.catalogo.dominio.HerramientaDef;
 import com.co.eurekatic.aicontrol.agente.catalogo.dominio.RutaQuery;
 import com.co.eurekatic.aicontrol.agente.catalogo.dominio.TipoHerramienta;
 import com.co.eurekatic.aicontrol.agente.catalogo.invocacion.ArgumentosCanonicos;
+import com.co.eurekatic.aicontrol.agente.catalogo.invocacion.RegistroIds;
 import com.co.eurekatic.aicontrol.agente.comun.ErrorAgente;
 import com.co.eurekatic.aicontrol.agente.comun.Huellas;
 import com.co.eurekatic.aicontrol.agente.comun.UsuarioAgente;
@@ -63,6 +64,7 @@ class AccionesServiceTest {
     private CatalogoHerramientasLoader catalogo;
     private QueryServiceClient queryService;
     private RegistradorTurno registrador;
+    private RegistroIds registroIds;
     private AccionesService servicio;
     private HerramientaDef escritura;
 
@@ -73,7 +75,8 @@ class AccionesServiceTest {
         queryService = mock(QueryServiceClient.class);
         registrador = mock(RegistradorTurno.class);
         Clock reloj = Clock.fixed(AHORA, ZoneOffset.UTC);
-        servicio = new AccionesService(store, catalogo, queryService, registrador, Duration.ofMinutes(10), reloj);
+        registroIds = mock(RegistroIds.class);
+        servicio = new AccionesService(store, catalogo, queryService, registrador, registroIds, Duration.ofMinutes(10), reloj);
         escritura = new HerramientaDef(HERRAMIENTA, "crear_funcionario", TipoHerramienta.ESCRITURA, "Crear funcionario",
                 List.of(), true, List.of(), 1, Optional.of("FUNCIONARIOS"),
                 Optional.of(new RutaQuery(HttpMethod.POST, "/funcionarios", Map.of(), Map.of())), Set.of());
@@ -115,7 +118,7 @@ class AccionesServiceTest {
         when(store.transicionar(accionId, USUARIO, EstadoAccion.EJECUTADA, AccionPendienteStore.MARCA_EN_CURSO)).thenReturn(true);
         when(store.completar(eq(accionId), eq(USUARIO), eq(EstadoAccion.EJECUTADA), anyString())).thenReturn(true);
         when(queryService.invocar(eq(HttpMethod.POST), eq("/funcionarios"), any(), any(), eq("token-usuario")))
-                .thenReturn(new RespuestaQuery.Exito(List.of()));
+                .thenReturn(new RespuestaQuery.Exito(List.of(Map.of("fn_unidad_crear", 151))));
 
         RespuestaAgente respuesta = servicio.confirmar(accionId, usuario);
 
@@ -123,6 +126,8 @@ class AccionesServiceTest {
                 r -> assertThat(r.texto()).startsWith("Hecho:"));
         verify(queryService, times(1)).invocar(any(), any(), any(), any(), anyString());
         verify(registrador).registrar(eq(conversacionId), any(), any());
+        // El pk creado queda como id conocido de la conversacion: el siguiente turno lo puede usar como fk.
+        verify(registroIds).registrar(conversacionId.toString(), List.of(Map.of("fn_unidad_crear", 151)));
     }
 
     @Test

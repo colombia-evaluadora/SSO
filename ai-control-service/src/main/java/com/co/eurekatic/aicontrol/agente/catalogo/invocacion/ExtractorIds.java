@@ -7,6 +7,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
@@ -16,7 +17,13 @@ import java.util.regex.Pattern;
 public final class ExtractorIds {
 
     /** Columnas que parecen ids: {@code id}, {@code pk_*}, {@code fk_*}, {@code *_id}, {@code idParent}. */
-    private static final Pattern COLUMNA_ID = Pattern.compile("(?i)(id|idparent|pk_.+|fk_.+|.+_id)");
+    private static final Pattern COLUMNA_ID = Pattern.compile("(?i)(id|idparent|pk_.+|fk_.+|.+_id|fn_.+_(?:crear|agregar)(?:_interno)?)");
+
+    /**
+     * Una escritura que crea devuelve su pk en una columna con el nombre de la funcion:
+     * {@code SELECT * FROM fn_unidad_crear(...)} trae {@code fn_unidad_crear = 151}.
+     */
+    private static final Pattern COLUMNA_DE_CREACION = Pattern.compile("fn_([a-z_]+?)_(?:crear|agregar)(?:_interno)?");
 
     /** Tope de ids que se guardan por resultado: un listado enorme no debe inflar Redis. */
     static final int MAX_POR_RESULTADO = 500;
@@ -93,6 +100,10 @@ public final class ExtractorIds {
         String entidad;
         if (c.startsWith("fk_tlv_") || c.equals("pk_lista_valor")) {
             return Optional.of("lista_valor");
+        }
+        Matcher creada = COLUMNA_DE_CREACION.matcher(c);
+        if (creada.matches()) {
+            return normalizar(creada.group(1));
         }
         if (c.startsWith("pk_t") || c.startsWith("fk_t")) {
             entidad = c.substring(4);

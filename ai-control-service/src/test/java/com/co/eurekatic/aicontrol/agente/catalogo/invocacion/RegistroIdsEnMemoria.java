@@ -19,6 +19,7 @@ final class RegistroIdsEnMemoria implements RegistroIds {
             int igual = tipado.indexOf('=');
             miembros.add(RegistroIdsRedis.tipado(tipado.substring(0, igual), tipado.substring(igual + 1)));
             miembros.add(RegistroIdsRedis.marca(tipado.substring(0, igual)));
+            miembros.add(RegistroIdsRedis.conEntidad(tipado.substring(igual + 1)));
         });
     }
 
@@ -30,8 +31,8 @@ final class RegistroIdsEnMemoria implements RegistroIds {
     @Override
     public Presencia consultarDe(String conversationId, String entidad, String id) {
         Set<String> miembros = miembros(conversationId);
-        String buscado = miembros.contains(RegistroIdsRedis.marca(entidad)) ? RegistroIdsRedis.tipado(entidad, id) : id;
-        return miembros.contains(buscado) ? Presencia.VISTO : Presencia.NO_VISTO;
+        return RegistroIdsRedis.decidir(miembros.contains(id), miembros.contains(RegistroIdsRedis.tipado(entidad, id)),
+                miembros.contains(RegistroIdsRedis.marca(entidad)), miembros.contains(RegistroIdsRedis.conEntidad(id)));
     }
 
     boolean contiene(String conversationId, String id) {

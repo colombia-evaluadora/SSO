@@ -39,6 +39,21 @@ class VerificadorIdsTipadoTest {
     }
 
     @Test
+    void unIdQueNoSalioComoOtraEntidadValeAunqueYaSeVieranGrupos() {
+        // El grupo nuevo llega en una columna que no dice su entidad (p. ej. el resultado de una escritura).
+        registro.registrar(CONV, List.of(Map.of("grupo_id", 990201), Map.of("id", 990333)));
+
+        assertThat(verificar(990333)).isEmpty();
+    }
+
+    @Test
+    void elPkDeUnaUnidadRecienCreadaQuedaComoIdDeUnidad() {
+        registro.registrar(CONV, List.of(Map.of("fn_unidad_crear", 151)));
+
+        assertThat(registro.consultarDe(CONV, "unidad", "151")).isEqualTo(RegistroIds.Presencia.VISTO);
+    }
+
+    @Test
     void sinNingunGrupoVistoValeLaPresenciaSinTipo() {
         registro.registrar(CONV, List.of(Map.of("id", 990201)));
 
