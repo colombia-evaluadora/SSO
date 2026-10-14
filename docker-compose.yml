@@ -1889,6 +1889,14 @@ services:
       # imagenes, sin error visible. Vacio = no se bajan imagenes.
       REPORTING_FILE_INTERNAL_TOKEN: "${REPORTING_FILE_INTERNAL_TOKEN:-${FILES_INTERNAL_TOKEN:-}}"
       REPORTING_MAX_IMAGE_BYTES: "${REPORTING_MAX_IMAGE_BYTES:-4194304}"
+      # QR de verificacion del boletin: pagina publica del front por entorno
+      # (vacia = sin QR). Las lecturas publicas van al query-service eval-col
+      # (REPORTING_QUERY_SERVICE_URL) por /public/service, sin token.
+      BOLETIN_VERIFICACION_BASE_URL: "${BOLETIN_VERIFICACION_BASE_URL:-}"
+      BOLETIN_VERIFICACION_PDF_CACHE_TTL: "${BOLETIN_VERIFICACION_PDF_CACHE_TTL:-10m}"
+      BOLETIN_VERIFICACION_LIMITE_IP_MINUTO: "${BOLETIN_VERIFICACION_LIMITE_IP_MINUTO:-30}"
+      BOLETIN_VERIFICACION_INTENTOS_MAX: "${BOLETIN_VERIFICACION_INTENTOS_MAX:-5}"
+      BOLETIN_VERIFICACION_VENTANA_INTENTOS: "${BOLETIN_VERIFICACION_VENTANA_INTENTOS:-15m}"
       # Clave PUBLICA del par RS256: verifica firmas, no acuña tokens,
       # asi que no recibe (ni debe recibir) la privada.
       JWT_PUBLIC_KEY: ${JWT_PUBLIC_KEY}

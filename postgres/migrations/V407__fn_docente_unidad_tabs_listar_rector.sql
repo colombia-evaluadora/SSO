@@ -171,6 +171,19 @@ BEGIN
                academico_test.fn_unidad_referente_aplicable(
                    a.pk_tgrado, a.pk_tasignatura) AS pk_referente
           FROM asignaciones a
+    ), con_referente_filtrado AS (
+        SELECT cr0.*
+          FROM con_referente cr0
+         -- Sin referente activo (los del nivel estan inactivos/borrados): no
+         -- abre pestana salvo que ya haya unidades/actividades de ese grado.
+         WHERE cr0.pk_referente IS NOT NULL
+            OR EXISTS (SELECT 1 FROM academico_test.TUNIDAD u
+                        WHERE u.FK_TGRADO = cr0.pk_tgrado AND u.ACTIVE = TRUE
+                          AND (cr0.pk_tasignatura IS NULL OR u.FK_TASIGNATURA = cr0.pk_tasignatura))
+            OR EXISTS (SELECT 1 FROM academico_test.TACTIVIDAD act
+                         JOIN academico_test.TGRUPO ga ON ga.PK_TGRUPO = act.FK_TGRUPO
+                        WHERE ga.FK_TGRADO = cr0.pk_tgrado AND act.ACTIVE = TRUE
+                          AND (cr0.pk_tasignatura IS NULL OR act.FK_TASIGNATURA = cr0.pk_tasignatura))
     ), agrupado AS (
         SELECT COALESCE('R' || cr.pk_referente::TEXT, 'N' || cr.pk_nivel::TEXT) AS clave,
                MIN(cr.pk_referente)                                            AS pk_referente,
@@ -181,7 +194,7 @@ BEGIN
                jsonb_agg(DISTINCT jsonb_build_object(
                    'pk', cr.pk_nivel, 'nombre', ne.NOMBRE))                    AS niveles,
                COUNT(DISTINCT cr.pk_tgrado)::BIGINT                            AS total_grados
-          FROM con_referente cr
+          FROM con_referente_filtrado cr
           LEFT JOIN academico_test.TNIVEL_ENSENANZA ne
                  ON ne.PK_NIVEL_ENSENANZA = cr.pk_nivel
          GROUP BY COALESCE('R' || cr.pk_referente::TEXT, 'N' || cr.pk_nivel::TEXT)

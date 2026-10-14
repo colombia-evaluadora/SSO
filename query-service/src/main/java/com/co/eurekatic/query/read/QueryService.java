@@ -888,7 +888,7 @@ public class QueryService {
           + "         set_config('app.request_body', :CONTEXT.REQUEST_BODY, true) AS _body,\n"
           + "         set_config('app.user_id', COALESCE(academico_test.fn_resolver_actor((SELECT pk_tusuario FROM _actor)), (SELECT pk_tusuario FROM _actor)::text), true) AS _uid,\n"
           + "         set_config('app.user_pk', (SELECT pk_tusuario FROM _actor)::text, true) AS _upk,\n"
-          + "         set_config('app.contexto', (COALESCE(NULLIF(current_setting('app.contexto', true), '')::jsonb, '{}'::jsonb) || jsonb_build_object('path', :CONTEXT.PATH, 'sesion_id', :CONTEXT.SESION_ID, 'familia', :CONTEXT.FAMILIA))::text, true) AS _c\n"
+          + "         set_config('app.contexto', (COALESCE(NULLIF(current_setting('app.contexto', true), '')::jsonb, '{}'::jsonb) || jsonb_build_object('path', CAST(:CONTEXT.PATH AS TEXT), 'sesion_id', CAST(:CONTEXT.SESION_ID AS TEXT), 'familia', CAST(:CONTEXT.FAMILIA AS TEXT)))::text, true) AS _c\n"
           + ")\n"
           + "SELECT _orig.* FROM _ctx, (";
 

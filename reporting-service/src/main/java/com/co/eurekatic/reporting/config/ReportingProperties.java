@@ -76,6 +76,57 @@ public class ReportingProperties {
     /** clave del reporte -> definicion. */
     private Map<String, Report> reports = new LinkedHashMap<>();
 
+    /** Verificacion publica del boletin por QR. */
+    private Verificacion verificacion = new Verificacion();
+
+    public Verificacion getVerificacion() { return verificacion; }
+    public void setVerificacion(Verificacion v) { this.verificacion = v; }
+
+    /**
+     * QR de verificacion del boletin. {@code baseUrl} vacio = el boletin sale
+     * sin QR y sin registrar emisiones (los entornos que no la configuran).
+     */
+    public static class Verificacion {
+        /** Pagina publica del front; el QR apunta a {@code baseUrl + "/" + codigo}. */
+        private String baseUrl;
+        /** Clave del reporte que agrupa las variantes del boletin. */
+        private String reporte = "boletin";
+        private String registrarPath = "/informes/boletin-emisiones/registrar";
+        private String revocarPath = "/informes/boletin-emisiones/revocar";
+        private String consultarUuid = "eval-col-boletin-verificacion-consultar-001";
+        private String datosUuid = "eval-col-boletin-verificacion-datos-001";
+        /** Cuanto vive en cache el PDF de verificacion de un codigo. */
+        private java.time.Duration pdfCacheTtl = java.time.Duration.ofMinutes(10);
+        /** Peticiones publicas por IP y minuto. */
+        private int limitePorIpMinuto = 30;
+        /** Intentos fallidos del segundo factor por codigo antes de bloquearlo. */
+        private int intentosFallidosMax = 5;
+        private java.time.Duration ventanaIntentos = java.time.Duration.ofMinutes(15);
+
+        public boolean habilitada() { return baseUrl != null && !baseUrl.isBlank(); }
+
+        public String getBaseUrl() { return baseUrl; }
+        public void setBaseUrl(String v) { this.baseUrl = v; }
+        public String getReporte() { return reporte; }
+        public void setReporte(String v) { this.reporte = v; }
+        public String getRegistrarPath() { return registrarPath; }
+        public void setRegistrarPath(String v) { this.registrarPath = v; }
+        public String getRevocarPath() { return revocarPath; }
+        public void setRevocarPath(String v) { this.revocarPath = v; }
+        public String getConsultarUuid() { return consultarUuid; }
+        public void setConsultarUuid(String v) { this.consultarUuid = v; }
+        public String getDatosUuid() { return datosUuid; }
+        public void setDatosUuid(String v) { this.datosUuid = v; }
+        public java.time.Duration getPdfCacheTtl() { return pdfCacheTtl; }
+        public void setPdfCacheTtl(java.time.Duration v) { this.pdfCacheTtl = v; }
+        public int getLimitePorIpMinuto() { return limitePorIpMinuto; }
+        public void setLimitePorIpMinuto(int v) { this.limitePorIpMinuto = v; }
+        public int getIntentosFallidosMax() { return intentosFallidosMax; }
+        public void setIntentosFallidosMax(int v) { this.intentosFallidosMax = v; }
+        public java.time.Duration getVentanaIntentos() { return ventanaIntentos; }
+        public void setVentanaIntentos(java.time.Duration v) { this.ventanaIntentos = v; }
+    }
+
     public String getQueryServiceBaseUrl() { return queryServiceBaseUrl; }
     public void setQueryServiceBaseUrl(String v) { this.queryServiceBaseUrl = v; }
 

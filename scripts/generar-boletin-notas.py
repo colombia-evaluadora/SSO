@@ -312,6 +312,7 @@ campos = ['ee_nombre', 'ee_dane', 'ee_nit', 'ciudad', 'sede_nombre', 'nivel_ense
           'inasistencias_justificadas', 'docentes', 'texto', 'comportamiento_fecha',
           'comportamiento_tipo', 'comportamiento_funcionario', 'orden', 'periodo_orden',
           'periodo_abreviacion']
+campos += CAMPOS_VERIFICACION
 
 decl = ''.join('\t<field name="%s" class="java.lang.String"/>\n' % c for c in campos)
 decl += ''.join('\t<field name="%s" class="java.io.InputStream"/>\n' % c
@@ -369,7 +370,7 @@ cabecera = """<?xml version="1.0" encoding="UTF-8"?>
 \t<parameter name="TOTAL" class="java.lang.Integer"/>
 \t<parameter name="USUARIO" class="java.lang.String"/>
 \t<parameter name="FILTROS" class="java.lang.String"/>
-
+""" + PARAMETRO_MARCA + """
 """
 
 detalle = (fila_detalle('AREA') + fila_detalle('ASIGNATURA') + DOCENTES + LOGRO

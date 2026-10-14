@@ -170,6 +170,91 @@ public class QueryServiceClient {
     }
 
     /**
+     * POST de un cuerpo arbitrario a una ruta del catalogo, con el token del
+     * usuario. Para los endpoints que no son un listado de reporte (registrar
+     * o revocar una emision de boletin), cuyos binds no van bajo FILTERS.
+     */
+    public List<Map<String, Object>> postRows(String baseUrl, String path, String bearer,
+                                              Map<String, Object> body, int maxRows) {
+        try {
+            return clientePara(baseUrl).post()
+                    .uri(path)
+                    .header(HttpHeaders.AUTHORIZATION, "Bearer " + bearer)
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(body == null ? Map.of() : body)
+                    .exchange((req, res) -> {
+                        if (res.getStatusCode().isError()) {
+                            throw errorHttp(res.getStatusCode(), path,
+                                    new String(res.getBody().readAllBytes(), StandardCharsets.UTF_8));
+                        }
+                        try (InputStream in = res.getBody()) {
+                            return leerFilas(in, path, maxRows);
+                        }
+                    });
+        } catch (RestClientException e) {
+            log.error("Fallo la llamada al query-service para {}", path, e);
+            throw new ResponseStatusException(HttpStatus.BAD_GATEWAY,
+                    "El servicio de datos no respondio.");
+        }
+    }
+
+    /**
+     * Ejecuta una consulta PUBLICA ({@code public_end}) por uuid, SIN token:
+     * {@code POST /public/service}. Solo la usa la verificacion del boletin,
+     * cuyas funciones toman unicamente el codigo del QR (y los 4 digitos), asi
+     * que no hay identidad de usuario que reenviar. La respuesta es la lista
+     * de filas sin sobre.
+     */
+    public List<Map<String, Object>> publicRows(String baseUrl, String uuid,
+                                                Map<String, Object> params, int maxRows) {
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("uuid", uuid);
+        body.put("params", params == null ? Map.of() : params);
+        try {
+            return clientePara(baseUrl).post()
+                    .uri("/public/service")
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(body)
+                    .exchange((req, res) -> {
+                        if (res.getStatusCode().isError()) {
+                            throw errorHttp(res.getStatusCode(), uuid,
+                                    new String(res.getBody().readAllBytes(), StandardCharsets.UTF_8));
+                        }
+                        try (InputStream in = res.getBody()) {
+                            return leerLista(in, uuid, maxRows);
+                        }
+                    });
+        } catch (RestClientException e) {
+            log.error("Fallo la consulta publica {} al query-service", uuid, e);
+            throw new ResponseStatusException(HttpStatus.BAD_GATEWAY,
+                    "El servicio de datos no respondio.");
+        }
+    }
+
+    /** Lee una lista JSON de filas (la forma de /public/service). */
+    List<Map<String, Object>> leerLista(InputStream in, String origen, int maxRows) {
+        List<Map<String, Object>> filas = new ArrayList<>();
+        try (JsonParser p = MAPPER.createParser(in)) {
+            if (p.nextToken() != JsonToken.START_ARRAY) {
+                log.warn("Respuesta inesperada (no es una lista) desde {}", origen);
+                return List.of();
+            }
+            while (p.nextToken() != JsonToken.END_ARRAY) {
+                if (filas.size() >= maxRows) {
+                    throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY,
+                            "La consulta devolvio mas de " + maxRows + " registros.");
+                }
+                filas.add(p.readValueAs(FILA));
+            }
+            return filas;
+        } catch (JacksonException e) {
+            log.error("Respuesta ilegible del query-service para {}", origen, e);
+            throw new ResponseStatusException(HttpStatus.BAD_GATEWAY,
+                    "El servicio de datos respondio algo ilegible.");
+        }
+    }
+
+    /**
      * Se propaga el codigo del query-service en vez de traducir todo a 500:
      * un 403 por rol o un 400 por un filtro invalido son respuestas del
      * usuario, no fallas del reporte. En un 4xx el mensaje del query-service
