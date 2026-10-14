@@ -83,18 +83,55 @@ public final class TablaSeudonimos {
      */
     public String ocultar(String texto) {
         String resultado = texto;
-        List<Map.Entry<String, String>> porLongitud = new ArrayList<>(nombrePorAlias.entrySet());
-        porLongitud.sort(Comparator.comparingInt((Map.Entry<String, String> e) -> e.getValue().length()).reversed());
-        for (Map.Entry<String, String> entrada : porLongitud) {
+        for (Map.Entry<String, String> entrada : porLongitud(nombrePorAlias)) {
             String nombre = entrada.getValue();
             if (nombre.length() >= LONGITUD_MINIMA) {
-                boolean respetaCodigos = !nombre.strip().contains(" ") && !esMayusculas(nombre);
-                resultado = Pattern.compile("(?iu)(?<!\\p{L})" + Pattern.quote(nombre) + "(?!\\p{L})")
-                        .matcher(resultado).replaceAll(m -> Matcher.quoteReplacement(
-                                respetaCodigos && esMayusculas(m.group()) ? m.group() : entrada.getKey()));
+                boolean respetaCodigos = respetaCodigos(nombre);
+                resultado = patron(nombre).matcher(resultado).replaceAll(m -> Matcher.quoteReplacement(
+                        respetaCodigos && esMayusculas(m.group()) ? m.group() : entrada.getKey()));
             }
         }
         return resultado;
+    }
+
+    /**
+     * Alias de los nombres que aparecen en un texto que ya viajo sin ocultar, con el fragmento tal como se
+     * escribio. Un nombre que la persona escribe antes de que la conversacion lo vea llega tal cual al modelo,
+     * y el resultado que lo encuentra lo trae como alias: sin esta equivalencia el modelo no los relaciona.
+     */
+    public Map<String, String> equivalencias(String texto) {
+        Map<String, String> fragmentoPorAlias = new LinkedHashMap<>();
+        if (texto == null || texto.isBlank()) {
+            return fragmentoPorAlias;
+        }
+        for (Map.Entry<String, String> entrada : porLongitud(nombrePorAlias)) {
+            String nombre = entrada.getValue();
+            if (nombre.length() < LONGITUD_MINIMA) {
+                continue;
+            }
+            Matcher m = patron(nombre).matcher(texto);
+            while (m.find()) {
+                if (!(respetaCodigos(nombre) && esMayusculas(m.group()))) {
+                    fragmentoPorAlias.putIfAbsent(entrada.getKey(), m.group());
+                    break;
+                }
+            }
+        }
+        return fragmentoPorAlias;
+    }
+
+    private static List<Map.Entry<String, String>> porLongitud(Map<String, String> nombrePorAlias) {
+        List<Map.Entry<String, String>> entradas = new ArrayList<>(nombrePorAlias.entrySet());
+        entradas.sort(Comparator.comparingInt((Map.Entry<String, String> e) -> e.getValue().length()).reversed());
+        return entradas;
+    }
+
+    private static Pattern patron(String nombre) {
+        return Pattern.compile("(?iu)(?<!\\p{L})" + Pattern.quote(nombre) + "(?!\\p{L})");
+    }
+
+    private static boolean respetaCodigos(String nombre) {
+        return !nombre.strip().contains(" ") && !esMayusculas(nombre);
     }
 
     private static boolean esMayusculas(String texto) {

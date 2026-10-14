@@ -46,6 +46,16 @@ class TablaSeudonimosTest {
     }
 
     @Test
+    void lasEquivalenciasDicenQueFragmentoDelMensajeEsCadaAlias() {
+        TablaSeudonimos tabla = TablaSeudonimos.desde(Map.of("Persona_1", "x Objetivo", "Persona_2", "Objetivo",
+                "Persona_3", "Docente"));
+
+        assertThat(tabla.equivalencias("Busca al de apellido objetivo, el DOCENTE nuevo"))
+                .containsExactly(Map.entry("Persona_2", "objetivo"));
+        assertThat(tabla.equivalencias("")).isEmpty();
+    }
+
+    @Test
     void revelaLosArgumentosDelModeloTambienAnidados() {
         TablaSeudonimos tabla = TablaSeudonimos.desde(Map.of("Persona_1", "Ana Pérez"));
 

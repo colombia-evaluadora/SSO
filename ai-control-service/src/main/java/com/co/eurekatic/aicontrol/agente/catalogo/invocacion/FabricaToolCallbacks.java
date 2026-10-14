@@ -17,6 +17,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.stream.Collectors;
 
 /**
  * Convierte herramientas del catalogo en {@link ToolCallback} de Spring AI. Cada callback
@@ -84,7 +85,21 @@ public class FabricaToolCallbacks {
         ResultadoHerramienta resultado = invocador.invocar(herramienta, reales, ContextoInvocacion.de(contexto));
         ObservadorResultados.de(contexto).ifPresent(o -> o.alObtener(herramienta, resultado));
         ResultadoHerramienta paraModelo = seudonimos.map(t -> ocultar(t, resultado)).orElse(resultado);
-        return formateador.paraModelo(herramienta, paraModelo);
+        String texto = formateador.paraModelo(herramienta, paraModelo);
+        return seudonimos.map(t -> texto + equivalencias(t, texto, ContextoInvocacion.de(contexto).textoUsuario()))
+                .orElse(texto);
+    }
+
+    /**
+     * Los nombres que la persona escribio en su mensaje y este resultado trae como alias: su mensaje llego al
+     * modelo sin ocultar, asi que decir que fragmento es que alias no le cuenta nada nuevo al proveedor.
+     */
+    static String equivalencias(TablaSeudonimos tabla, String resultado, String textoUsuario) {
+        String pares = tabla.equivalencias(textoUsuario).entrySet().stream()
+                .filter(e -> resultado.contains(e.getKey()))
+                .map(e -> "\"" + e.getValue() + "\" es " + e.getKey())
+                .collect(Collectors.joining("; "));
+        return pares.isEmpty() ? "" : "\nEn el mensaje de la persona, " + pares + ".";
     }
 
     private static Map<String, Object> revelar(TablaSeudonimos tabla, Map<String, Object> argumentos) {
