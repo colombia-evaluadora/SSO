@@ -42,7 +42,8 @@ class BoletinPreescolarTest {
             "evidencia4_titulo", "evidencia4_fecha", "evidencia4_archivo",
             "evidencia5_titulo", "evidencia5_fecha", "evidencia5_archivo",
             "evidencia6_titulo", "evidencia6_fecha", "evidencia6_archivo",
-            "rector_nombre", "rector_documento", "escudo_archivo", "departamento", "jornada", "tipo_documento", "director_nombre", "director_documento");
+            "rector_nombre", "rector_documento", "escudo_archivo", "departamento", "jornada", "tipo_documento", "director_nombre", "director_documento",
+            "codigo_verificacion", "url_verificacion");
 
     private static final List<String> IMAGENES = List.of(
             "fondo_archivo", "escudo_archivo", "foto_archivo",
@@ -312,5 +313,32 @@ class BoletinPreescolarTest {
             n++;
         }
         return n;
+    }
+
+    /** El QR y el codigo van en el pie; la copia publica lleva marca de agua. */
+    @Test
+    void conVerificacionLlevaQrYMarcaDeAgua() throws Exception {
+        List<Map<String, Object>> rows = new java.util.ArrayList<>();
+        for (Map<String, Object> f : List.of(fila("ANA MARIA PEREZ GOMEZ", true, 0))) {
+            Map<String, Object> m = new LinkedHashMap<>(f);
+            m.put("codigo_verificacion", "AbCdEfGhIjKlMnOpQrStUvWx");
+            m.put("url_verificacion", "https://testv2.colombiaevaluadora.com/verificar/b/AbCdEfGhIjKlMnOpQrStUvWx");
+            rows.add(m);
+        }
+        byte[] pdf = new PdfRenderer().render("boletin-preescolar", definicion(), rows,
+                new ReportMeta("test", Map.of()), null, pk -> null,
+                Map.of("MARCA_VERIFICACION", "Copia de verificación — generada 13/10/2026 18:00"));
+        String dir = System.getenv("BOLETIN_PDF_DIR");
+        if (dir != null && !dir.isBlank()) {
+            java.nio.file.Files.write(java.nio.file.Path.of(dir, "boletin-preescolar-qr.pdf"), pdf);
+        }
+        // Sin campos de verificacion el pie queda como antes.
+        byte[] sinQr = new PdfRenderer().render("boletin-preescolar", definicion(),
+                List.of(fila("ANA MARIA PEREZ GOMEZ", true, 0)), new ReportMeta("test", Map.of()),
+                null, pk -> null);
+        // El QR es vectorial (un trazo por modulo): pesa bastante mas que el pie sin el.
+        assertTrue(pdf.length > sinQr.length + 1000,
+                "el QR no se dibujo: " + pdf.length + " vs " + sinQr.length);
+        assertEquals(1, paginas(pdf));
     }
 }

@@ -23,6 +23,7 @@
 	<parameter name="TOTAL" class="java.lang.Integer"/>
 	<parameter name="USUARIO" class="java.lang.String"/>
 	<parameter name="FILTROS" class="java.lang.String"/>
+	<parameter name="MARCA_VERIFICACION" class="java.lang.String"/>
 
 	<field name="ee_nombre" class="java.lang.String"/>
 	<field name="ee_dane" class="java.lang.String"/>
@@ -74,6 +75,8 @@
 	<field name="orden" class="java.lang.String"/>
 	<field name="periodo_orden" class="java.lang.String"/>
 	<field name="periodo_abreviacion" class="java.lang.String"/>
+	<field name="codigo_verificacion" class="java.lang.String"/>
+	<field name="url_verificacion" class="java.lang.String"/>
 	<field name="fondo_archivo" class="java.io.InputStream"/>
 	<field name="escudo_archivo" class="java.io.InputStream"/>
 	<field name="foto_archivo" class="java.io.InputStream"/>
@@ -798,6 +801,10 @@
 			<element kind="image" x="0" y="0" width="613" height="894" scaleImage="FillFrame" hImageAlign="Center" vImageAlign="Middle" onErrorType="Blank" usingCache="true">
 			<expression><![CDATA[$F{fondo_archivo}]]></expression>
 		</element>
+		<element kind="textField" x="266" y="97" width="80" height="700" fontName="DejaVu Sans" fontSize="22" forecolor="#B9C0CC" hTextAlign="Center" vTextAlign="Middle" bold="true" blankWhenNull="true" rotation="Left">
+			<printWhenExpression><![CDATA[$P{MARCA_VERIFICACION} != null]]></printWhenExpression>
+			<expression><![CDATA[$P{MARCA_VERIFICACION}]]></expression>
+		</element>
 	</background>
 	<pageHeader height="114" splitType="Prevent">
 			<element kind="image" x="24" y="4" width="92" height="100" scaleImage="RetainShape" hImageAlign="Center" vImageAlign="Middle" onErrorType="Blank" usingCache="true">
@@ -962,7 +969,29 @@
 		</band>
 	</detail>
 	<pageFooter height="60" splitType="Prevent">
-			<element kind="textField" x="557" y="38" width="16" height="12" fontName="DejaVu Sans" fontSize="7.5" forecolor="#FFFFFF" hTextAlign="Right" vTextAlign="Middle" bold="true" blankWhenNull="true">
+			<element kind="rectangle" x="22" y="3" width="54" height="54" backcolor="#FFFFFF" mode="Opaque" radius="3">
+			<printWhenExpression><![CDATA[!"".equals($F{url_verificacion})]]></printWhenExpression>
+			<pen lineWidth="0.0"/>
+		</element>
+		<element kind="component" x="25" y="6" width="48" height="48">
+			<printWhenExpression><![CDATA[!"".equals($F{url_verificacion})]]></printWhenExpression>
+			<component kind="barcode4j:QRCode" margin="0" errorCorrectionLevel="M">
+				<codeExpression><![CDATA[$F{url_verificacion}]]></codeExpression>
+			</component>
+		</element>
+		<element kind="rectangle" x="80" y="17" width="190" height="28" backcolor="#FFFFFF" mode="Opaque" radius="3">
+			<printWhenExpression><![CDATA[!"".equals($F{url_verificacion})]]></printWhenExpression>
+			<pen lineWidth="0.0"/>
+		</element>
+		<element kind="staticText" x="84" y="19" width="182" height="11" fontName="DejaVu Sans" fontSize="7" forecolor="#5A6B85" hTextAlign="Left" vTextAlign="Middle">
+			<printWhenExpression><![CDATA[!"".equals($F{url_verificacion})]]></printWhenExpression>
+			<text><![CDATA[Verifique este boletin escaneando el QR]]></text>
+		</element>
+		<element kind="textField" x="84" y="31" width="182" height="12" fontName="DejaVu Sans" fontSize="7.5" forecolor="#16305C" hTextAlign="Left" vTextAlign="Middle" bold="true" blankWhenNull="true">
+			<printWhenExpression><![CDATA[!"".equals($F{url_verificacion})]]></printWhenExpression>
+			<expression><![CDATA["Codigo: " + $F{codigo_verificacion}]]></expression>
+		</element>
+		<element kind="textField" x="557" y="38" width="16" height="12" fontName="DejaVu Sans" fontSize="7.5" forecolor="#FFFFFF" hTextAlign="Right" vTextAlign="Middle" bold="true" blankWhenNull="true">
 			<expression><![CDATA["" + $V{PAGE_NUMBER}]]></expression>
 		</element>
 		<element kind="textField" x="573" y="38" width="30" height="12" fontName="DejaVu Sans" fontSize="7.5" forecolor="#FFFFFF" hTextAlign="Left" vTextAlign="Middle" bold="true" blankWhenNull="true" evaluationTime="Group" evaluationGroup="boletin">

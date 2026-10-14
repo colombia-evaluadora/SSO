@@ -140,6 +140,21 @@ public class PdfRenderer {
                          ReportMeta meta,
                          List<String> columnasPedidas,
                          Imagenes imagenes) {
+        return render(clave, def, rows, meta, columnasPedidas, imagenes, Map.of());
+    }
+
+    /**
+     * Variante con parametros extra para la plantilla (p.ej. la marca de agua
+     * MARCA_VERIFICACION de la copia publica del boletin). Una plantilla que
+     * no los declara los ignora.
+     */
+    public byte[] render(String clave,
+                         ReportingProperties.Report def,
+                         List<Map<String, Object>> rows,
+                         ReportMeta meta,
+                         List<String> columnasPedidas,
+                         Imagenes imagenes,
+                         Map<String, Object> extra) {
         try {
             Map<String, String> columnas = ColumnLayout.resolver(def, rows, columnasPedidas);
             int[] anchos = agruparAnchos(ColumnLayout.anchos(columnas, rows, usableWidth()), usableWidth());
@@ -168,6 +183,9 @@ public class PdfRenderer {
             params.put("TOTAL", rows.size());
             params.put("USUARIO", meta == null || meta.usuario() == null ? "" : meta.usuario());
             params.put("FILTROS", meta == null ? "" : meta.filtrosLegibles());
+            if (extra != null) {
+                params.putAll(extra);
+            }
 
             JasperPrint print = JasperFillManager.fillReport(
                     report, params,

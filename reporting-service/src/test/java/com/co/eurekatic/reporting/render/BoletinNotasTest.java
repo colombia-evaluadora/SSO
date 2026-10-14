@@ -42,7 +42,8 @@ class BoletinNotasTest {
                 "auxiliar_nombre", "auxiliar_documento", "sin_calificar", "seccion", "tipo",
                 "intensidad", "influencia", "inasistencias_justificadas", "docentes", "texto",
                 "comportamiento_fecha", "comportamiento_tipo", "comportamiento_funcionario",
-                "orden", "periodo_orden", "periodo_abreviacion"));
+                "orden", "periodo_orden", "periodo_abreviacion",
+                "codigo_verificacion", "url_verificacion"));
         return c;
     }
 
@@ -320,4 +321,25 @@ class BoletinNotasTest {
         }
         return n;
     }
+
+    /** El QR y el codigo van en el pie; la copia publica lleva marca de agua. */
+    @Test
+    void conVerificacionLlevaQrYMarcaDeAgua() throws Exception {
+        List<Map<String, Object>> sin = estudiante(11, "ESTUDIANTE CON QR", 2, 1, 1);
+        byte[] pdfSin = render(sin, pk -> null);
+        List<Map<String, Object>> con = estudiante(11, "ESTUDIANTE CON QR", 2, 1, 1);
+        for (Map<String, Object> f : con) {
+            f.put("codigo_verificacion", "AbCdEfGhIjKlMnOpQrStUvWx");
+            f.put("url_verificacion", "https://testv2.colombiaevaluadora.com/verificar/b/AbCdEfGhIjKlMnOpQrStUvWx");
+        }
+        byte[] pdf = new PdfRenderer().render("boletin-notas", definicion(), con,
+                new ReportMeta("test", Map.of()), null, pk -> null,
+                Map.of("MARCA_VERIFICACION", "Copia de verificación — generada 13/10/2026 18:00"));
+        volcar("boletin-notas-qr", pdf);
+        // El QR es vectorial (un trazo por modulo): pesa bastante mas que el pie sin el.
+        assertTrue(pdf.length > pdfSin.length + 1000,
+                "el QR no se dibujo: " + pdf.length + " vs " + pdfSin.length);
+        assertTrue(paginas(pdf) == paginas(pdfSin), "el QR cambio la paginacion");
+    }
+
 }

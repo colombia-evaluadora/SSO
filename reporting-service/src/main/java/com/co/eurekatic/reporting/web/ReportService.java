@@ -7,6 +7,8 @@ import com.co.eurekatic.reporting.render.ExcelRenderer;
 import com.co.eurekatic.reporting.render.Fechas;
 import com.co.eurekatic.reporting.render.ReportMeta;
 import com.co.eurekatic.reporting.render.PdfRenderer;
+import com.co.eurekatic.reporting.verificacion.EmisionBoletines;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpHeaders;
@@ -40,18 +42,53 @@ public class ReportService {
     private final ExcelRenderer excel;
     /** Limita las exportaciones en vuelo de esta instancia (memoria). */
     private final Semaphore permisos;
+    /** Registra el boletin impreso y le pone el QR; null = sin verificacion. */
+    private final EmisionBoletines emisiones;
 
     public ReportService(ReportingProperties props,
                          QueryServiceClient queryService,
                          FileServiceClient fileService,
                          PdfRenderer pdf,
                          ExcelRenderer excel) {
+        this(props, queryService, fileService, pdf, excel, null);
+    }
+
+    @Autowired
+    public ReportService(ReportingProperties props,
+                         QueryServiceClient queryService,
+                         FileServiceClient fileService,
+                         PdfRenderer pdf,
+                         ExcelRenderer excel,
+                         EmisionBoletines emisiones) {
         this.props = props;
         this.queryService = queryService;
         this.fileService = fileService;
         this.pdf = pdf;
         this.excel = excel;
+        this.emisiones = emisiones;
         this.permisos = new Semaphore(Math.max(1, props.getMaxConcurrentExports()));
+    }
+
+    /**
+     * Arma el PDF de un boletin con filas ya obtenidas (la copia publica de
+     * verificacion), bajo el mismo tope de exportaciones simultaneas.
+     */
+    public byte[] renderBoletin(String variante, List<Map<String, Object>> rows,
+                                Map<String, Object> extra) {
+        ReportingProperties.Report def = props.getReports().get(variante);
+        if (def == null) {
+            throw new IllegalStateException("La variante '" + variante + "' no esta configurada.");
+        }
+        adquirir();
+        try {
+            FileServiceClient.Sesion imagenes =
+                    def.getImageFields() == null || def.getImageFields().isEmpty()
+                            ? null
+                            : fileService.nuevaSesion();
+            return pdf.render(variante, def, rows, null, null, imagenes, extra);
+        } finally {
+            permisos.release();
+        }
     }
 
     /** 429 con Retry-After: el cliente puede reintentar en unos segundos. */
@@ -118,6 +155,15 @@ public class ReportService {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND,
                     "No existe el reporte '" + clave + "'.");
         }
+        // El boletin (la clave que agrupa sus variantes) es el unico que lleva
+        // QR de verificacion; el nivel pedido es el que se registra.
+        String nivelBoletin = null;
+        if (props.getVerificacion() != null
+                && clave.equals(props.getVerificacion().getReporte())
+                && def.getVariantParam() != null && query != null) {
+            String n = query.get(def.getVariantParam());
+            nivelBoletin = n == null ? null : n.trim().toLowerCase(Locale.ROOT);
+        }
         if (def.getVariants() != null && !def.getVariants().isEmpty()) {
             clave = variante(clave, def, query);
             def = props.getReports().get(clave);
@@ -142,14 +188,15 @@ public class ReportService {
 
         adquirir();
         try {
-            return generar(clave, def, formato, request, bearer, usuario);
+            return generar(clave, def, formato, request, bearer, usuario, nivelBoletin);
         } finally {
             permisos.release();
         }
     }
 
     private Rendered generar(String clave, ReportingProperties.Report def, Formato formato,
-                             ReportRequest request, String bearer, String usuario) {
+                             ReportRequest request, String bearer, String usuario,
+                             String nivelBoletin) {
         long inicio = System.currentTimeMillis();
         List<Map<String, Object>> rows = queryService.fetchRows(
                 def.getBaseUrl(),
@@ -170,6 +217,11 @@ public class ReportService {
             throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY,
                     "El reporte devolvio " + rows.size() + " registros y el maximo es "
                     + props.getMaxRows() + ". Agrega filtros para acotarlo.");
+        }
+
+        if (nivelBoletin != null && emisiones != null) {
+            rows = emisiones.marcar(nivelBoletin,
+                    request == null ? Map.of() : request.filters(), rows, bearer);
         }
 
         // El reporte lleva impreso con que filtros salio: un PDF exportado
