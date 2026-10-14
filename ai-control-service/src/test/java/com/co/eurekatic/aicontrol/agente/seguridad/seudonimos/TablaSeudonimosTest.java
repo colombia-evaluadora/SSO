@@ -38,6 +38,14 @@ class TablaSeudonimosTest {
     }
 
     @Test
+    void unApellidoQueCoincideConUnRolNoSeComeElCodigoEnMayusculas() {
+        TablaSeudonimos tabla = TablaSeudonimos.desde(Map.of("Persona_1", "Docente", "Persona_2", "Peer Docente"));
+
+        assertThat(tabla.ocultar("Peer Docente tiene rol DOCENTE; docente y Docente son la persona"))
+                .isEqualTo("Persona_2 tiene rol DOCENTE; Persona_1 y Persona_1 son la persona");
+    }
+
+    @Test
     void revelaLosArgumentosDelModeloTambienAnidados() {
         TablaSeudonimos tabla = TablaSeudonimos.desde(Map.of("Persona_1", "Ana Pérez"));
 

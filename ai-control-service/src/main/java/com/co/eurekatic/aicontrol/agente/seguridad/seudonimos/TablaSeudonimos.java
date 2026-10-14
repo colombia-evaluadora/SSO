@@ -76,18 +76,29 @@ public final class TablaSeudonimos {
         return filas.stream().map(this::ocultarMapa).toList();
     }
 
-    /** Texto con cada nombre conocido cambiado por su alias; los mas largos primero ("Ana Perez" antes que "Ana"). */
+    /**
+     * Texto con cada nombre conocido cambiado por su alias; los mas largos primero ("Ana Perez" antes que "Ana").
+     * Una palabra suelta escrita toda en mayusculas no se toma por el nombre de una sola palabra: en el esquema
+     * los codigos y roles van asi, y un apellido "Docente" convertiria el rol DOCENTE en una persona.
+     */
     public String ocultar(String texto) {
         String resultado = texto;
         List<Map.Entry<String, String>> porLongitud = new ArrayList<>(nombrePorAlias.entrySet());
         porLongitud.sort(Comparator.comparingInt((Map.Entry<String, String> e) -> e.getValue().length()).reversed());
         for (Map.Entry<String, String> entrada : porLongitud) {
-            if (entrada.getValue().length() >= LONGITUD_MINIMA) {
-                resultado = Pattern.compile("(?iu)(?<!\\p{L})" + Pattern.quote(entrada.getValue()) + "(?!\\p{L})")
-                        .matcher(resultado).replaceAll(Matcher.quoteReplacement(entrada.getKey()));
+            String nombre = entrada.getValue();
+            if (nombre.length() >= LONGITUD_MINIMA) {
+                boolean respetaCodigos = !nombre.strip().contains(" ") && !esMayusculas(nombre);
+                resultado = Pattern.compile("(?iu)(?<!\\p{L})" + Pattern.quote(nombre) + "(?!\\p{L})")
+                        .matcher(resultado).replaceAll(m -> Matcher.quoteReplacement(
+                                respetaCodigos && esMayusculas(m.group()) ? m.group() : entrada.getKey()));
             }
         }
         return resultado;
+    }
+
+    private static boolean esMayusculas(String texto) {
+        return texto.chars().anyMatch(Character::isLetter) && texto.equals(texto.toUpperCase(Locale.ROOT));
     }
 
     /** Texto con cada alias cambiado por el nombre real; un alias desconocido se deja como esta. */
