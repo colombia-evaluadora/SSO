@@ -134,7 +134,8 @@ public class BucleAgente {
             List<String> nombres = nombres(respuesta);
             if (!ofrecidas.containsAll(nombres)) {
                 // El modelo pidio una herramienta que no se le ofrecio en este turno: no se ejecuta nada.
-                log.warn("Herramienta no ofrecida pedida por el modelo: conversacion={}", entrada.conversacionId());
+                log.warn("Herramienta no ofrecida pedida por el modelo: conversacion={} pedidas={}",
+                        entrada.conversacionId(), nombres.stream().filter(n -> !ofrecidas.contains(n)).toList());
                 return new ResultadoBucle.Final(new RespuestaAgente.Respuesta(MENSAJE_VACIO), uso, modelo);
             }
             if (!contador.cabe(nombres)) {
