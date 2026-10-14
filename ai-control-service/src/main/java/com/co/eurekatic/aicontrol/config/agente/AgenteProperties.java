@@ -68,7 +68,7 @@ public record AgenteProperties(
      */
     public record Limites(
             @DefaultValue("15") int maxTotalToolCalls,
-            @DefaultValue("5") int maxCallsPorHerramienta,
+            @DefaultValue("8") int maxCallsPorHerramienta,
             @DefaultValue("20") int rateLimitUsuarioPorMin,
             @DefaultValue("4000") int textoMaxCaracteres,
             @DefaultValue("2") int maxConcurrentRazonador,

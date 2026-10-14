@@ -144,7 +144,7 @@ sso:
           max-tokens: ${AI_MAX_TOKENS_REASONING:6000}
       limites:
         max-total-tool-calls: ${AI_AGENTE_MAX_TOOL_CALLS:15}
-        max-calls-por-herramienta: ${AI_AGENTE_MAX_CALLS_POR_HERRAMIENTA:5}
+        max-calls-por-herramienta: ${AI_AGENTE_MAX_CALLS_POR_HERRAMIENTA:8}
         rate-limit-usuario-por-min: ${AI_AGENTE_RATE_LIMIT_USUARIO_POR_MIN:20}
         texto-max-caracteres: ${AI_AGENTE_TEXTO_MAX_CARACTERES:4000}
         max-concurrent-razonador: ${AI_AGENTE_MAX_CONCURRENT_REASONING:2}
