@@ -278,6 +278,7 @@ UPDATE ai.herramienta h
     ('crear_unidad_planeador', 'BODY.NOMBRE'),
     ('crear_unidad_planeador', 'BODY.FK_TASIGNATURA'),
     ('crear_unidad_planeador', 'BODY.FK_TGRADO'),
+    ('crear_unidad_planeador', 'BODY.FK_TLV_CALCULO_DEFINITIVA'),
     ('ponderar_actividad_unidad', 'BODY.PONDERACION'),
     ('crear_criterio_unidad', 'BODY.DESCRIPCION'),
     ('crear_criterio_unidad', 'BODY.NIVELES'),
