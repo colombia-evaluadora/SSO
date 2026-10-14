@@ -157,6 +157,16 @@ BEGIN
                                   WHERE rc3.PK_REFERENTE_CURRICULAR = cr.pk_referente), 'Actividad'))
                )::VARCHAR AS rotulo_plural
           FROM con_rotulo cr
+         -- Sin referente activo (los del nivel estan inactivos/borrados): no
+         -- abre pestana salvo que ya haya unidades/actividades de ese grado.
+         WHERE cr.pk_referente IS NOT NULL
+            OR EXISTS (SELECT 1 FROM academico_test.TUNIDAD u
+                        WHERE u.FK_TGRADO = cr.pk_tgrado AND u.ACTIVE = TRUE
+                          AND (cr.pk_tasignatura IS NULL OR u.FK_TASIGNATURA = cr.pk_tasignatura))
+            OR EXISTS (SELECT 1 FROM academico_test.TACTIVIDAD act
+                         JOIN academico_test.TGRUPO ga ON ga.PK_TGRUPO = act.FK_TGRUPO
+                        WHERE ga.FK_TGRADO = cr.pk_tgrado AND act.ACTIVE = TRUE
+                          AND (cr.pk_tasignatura IS NULL OR act.FK_TASIGNATURA = cr.pk_tasignatura))
     ), agrupado AS (
         SELECT cl.rotulo,
                MIN(cl.rotulo_plural)                                         AS rotulo_plural,
@@ -268,11 +278,17 @@ INSERT INTO public.query (uuid, query, type, public_end, captcha, microservice_i
                            path_template, execution_mode, http_method, param_types, detail)
 SELECT
     'planeador-actividad-tabs',
+    -- Forma final (la que deja V553): reaplicar V525 en una subida no debe
+    -- devolver la fila a la version sin FUNCIONARIO/SEDE/PERIODO.
     $q$SELECT * FROM academico_test.fn_planeador_actividad_tabs_listar(
-    public.fn_get_academico_usuario_id(:CONTEXT.USER_ID::BIGINT)
+    public.fn_get_academico_usuario_id(:CONTEXT.USER_ID::BIGINT),
+    CAST(:QUERY.FUNCIONARIO AS BIGINT),
+    CAST(:QUERY.SEDE AS BIGINT),
+    CAST(:QUERY.PERIODO AS BIGINT)
 );$q$,
     'postgres', false, false, m.id_microservice,
-    '/planeador/actividades/tabs', 'SELECT', 'GET', '{}'::jsonb,
+    '/planeador/actividades/tabs', 'SELECT', 'GET',
+    '{"QUERY.FUNCIONARIO": "BIGINT", "QUERY.SEDE": "BIGINT", "QUERY.PERIODO": "BIGINT"}'::jsonb,
     'Las PESTANAS del listado de Actividades, una por Rotulo de Ejecucion (Regla 13) -- mismo mecanismo que GET /planeador/unidades/tabs pero agrupando por rotulo_ejecucion resuelto por PAR grado+asignatura (fn_unidad_referente_aplicable) en vez de por referente a nivel grado. Sin parametros: el usuario se resuelve del token. Cada fila trae rotulo_ejecucion/rotulo_ejecucion_plural (ya pluralizado en el servidor, no concatenar "s" en el cliente), pk_referente_curricular (informativo, el primero del grupo), grados/asignaturas ([{pk,nombre}]) y grado_asignatura_pares ([{grado,asignatura}], la fuente correcta para filtrar/acotar: dos asignaturas de un mismo grado pueden caer en pestañas distintas). 0 filas si el usuario no tiene ningun alcance. Gate VER sobre PLANEADOR.'
   FROM public.microservice m
  WHERE m.serviceid = 'eval-col'

@@ -112,11 +112,11 @@ public class FuncionarioRegistrationService {
      * capa SQL pudiera reutilizar su cuenta.
      *
      * <p>Ahora se pregunta primero si ya hay un TUSUARIO activo para esta
-     * persona (mismo correo O mismo documento — {@link
-     * AcademicoJdbcRepository#findExistingAccountEmail}). Si lo hay, se
-     * reutiliza la cuenta real de {@code public.users} (por la CUENTA que
-     * ya tiene el TUSUARIO, no necesariamente {@code req.email()}) en vez
-     * de crear una nueva — y si esa cuenta de {@code public.users} no
+     * persona (mismo documento — {@link
+     * AcademicoJdbcRepository#findExistingAccountEmail}; si el correo es la
+     * cuenta de otra persona activa, {@code fn_fun_crear} rechaza el alta).
+     * Si lo hay, se reutiliza su cuenta de {@code public.users} en vez de
+     * crear una nueva — y si esa cuenta de {@code public.users} no
      * existe todavía (TUSUARIO migrado que nunca tuvo login, caso real en
      * los datos históricos), se le provisiona una con la CUENTA correcta.
      * Solo si la persona es genuinamente nueva se aplica el chequeo de
@@ -247,8 +247,10 @@ public class FuncionarioRegistrationService {
             return new Cuenta(nuevo, invitar ? nuevo.getEmail() : null, null);
         }
 
-        // Persona genuinamente nueva: no hay TUSUARIO activo suyo, ni por
-        // correo ni por documento.
+        // Persona nueva para la app: no hay un TUSUARIO activo con este
+        // documento. Si el correo es la cuenta de otra persona activa,
+        // fn_fun_crear rechaza el alta más abajo y la transacción revierte
+        // lo que se haga aquí.
         //
         // El correo, en cambio, puede seguir ocupado en public.users por
         // una cuenta que ya no está en uso, y eso era una disparidad entre

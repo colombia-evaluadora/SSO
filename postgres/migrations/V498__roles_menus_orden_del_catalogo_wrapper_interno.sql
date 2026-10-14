@@ -162,6 +162,136 @@ $$;
 COMMENT ON FUNCTION academico_test.fn_menu_catalogo_listar_interno()
     IS 'INTERNO: catalogo activo de TMENU en orden de arbol (posicion 1..n). Unica fuente del orden: la usan GET /menus (fn_list_available_menus) y GET /roles/:ROLEID/menus (fn_rol_menus_listar_interno).';
 
+-- Catalogo de la pestana Modulos y submodulos: tambien los inactivos (estado
+-- 'I'), que siguen listados con su estado; los dados de baja (active) no.
+-- Cambia el RETURNS TABLE: se sueltan wrapper y nucleo antes de recrearlos.
+DROP FUNCTION IF EXISTS academico_test.fn_menu_catalogo_admin_listar(BIGINT);
+DROP FUNCTION IF EXISTS academico_test.fn_menu_catalogo_admin_listar_interno();
+
+CREATE OR REPLACE FUNCTION academico_test.fn_menu_catalogo_admin_listar_interno()
+RETURNS TABLE (
+    pk_tmenu BIGINT,
+    pk_padre BIGINT,
+    nombre   VARCHAR,
+    url      VARCHAR,
+    icono    VARCHAR,
+    visible  BOOLEAN,
+    orden    NUMERIC,
+    plan_id  BIGINT,
+    type     VARCHAR,
+    activo   BOOLEAN,
+    en_uso   BOOLEAN,
+    admite_guardar  BOOLEAN,
+    admite_eliminar BOOLEAN,
+    posicion BIGINT
+)
+LANGUAGE sql
+STABLE
+SET search_path = academico_test, public
+AS $$
+    WITH RECURSIVE arbol AS (
+        SELECT r.pk_tmenu, ARRAY[COALESCE(r.orden, 1e18), r.pk_tmenu]::NUMERIC[] AS camino
+          FROM academico_test.tmenu r
+         WHERE r.active = TRUE AND r.fk_tmenu IS NULL
+      UNION ALL
+        SELECT h.pk_tmenu, a.camino || ARRAY[COALESCE(h.orden, 1e18), h.pk_tmenu]::NUMERIC[]
+          FROM academico_test.tmenu h
+          JOIN arbol a ON h.fk_tmenu = a.pk_tmenu
+         WHERE h.active = TRUE
+    )
+    CYCLE pk_tmenu SET es_ciclo USING ruta
+    SELECT m.pk_tmenu,
+           m.fk_tmenu,
+           m.nombre,
+           m.url,
+           m.icono,
+           (m.visible = 'S'),
+           m.orden,
+           m.fk_tplan,
+           (CASE WHEN m.fk_tmenu IS NULL THEN 'GROUP' ELSE 'ITEM' END)::VARCHAR,
+           (m.estado = 'A'),
+           EXISTS (SELECT 1 FROM academico_test.trol_menu tm
+                    WHERE tm.fk_tmenu = m.pk_tmenu AND tm.active = TRUE),
+           m.admite_guardar,
+           m.admite_eliminar,
+           ROW_NUMBER() OVER (ORDER BY a.camino)
+      FROM arbol a
+      JOIN academico_test.tmenu m ON m.pk_tmenu = a.pk_tmenu
+     WHERE NOT a.es_ciclo
+     ORDER BY 14;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_menu_catalogo_admin_listar_interno()
+    IS 'INTERNO: catalogo de TMENU no dado de baja (active), activos e inactivos, en orden de arbol, con activo (estado = A), en_uso (asignado a algun rol) y las acciones que admite. Lo usa GET /menus/catalogo.';
+
+CREATE OR REPLACE FUNCTION academico_test.fn_menu_estado_cambiar_interno(
+    p_pk_tmenu       BIGINT,
+    p_activo         BOOLEAN,
+    p_modificado_por VARCHAR
+)
+RETURNS VOID
+LANGUAGE plpgsql
+VOLATILE
+SET search_path = academico_test, public
+AS $$
+BEGIN
+    IF p_activo IS NULL THEN
+        RAISE EXCEPTION 'Indique si el menu queda activo o inactivo' USING ERRCODE = '22023';
+    END IF;
+
+    -- Solo el menu: sus submenus conservan su estado y dejan de mostrarse
+    -- mientras el padre este inactivo.
+    UPDATE academico_test.tmenu m
+       SET estado      = CASE WHEN p_activo THEN 'A' ELSE 'I' END,
+           modified_by = TRIM(p_modificado_por),
+           modified_at = CURRENT_TIMESTAMP
+     WHERE m.pk_tmenu = p_pk_tmenu
+       AND m.active   = TRUE;
+
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'El menu pk=% no existe', p_pk_tmenu USING ERRCODE = 'P0002';
+    END IF;
+END;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_menu_estado_cambiar_interno(BIGINT, BOOLEAN, VARCHAR)
+    IS 'INTERNO: activa o inactiva un menu (estado A/I) sin tocar el de sus submenus. P0002 si no existe o esta dado de baja. Lo usa PUT /menus/:ID/estado.';
+
+CREATE OR REPLACE FUNCTION academico_test.fn_menu_acciones_cambiar_interno(
+    p_pk_tmenu       BIGINT,
+    p_guardar        BOOLEAN,
+    p_eliminar       BOOLEAN,
+    p_modificado_por VARCHAR
+)
+RETURNS VOID
+LANGUAGE plpgsql
+VOLATILE
+SET search_path = academico_test, public
+AS $$
+BEGIN
+    IF p_guardar IS NULL OR p_eliminar IS NULL THEN
+        RAISE EXCEPTION 'Indique si la vista admite guardar y eliminar' USING ERRCODE = '22023';
+    END IF;
+
+    -- Los permisos de los roles no se tocan: se limitan al leerlos, y vuelven
+    -- si la accion se habilita de nuevo.
+    UPDATE academico_test.tmenu m
+       SET admite_guardar  = p_guardar,
+           admite_eliminar = p_eliminar,
+           modified_by     = TRIM(p_modificado_por),
+           modified_at     = CURRENT_TIMESTAMP
+     WHERE m.pk_tmenu = p_pk_tmenu
+       AND m.active   = TRUE;
+
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'El menu pk=% no existe', p_pk_tmenu USING ERRCODE = 'P0002';
+    END IF;
+END;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_menu_acciones_cambiar_interno(BIGINT, BOOLEAN, BOOLEAN, VARCHAR)
+    IS 'INTERNO: fija las acciones que admite un menu (TMENU.ADMITE_GUARDAR/ADMITE_ELIMINAR). P0002 si no existe o esta dado de baja. Lo usa PUT /menus/:ID/acciones.';
+
 -- Cambia el RETURNS TABLE: se sueltan wrapper y nucleo antes de recrearlos.
 DROP FUNCTION IF EXISTS academico_test.fn_rol_menus_listar(BIGINT, BIGINT);
 DROP FUNCTION IF EXISTS academico_test.fn_rol_menus_listar_interno(BIGINT);
@@ -173,10 +303,12 @@ STABLE
 SET search_path = academico_test, public
 AS $$
     SELECT c.pk_tmenu,
-           NOT COALESCE(bool_or(p.crear OR p.editar OR p.eliminar), FALSE),
-           COALESCE(bool_or(p.crear OR p.editar), FALSE),
-           COALESCE(bool_or(p.eliminar), FALSE)
+           NOT COALESCE(bool_or((m.admite_guardar AND (p.crear OR p.editar))
+                                OR (m.admite_eliminar AND p.eliminar)), FALSE),
+           COALESCE(bool_or(m.admite_guardar AND (p.crear OR p.editar)), FALSE),
+           COALESCE(bool_or(m.admite_eliminar AND p.eliminar), FALSE)
       FROM academico_test.fn_menu_catalogo_listar_interno() c
+      JOIN academico_test.tmenu m ON m.pk_tmenu = c.pk_tmenu
       JOIN academico_test.trol_menu tm
         ON tm.fk_tmenu = c.pk_tmenu
        AND tm.fk_trol  = p_pk_trol
@@ -188,7 +320,25 @@ AS $$
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_rol_menus_listar_interno(BIGINT)
-    IS 'INTERNO: menus activos asignados a un TROL con sus permisos (TROL_MENU_PERMISO): guardar = crear o editar, eliminar, y solo_lectura = ninguno de los tres. Orden del catalogo. Lo usa GET /roles/:ROLEID/menus.';
+    IS 'INTERNO: menus activos asignados a un TROL con sus permisos (TROL_MENU_PERMISO): guardar = crear o editar, eliminar, y solo_lectura = ninguno de los tres, limitados a lo que admite el menu. Orden del catalogo. Lo usa GET /roles/:ROLEID/menus.';
+
+CREATE OR REPLACE FUNCTION academico_test.fn_rol_funcionarios_contar_interno(p_pk_trol BIGINT)
+RETURNS BIGINT
+LANGUAGE sql
+STABLE
+SET search_path = academico_test, public
+AS $$
+    SELECT COUNT(DISTINCT su.fk_tusuario)
+      FROM academico_test.tsede_usuario su
+      JOIN academico_test.tusuario u ON u.pk_tusuario = su.fk_tusuario
+     WHERE su.fk_trol = p_pk_trol
+       AND su.active  = TRUE
+       AND u.active   = TRUE
+       AND u.estado   = 'A';
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_rol_funcionarios_contar_interno(BIGINT)
+    IS 'INTERNO: personas distintas con una asignacion activa (TSEDE_USUARIO) del rol, en cualquier sede y establecimiento, con el usuario activo. Lo usa GET /roles/:ROLEID/funcionarios/total.';
 
 -- Payload a filas; sin guardar/eliminar se derivan de soloLectura (payload viejo).
 CREATE OR REPLACE FUNCTION academico_test.fn_rol_menus_items(p_menus JSONB)
@@ -249,13 +399,25 @@ BEGIN
     IF p_full_replace THEN
         PERFORM academico_test.fn_rol_menus_validar_jerarquia(v_ids);
 
-        UPDATE academico_test.trol_menu tm
+        -- Los recortes por funcionario de un menu quitado caen con el: si no,
+        -- reaparecen cuando se vuelve a asignar el menu.
+        WITH bajas AS (
+            UPDATE academico_test.trol_menu tm
+               SET active      = FALSE,
+                   modified_by = TRIM(p_modificado_por),
+                   modified_at = v_now
+             WHERE tm.fk_trol = p_pk_trol
+               AND tm.active  = TRUE
+               AND NOT (tm.fk_tmenu = ANY(v_ids))
+            RETURNING tm.pk_trol_menu
+        )
+        UPDATE academico_test.tusuario_rol_permiso p
            SET active      = FALSE,
                modified_by = TRIM(p_modificado_por),
                modified_at = v_now
-         WHERE tm.fk_trol = p_pk_trol
-           AND tm.active  = TRUE
-           AND NOT (tm.fk_tmenu = ANY(v_ids));
+          FROM bajas b
+         WHERE p.fk_trol_menu = b.pk_trol_menu
+           AND p.active       = TRUE;
     END IF;
 
     FOR v_item IN
@@ -397,6 +559,111 @@ $$;
 COMMENT ON FUNCTION academico_test.fn_list_available_menus(BIGINT)
     IS 'GET /menus: catalogo completo de menus (MenuNode[]) en orden de arbol, sin filtrar por rol. Gate fn_assert_superadmin; el catalogo lo arma fn_menu_catalogo_listar_interno.';
 
+CREATE OR REPLACE FUNCTION academico_test.fn_menu_catalogo_admin_listar(p_user_pk BIGINT)
+RETURNS TABLE (
+    pk_tmenu BIGINT,
+    pk_padre BIGINT,
+    nombre   VARCHAR,
+    url      VARCHAR,
+    icono    VARCHAR,
+    visible  BOOLEAN,
+    orden    NUMERIC,
+    plan_id  BIGINT,
+    type     VARCHAR,
+    activo   BOOLEAN,
+    en_uso   BOOLEAN,
+    admite_guardar  BOOLEAN,
+    admite_eliminar BOOLEAN
+)
+LANGUAGE plpgsql
+STABLE
+SET search_path = academico_test, public
+AS $$
+BEGIN
+    PERFORM academico_test.fn_assert_superadmin(p_user_pk);
+
+    RETURN QUERY
+    SELECT c.pk_tmenu, c.pk_padre, c.nombre, c.url, c.icono, c.visible,
+           c.orden, c.plan_id, c.type, c.activo, c.en_uso,
+           c.admite_guardar, c.admite_eliminar
+      FROM academico_test.fn_menu_catalogo_admin_listar_interno() c
+     ORDER BY c.posicion;
+END;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_menu_catalogo_admin_listar(BIGINT)
+    IS 'GET /menus/catalogo: catalogo de menus para la pestana Modulos y submodulos, con inactivos, activo, enUso y las acciones que admite. Gate fn_assert_superadmin. Nucleo fn_menu_catalogo_admin_listar_interno.';
+
+CREATE OR REPLACE FUNCTION academico_test.fn_menu_estado_cambiar(
+    p_user_pk        BIGINT,
+    p_pk_tmenu       BIGINT,
+    p_activo         BOOLEAN,
+    p_modificado_por VARCHAR
+)
+RETURNS TABLE (status VARCHAR, message VARCHAR)
+LANGUAGE plpgsql
+VOLATILE
+SET search_path = academico_test, public
+AS $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM academico_test.tmenu m
+                    WHERE m.pk_tmenu = p_pk_tmenu AND m.active = TRUE) THEN
+        RAISE EXCEPTION 'El menu pk=% no existe', p_pk_tmenu USING ERRCODE = 'P0002';
+    END IF;
+
+    PERFORM academico_test.fn_assert_superadmin(p_user_pk);
+
+    PERFORM academico_test.fn_audit_declarar(
+        public.fn_get_academico_usuario_id(p_user_pk),
+        CASE WHEN p_activo THEN 'Activacion' ELSE 'Inactivacion' END || ' del menu '
+            || (SELECT m.nombre FROM academico_test.tmenu m WHERE m.pk_tmenu = p_pk_tmenu),
+        NULL, NULL, ARRAY['ROLES_MENUS']);
+
+    PERFORM academico_test.fn_menu_estado_cambiar_interno(p_pk_tmenu, p_activo, p_modificado_por);
+
+    RETURN QUERY SELECT 'success'::VARCHAR,
+                        (CASE WHEN p_activo THEN 'Menu activado' ELSE 'Menu inactivado' END)::VARCHAR;
+END;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_menu_estado_cambiar(BIGINT, BIGINT, BOOLEAN, VARCHAR)
+    IS 'PUT /menus/:ID/estado: activa o inactiva un menu, body {activo}. Respuesta {status, message}. P0002 si no existe, gate fn_assert_superadmin, 22023 si falta activo. Nucleo fn_menu_estado_cambiar_interno.';
+
+CREATE OR REPLACE FUNCTION academico_test.fn_menu_acciones_cambiar(
+    p_user_pk        BIGINT,
+    p_pk_tmenu       BIGINT,
+    p_guardar        BOOLEAN,
+    p_eliminar       BOOLEAN,
+    p_modificado_por VARCHAR
+)
+RETURNS TABLE (status VARCHAR, message VARCHAR)
+LANGUAGE plpgsql
+VOLATILE
+SET search_path = academico_test, public
+AS $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM academico_test.tmenu m
+                    WHERE m.pk_tmenu = p_pk_tmenu AND m.active = TRUE) THEN
+        RAISE EXCEPTION 'El menu pk=% no existe', p_pk_tmenu USING ERRCODE = 'P0002';
+    END IF;
+
+    PERFORM academico_test.fn_assert_superadmin(p_user_pk);
+
+    PERFORM academico_test.fn_audit_declarar(
+        public.fn_get_academico_usuario_id(p_user_pk),
+        'Acciones disponibles del menu '
+            || (SELECT m.nombre FROM academico_test.tmenu m WHERE m.pk_tmenu = p_pk_tmenu),
+        NULL, NULL, ARRAY['ROLES_MENUS']);
+
+    PERFORM academico_test.fn_menu_acciones_cambiar_interno(p_pk_tmenu, p_guardar, p_eliminar, p_modificado_por);
+
+    RETURN QUERY SELECT 'success'::VARCHAR, 'Acciones actualizadas'::VARCHAR;
+END;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_menu_acciones_cambiar(BIGINT, BIGINT, BOOLEAN, BOOLEAN, VARCHAR)
+    IS 'PUT /menus/:ID/acciones: fija si la vista admite guardar y eliminar, body {guardar, eliminar}. Respuesta {status, message}. P0002 si no existe, gate fn_assert_superadmin, 22023 si falta un valor. Nucleo fn_menu_acciones_cambiar_interno.';
+
 CREATE OR REPLACE FUNCTION academico_test.fn_rol_menus_listar(p_user_pk BIGINT, p_pk_trol BIGINT)
 RETURNS TABLE (id BIGINT, solo_lectura BOOLEAN, guardar BOOLEAN, eliminar BOOLEAN)
 LANGUAGE plpgsql
@@ -413,6 +680,22 @@ $$;
 
 COMMENT ON FUNCTION academico_test.fn_rol_menus_listar(BIGINT, BIGINT)
     IS 'GET /roles/:ROLEID/menus: menus asignados a un rol (RoleMenuAssignment {id, soloLectura, guardar, eliminar}) en el orden del catalogo; [] si el rol no existe o no tiene menus. Gate fn_assert_superadmin. Nucleo fn_rol_menus_listar_interno.';
+
+CREATE OR REPLACE FUNCTION academico_test.fn_rol_funcionarios_contar(p_user_pk BIGINT, p_pk_trol BIGINT)
+RETURNS TABLE (total BIGINT)
+LANGUAGE plpgsql
+STABLE
+SET search_path = academico_test, public
+AS $$
+BEGIN
+    PERFORM academico_test.fn_assert_superadmin(p_user_pk);
+
+    RETURN QUERY SELECT academico_test.fn_rol_funcionarios_contar_interno(p_pk_trol);
+END;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_rol_funcionarios_contar(BIGINT, BIGINT)
+    IS 'GET /roles/:ROLEID/funcionarios/total: cuantos funcionarios tienen el rol, para la confirmacion de quitar permisos. Mismo gate que el resto de la pantalla roles-menus (fn_assert_superadmin). Nucleo fn_rol_funcionarios_contar_interno.';
 
 CREATE OR REPLACE FUNCTION academico_test.fn_associate_menus_to_rol(
     p_user_pk      BIGINT,
@@ -494,13 +777,13 @@ COMMENT ON COLUMN academico_test.trol_menu.orden_rol
 -- Filas de public.query por ruta: en los servidores no siempre tienen el uuid.
 -- ---------------------------------------------------------------------------
 UPDATE public.query q
-   SET query  = $q$SELECT id, solo_lectura AS "soloLectura"
+   SET query  = $q$SELECT id, solo_lectura AS "soloLectura", guardar, eliminar
        FROM academico_test.fn_rol_menus_listar(
            :CONTEXT.USER_ID::BIGINT,
            CAST(:PARAM.ROLEID AS BIGINT)
        );$q$,
        param_types = '{"PARAM.ROLEID": "BIGINT"}'::jsonb,
-       detail = 'roles-permisos: menus asignados a un rol (id + soloLectura) en el orden del catalogo de GET /menus. Mismo elemento que el body de PUT /roles/:ROLEID/menus.'
+       detail = 'roles-permisos: menus asignados a un rol (id, soloLectura, guardar, eliminar) en el orden del catalogo de GET /menus. Mismo elemento que el body de PUT /roles/:ROLEID/menus.'
   FROM public.microservice m
  WHERE q.microservice_id = m.id_microservice
    AND m.serviceid       = 'eval-col'
@@ -529,6 +812,142 @@ UPDATE public.query q
    AND q.path_template   = '/menus/order'
    AND q.http_method     = 'PUT';
 
+-- Mismos roles que GET /roles/:ROLEID/menus: lo llama quien abre la pantalla.
+INSERT INTO public.query
+    (uuid, query, type, public_end, captcha, microservice_id, path_template,
+     execution_mode, http_method, param_types, detail, action, cacheable)
+SELECT
+    'eval-col-roles-funcionarios-total-001',
+    $q$SELECT total
+       FROM academico_test.fn_rol_funcionarios_contar(
+           :CONTEXT.USER_ID::BIGINT,
+           CAST(:PARAM.ROLEID AS BIGINT)
+       );$q$,
+    'postgres', false, false,
+    m.id_microservice,
+    '/roles/:ROLEID/funcionarios/total', 'SELECT', 'GET',
+    '{"PARAM.ROLEID": "BIGINT"}'::jsonb,
+    'roles-permisos: cuantos funcionarios (personas activas) tienen el rol, para la confirmacion de quitar permisos.',
+    'roles-funcionarios-total',
+    false
+  FROM public.microservice m
+ WHERE m.serviceid = 'eval-col'
+ON CONFLICT (microservice_id, path_template, http_method)
+    WHERE path_template IS NOT NULL
+    DO UPDATE SET query       = EXCLUDED.query,
+                  param_types = EXCLUDED.param_types,
+                  detail      = EXCLUDED.detail;
+
+INSERT INTO public.role_query (role_id, query_id)
+SELECT rq.role_id, q.id_query
+  FROM public.query q
+  JOIN public.microservice m ON m.id_microservice = q.microservice_id
+  JOIN public.query qm
+    ON qm.microservice_id = q.microservice_id
+   AND qm.path_template   = '/roles/:ROLEID/menus'
+   AND qm.http_method     = 'GET'
+  JOIN public.role_query rq ON rq.query_id = qm.id_query
+ WHERE m.serviceid     = 'eval-col'
+   AND q.path_template = '/roles/:ROLEID/funcionarios/total'
+   AND q.http_method   = 'GET'
+ON CONFLICT DO NOTHING;
+
+-- Pestana Modulos y submodulos. Mismos roles que GET /roles/:ROLEID/menus.
+INSERT INTO public.query
+    (uuid, query, type, public_end, captcha, microservice_id, path_template,
+     execution_mode, http_method, param_types, detail, action, cacheable)
+SELECT
+    'eval-col-menus-catalogo-001',
+    $q$SELECT pk_tmenu AS id, pk_padre AS "idParent", nombre AS name, url AS path,
+              icono AS icon, visible, orden AS "menuOrder", plan_id AS "planId", type,
+              activo, en_uso AS "enUso", admite_guardar AS "admiteGuardar",
+              admite_eliminar AS "admiteEliminar"
+       FROM academico_test.fn_menu_catalogo_admin_listar(:CONTEXT.USER_ID::BIGINT);$q$,
+    'postgres', false, false,
+    m.id_microservice,
+    '/menus/catalogo', 'SELECT', 'GET',
+    '{}'::jsonb,
+    'roles-permisos: catalogo de menus con inactivos, activo, enUso y acciones que admite (pestana Modulos y submodulos).',
+    'menus-catalogo',
+    false
+  FROM public.microservice m
+ WHERE m.serviceid = 'eval-col'
+ON CONFLICT (microservice_id, path_template, http_method)
+    WHERE path_template IS NOT NULL
+    DO UPDATE SET query       = EXCLUDED.query,
+                  param_types = EXCLUDED.param_types,
+                  detail      = EXCLUDED.detail;
+
+INSERT INTO public.query
+    (uuid, query, type, public_end, captcha, microservice_id, path_template,
+     execution_mode, http_method, param_types, detail, action, cacheable)
+SELECT
+    'eval-col-menus-estado-001',
+    $q$SELECT status, message
+       FROM academico_test.fn_menu_estado_cambiar(
+           :CONTEXT.USER_ID::BIGINT,
+           CAST(:PARAM.ID AS BIGINT),
+           CAST(:BODY.ACTIVO AS BOOLEAN),
+           :CONTEXT.EMAIL
+       );$q$,
+    'postgres', false, false,
+    m.id_microservice,
+    '/menus/:ID/estado', 'SELECT', 'PUT',
+    '{"PARAM.ID": "BIGINT", "BODY.ACTIVO": "BOOLEAN"}'::jsonb,
+    'roles-permisos: activa o inactiva un menu, body {activo}. Respuesta {status, message}.',
+    'menus-estado',
+    false
+  FROM public.microservice m
+ WHERE m.serviceid = 'eval-col'
+ON CONFLICT (microservice_id, path_template, http_method)
+    WHERE path_template IS NOT NULL
+    DO UPDATE SET query       = EXCLUDED.query,
+                  param_types = EXCLUDED.param_types,
+                  detail      = EXCLUDED.detail;
+
+INSERT INTO public.query
+    (uuid, query, type, public_end, captcha, microservice_id, path_template,
+     execution_mode, http_method, param_types, detail, action, cacheable)
+SELECT
+    'eval-col-menus-acciones-001',
+    $q$SELECT status, message
+       FROM academico_test.fn_menu_acciones_cambiar(
+           :CONTEXT.USER_ID::BIGINT,
+           CAST(:PARAM.ID AS BIGINT),
+           CAST(:BODY.GUARDAR AS BOOLEAN),
+           CAST(:BODY.ELIMINAR AS BOOLEAN),
+           :CONTEXT.EMAIL
+       );$q$,
+    'postgres', false, false,
+    m.id_microservice,
+    '/menus/:ID/acciones', 'SELECT', 'PUT',
+    '{"PARAM.ID": "BIGINT", "BODY.GUARDAR": "BOOLEAN", "BODY.ELIMINAR": "BOOLEAN"}'::jsonb,
+    'roles-permisos: fija si la vista admite guardar y eliminar, body {guardar, eliminar}. Respuesta {status, message}.',
+    'menus-acciones',
+    false
+  FROM public.microservice m
+ WHERE m.serviceid = 'eval-col'
+ON CONFLICT (microservice_id, path_template, http_method)
+    WHERE path_template IS NOT NULL
+    DO UPDATE SET query       = EXCLUDED.query,
+                  param_types = EXCLUDED.param_types,
+                  detail      = EXCLUDED.detail;
+
+INSERT INTO public.role_query (role_id, query_id)
+SELECT rq.role_id, q.id_query
+  FROM public.query q
+  JOIN public.microservice m ON m.id_microservice = q.microservice_id
+  JOIN public.query qm
+    ON qm.microservice_id = q.microservice_id
+   AND qm.path_template   = '/roles/:ROLEID/menus'
+   AND qm.http_method     = 'GET'
+  JOIN public.role_query rq ON rq.query_id = qm.id_query
+ WHERE m.serviceid = 'eval-col'
+   AND ((q.path_template = '/menus/catalogo' AND q.http_method = 'GET')
+     OR (q.path_template = '/menus/:ID/estado' AND q.http_method = 'PUT')
+     OR (q.path_template = '/menus/:ID/acciones' AND q.http_method = 'PUT'))
+ON CONFLICT DO NOTHING;
+
 DO $$
 BEGIN
     IF (SELECT COUNT(*) FROM public.query q
@@ -536,7 +955,11 @@ BEGIN
          WHERE m.serviceid = 'eval-col'
            AND ((q.path_template = '/roles/:ROLEID/menus' AND q.http_method IN ('GET', 'PUT'))
              OR (q.path_template = '/menus/order' AND q.http_method = 'PUT')
-             OR (q.path_template = '/menus' AND q.http_method = 'GET'))) <> 4
+             OR (q.path_template = '/menus' AND q.http_method = 'GET')
+             OR (q.path_template = '/roles/:ROLEID/funcionarios/total' AND q.http_method = 'GET')
+             OR (q.path_template = '/menus/catalogo' AND q.http_method = 'GET')
+             OR (q.path_template = '/menus/:ID/estado' AND q.http_method = 'PUT')
+             OR (q.path_template = '/menus/:ID/acciones' AND q.http_method = 'PUT'))) <> 8
     THEN
         RAISE EXCEPTION 'Faltan filas de public.query de la pantalla roles-menus (eval-col)';
     END IF;

@@ -346,6 +346,7 @@ BEGIN
     PERFORM academico_test.fn_unidad_validar_activa(p_pk_tunidad);
     PERFORM academico_test.fn_planeador_assert_alcance(
         p_pk_usuario_solicitante, 'EDITAR', NULL, NULL, p_pk_tunidad, p_pk_tactividad);
+    PERFORM academico_test.fn_actividad_validar_editable(p_pk_tactividad);
 
     PERFORM academico_test.fn_audit_declarar(p_pk_usuario_solicitante,
         format('Vinculación de la actividad %s a la unidad %s',
@@ -378,6 +379,7 @@ BEGIN
     PERFORM academico_test.fn_planeador_assert_alcance(
         p_pk_usuario_solicitante, 'EDITAR', NULL, NULL, NULL, p_pk_tactividad);
     PERFORM academico_test.fn_actividad_assert_propietario(p_pk_usuario_solicitante, p_pk_tactividad);
+    PERFORM academico_test.fn_actividad_validar_editable(p_pk_tactividad);
 
     SELECT FK_TUNIDAD INTO v_unidad FROM academico_test.TACTIVIDAD WHERE PK_TACTIVIDAD = p_pk_tactividad;
     PERFORM academico_test.fn_audit_declarar(p_pk_usuario_solicitante,

@@ -85,6 +85,18 @@ class ApiGatewayIntegrationTest {
     }
 
     @Test
+    void evalColHealthIsPublicJsonAndTheRestOfEvalColStillRequiresToken() {
+        webTestClient().get().uri("/api/eval-col/health").exchange()
+                .expectStatus().isOk()
+                .expectHeader().valueEquals("Cache-Control", "no-store")
+                .expectBody().jsonPath("$.status").isEqualTo("ok");
+        webTestClient().post().uri("/api/eval-col/health").exchange()
+                .expectStatus().isUnauthorized();
+        webTestClient().get().uri("/api/eval-col/periodos").exchange()
+                .expectStatus().isUnauthorized();
+    }
+
+    @Test
     void infoEndpointIsPublic() {
         webTestClient().get().uri("/actuator/info").exchange()
                 .expectStatus().is2xxSuccessful();

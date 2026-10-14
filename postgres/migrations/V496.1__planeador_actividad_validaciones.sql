@@ -520,6 +520,50 @@ BEGIN
 END;
 $$;
 
+-- Periodo cerrado (fn_periodo_evaluacion_cerrado, V535): no se planea en un
+-- periodo de evaluación que ya cerró. Se miran los periodos que solapan la
+-- ventana (sin cierre, el día de inicio): es el mismo periodo al que se imputa
+-- la nota. p_omitir: el wrapper pasa fn_es_super_admin, como en informes.
+CREATE OR REPLACE FUNCTION academico_test.fn_actividad_validar_periodo_abierto(
+    p_fk_tgrupo    BIGINT,
+    p_fk_tunidad   BIGINT,
+    p_fecha_inicio DATE,
+    p_fecha_cierre DATE,
+    p_verbo        VARCHAR DEFAULT 'crear',
+    p_omitir       BOOLEAN DEFAULT FALSE
+)
+RETURNS VOID
+LANGUAGE plpgsql
+STABLE
+AS $$
+DECLARE
+    v_cerrado RECORD;
+BEGIN
+    IF COALESCE(p_omitir, FALSE) OR p_fecha_inicio IS NULL THEN
+        RETURN;
+    END IF;
+    SELECT pe.NOMBRE, pe.FECHA_FIN INTO v_cerrado
+      FROM academico_test.TGRADO g
+      JOIN academico_test.TPERIODO_EVALUACION pe
+        ON pe.FK_TPERIODO_ACADEMICO = g.FK_TPERIODO_ACADEMICO AND pe.ACTIVE = TRUE
+     WHERE g.PK_TGRADO = academico_test.fn_actividad_grado(p_fk_tgrupo, p_fk_tunidad)
+       AND pe.FECHA_INICIO <= COALESCE(p_fecha_cierre, p_fecha_inicio)
+       AND pe.FECHA_FIN    >= p_fecha_inicio
+       AND academico_test.fn_periodo_evaluacion_cerrado(pe.PK_TPERIODO_EVALUACION)
+     ORDER BY pe.FECHA_INICIO
+     LIMIT 1;
+    IF FOUND THEN
+        RAISE EXCEPTION 'No puedes % actividades en un periodo de evaluación cerrado (%, cerró el %).',
+            p_verbo, v_cerrado.NOMBRE, to_char(v_cerrado.FECHA_FIN, 'DD/MM/YYYY')
+            USING ERRCODE = '23514',
+                  HINT    = 'Elige fechas de un periodo de evaluación abierto.';
+    END IF;
+END;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_actividad_validar_periodo_abierto(BIGINT, BIGINT, DATE, DATE, VARCHAR, BOOLEAN)
+    IS 'INTERNO: 23514 si la ventana [fecha_inicio, fecha_cierre] de la actividad cae en un periodo de evaluación cerrado (fn_periodo_evaluacion_cerrado: NO Calificable y fecha fin vencida) del periodo académico de su grado. p_verbo arma el mensaje (crear / mover); p_omitir TRUE la salta (super admin). La usan los wrappers fn_actividad_crear y fn_actividad_actualizar.';
+
 -- Regla 24: la unidad es "compatible" si es de la misma asignatura y del grado
 -- del grupo. Aplica al crear o editar con unidad, no solo al vincular.
 CREATE OR REPLACE FUNCTION academico_test.fn_actividad_validar_unidad_compatible(
@@ -1610,38 +1654,40 @@ BEGIN
 END;
 $$;
 
--- Regla 37: con un resultado capturado, o siendo origen de un refuerzo, la
--- actividad queda bloqueada para edición; para cambiarla se crea otra.
+-- Regla 37: con un resultado capturado (nota u observación incluidas), o
+-- siendo origen de un refuerzo, la actividad queda bloqueada para edición.
+-- NULL = editable; si no, el motivo para el usuario. El detalle (V553) lo
+-- expone para que el front oculte "Editar" sin esperar el 23503.
+CREATE OR REPLACE FUNCTION academico_test.fn_actividad_motivo_no_editable(p_pk_tactividad BIGINT)
+RETURNS VARCHAR
+LANGUAGE sql
+STABLE
+AS $$
+    SELECT CASE
+        WHEN academico_test.fn_actividad_estudiantes_con_resultado(p_pk_tactividad) > 0 THEN
+            'No puedes editar esta actividad porque ya tiene calificaciones u observaciones registradas.'
+        WHEN EXISTS (SELECT 1
+                       FROM academico_test.TACTIVIDAD_RECUPERACION r
+                       JOIN academico_test.TACTIVIDAD a ON a.PK_TACTIVIDAD = r.FK_TACTIVIDAD AND a.ACTIVE = TRUE
+                      WHERE r.FK_TACTIVIDAD_RECUPERAR = p_pk_tactividad AND r.ACTIVE = TRUE) THEN
+            'No puedes editar esta actividad porque es la base de una recuperación.'
+    END;
+$$;
+
 CREATE OR REPLACE FUNCTION academico_test.fn_actividad_validar_editable(p_pk_tactividad BIGINT)
 RETURNS VOID
 LANGUAGE plpgsql
 STABLE
 AS $$
 DECLARE
-    v_estudiantes BIGINT := academico_test.fn_actividad_estudiantes_con_resultado(p_pk_tactividad);
-    v_refuerzo    VARCHAR;
-    v_actual      RECORD;
+    v_motivo VARCHAR := academico_test.fn_actividad_motivo_no_editable(p_pk_tactividad);
 BEGIN
-    SELECT FK_TGRUPO, FK_TASIGNATURA, FK_TUNIDAD INTO v_actual
-      FROM academico_test.TACTIVIDAD WHERE PK_TACTIVIDAD = p_pk_tactividad;
-    IF v_estudiantes > 0 THEN
-        RAISE EXCEPTION '% ya tiene resultados registrados para % estudiante(s) y no se puede modificar',
-            academico_test.fn_actividad_etiqueta(p_pk_tactividad), v_estudiantes
+    IF v_motivo IS NOT NULL THEN
+        RAISE EXCEPTION '%', v_motivo
             USING ERRCODE = '23503',
                   HINT = format('Para hacer cambios, cree un registro nuevo de %s',
-                                lower(academico_test.fn_actividad_rotulo(v_actual.FK_TGRUPO, v_actual.FK_TASIGNATURA, v_actual.FK_TUNIDAD)));
-    END IF;
-    SELECT academico_test.fn_actividad_etiqueta(a.PK_TACTIVIDAD) INTO v_refuerzo
-      FROM academico_test.TACTIVIDAD_RECUPERACION r
-      JOIN academico_test.TACTIVIDAD a ON a.PK_TACTIVIDAD = r.FK_TACTIVIDAD AND a.ACTIVE = TRUE
-     WHERE r.FK_TACTIVIDAD_RECUPERAR = p_pk_tactividad AND r.ACTIVE = TRUE
-     LIMIT 1;
-    IF FOUND THEN
-        RAISE EXCEPTION '% es la base de la recuperación % y no se puede modificar',
-            academico_test.fn_actividad_etiqueta(p_pk_tactividad), v_refuerzo
-            USING ERRCODE = '23503',
-                  HINT = format('Para hacer cambios, cree un registro nuevo de %s',
-                                lower(academico_test.fn_actividad_rotulo(v_actual.FK_TGRUPO, v_actual.FK_TASIGNATURA, v_actual.FK_TUNIDAD)));
+                                (SELECT lower(academico_test.fn_actividad_rotulo(FK_TGRUPO, FK_TASIGNATURA, FK_TUNIDAD))
+                                   FROM academico_test.TACTIVIDAD WHERE PK_TACTIVIDAD = p_pk_tactividad));
     END IF;
 END;
 $$;
@@ -1856,7 +1902,9 @@ COMMENT ON FUNCTION academico_test.fn_actividad_validar_coherencia(VARCHAR, BIGI
 COMMENT ON FUNCTION academico_test.fn_actividad_assert_propietario(BIGINT, BIGINT)
     IS 'Reglas 25/54: 42501 si un docente de aula intenta modificar o eliminar una actividad que no creó. Coordinación, rectoría y super admin pasan. Lo usan los wrappers de escritura de actividad.';
 COMMENT ON FUNCTION academico_test.fn_actividad_validar_editable(BIGINT)
-    IS 'Regla 37: 23503 si la actividad ya tiene resultados capturados o es la original de una recuperación activa. La usan los _interno que cambian la definición de la actividad.';
+    IS 'Regla 37: 23503 si la actividad ya tiene resultados capturados o es la original de una recuperación activa. La usan los wrappers de escritura de la actividad y la vinculación a unidad; el motivo sale de fn_actividad_motivo_no_editable.';
+COMMENT ON FUNCTION academico_test.fn_actividad_motivo_no_editable(BIGINT)
+    IS 'Regla 37: NULL si la actividad se puede editar; si no, el motivo para el usuario (tiene calificaciones u observaciones, o es base de una recuperación). La usan fn_actividad_validar_editable y el detalle GET /planeador/actividades/:ID (columnas editable / motivo_no_editable).';
 COMMENT ON FUNCTION academico_test.fn_actividad_lv_assert(BIGINT, VARCHAR, VARCHAR)
     IS 'Valida una FK a TLISTA_VALOR: NULL pasa, si viene debe existir, estar activa y ser de p_categoria (si la categoría está sembrada). Mensaje con el nombre del campo, nunca la pk; delega en fn_actividad_validar_catalogo. La usan las definiciones de instrumento, recuperación y calificación.';
 COMMENT ON FUNCTION academico_test.fn_actividad_validar_periodo_evaluacion_unico(BIGINT, BIGINT, DATE, DATE, BIGINT, VARCHAR)
