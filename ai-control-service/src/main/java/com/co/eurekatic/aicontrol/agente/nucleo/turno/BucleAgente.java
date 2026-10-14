@@ -57,7 +57,9 @@ public class BucleAgente {
             + "Confirma o cancela la anterior y luego pide la siguiente.";
     static final String MENSAJE_TIEMPO = "Esto está tomando más de lo esperado. "
             + "Prueba a pedirlo en pasos más concretos.";
-    static final String AVISO_INTERNO = " Este aviso es interno y la persona no lo ve: no lo menciones, no le "
+    static final String NO_OFRECIDA = "Control del sistema: pediste %s, que no esta disponible en este turno. Usa solo "
+            + "las herramientas que se te ofrecen ahora; si con ellas no puedes, dile a la persona que dato o paso falta.";
+    static final String AVISO_INTERNO =" Este aviso es interno y la persona no lo ve: no lo menciones, no le "
             + "respondas ni digas que tiene razon; contesta directamente a lo que la persona pidio.";
 
     private final ChatClient razonador;
@@ -136,9 +138,18 @@ public class BucleAgente {
             List<String> nombres = nombres(respuesta);
             if (!ofrecidas.containsAll(nombres)) {
                 // El modelo pidio una herramienta que no se le ofrecio en este turno: no se ejecuta nada.
+                List<String> ajenas = nombres.stream().filter(n -> !ofrecidas.contains(n)).toList();
                 log.warn("Herramienta no ofrecida pedida por el modelo: conversacion={} pedidas={}",
-                        entrada.conversacionId(), nombres.stream().filter(n -> !ofrecidas.contains(n)).toList());
-                return new ResultadoBucle.Final(new RespuestaAgente.Respuesta(MENSAJE_VACIO), uso, modelo);
+                        entrada.conversacionId(), ajenas);
+                if (objetado) {
+                    return new ResultadoBucle.Final(new RespuestaAgente.Respuesta(MENSAJE_VACIO), uso, modelo);
+                }
+                // Se le dice una vez, en vez de cortar: suele ser una herramienta de un turno anterior.
+                objetado = true;
+                mensajes = conObjecion(mensajes, AssistantMessage.builder()
+                        .content(Optional.ofNullable(respuesta.getResult().getOutput().getText()).orElse(""))
+                        .build(), NO_OFRECIDA.formatted(String.join(", ", ajenas)));
+                continue;
             }
             if (!contador.cabe(nombres)) {
                 log.warn("Turno cortado por limite de herramientas: conversacion={} llamadas={}",
@@ -173,8 +184,13 @@ public class BucleAgente {
     }
 
     private static List<Message> conObjecion(List<Message> mensajes, ChatResponse respuesta, String objecion) {
+        return conObjecion(mensajes, respuesta.getResult().getOutput(), objecion);
+    }
+
+    /** Sin llamadas a herramientas en el mensaje del modelo: una llamada sin su resultado la rechaza el proveedor. */
+    private static List<Message> conObjecion(List<Message> mensajes, AssistantMessage delModelo, String objecion) {
         List<Message> con = new ArrayList<>(mensajes);
-        con.add(respuesta.getResult().getOutput());
+        con.add(delModelo);
         // Si no se le dice, el modelo le contesta a la persona como si el aviso fuera suyo ("Tienes razon, no llame...").
         con.add(new UserMessage(objecion + AVISO_INTERNO));
         return List.copyOf(con);

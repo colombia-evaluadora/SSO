@@ -161,6 +161,28 @@ class BucleAgenteTest {
     }
 
     @Test
+    void unaHerramientaNoOfrecidaSeAvisaUnaVezYElModeloPuedeResponder() {
+        when(llamada.chatResponse()).thenReturn(llamadas("calificar_estudiante_actividad"), texto("Te falta el peso."));
+
+        ResultadoBucle resultado = bucle.ejecutar(entrada(new TurnoContexto(List.of()), List.of()));
+
+        assertThat(resultado).isInstanceOfSatisfying(ResultadoBucle.Final.class,
+                f -> assertThat(f.respuesta().texto()).isEqualTo("Te falta el peso."));
+        assertThat(llamadasAlModelo).isEqualTo(2);
+    }
+
+    @Test
+    void siInsisteEnLaHerramientaNoOfrecidaElTurnoSeCorta() {
+        when(llamada.chatResponse()).thenReturn(llamadas("calificar_estudiante_actividad"),
+                llamadas("calificar_estudiante_actividad"));
+
+        ResultadoBucle resultado = bucle.ejecutar(entrada(new TurnoContexto(List.of()), List.of()));
+
+        assertThat(resultado).isInstanceOfSatisfying(ResultadoBucle.Final.class,
+                f -> assertThat(f.respuesta().texto()).isEqualTo(BucleAgente.MENSAJE_VACIO));
+    }
+
+    @Test
     void sinObjecionNoHayReintento() {
         when(llamada.chatResponse()).thenReturn(texto("Hay 3 sedes."));
         BucleAgente.Entrada base = entrada(new TurnoContexto(List.of()), List.of());
