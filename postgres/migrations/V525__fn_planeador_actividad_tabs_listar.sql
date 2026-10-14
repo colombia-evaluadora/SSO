@@ -286,11 +286,9 @@ SELECT
     'Las PESTANAS del listado de Actividades, una por Rotulo de Ejecucion (Regla 13) -- mismo mecanismo que GET /planeador/unidades/tabs pero agrupando por rotulo_ejecucion resuelto por PAR grado+asignatura (fn_unidad_referente_aplicable) en vez de por referente a nivel grado. Sin parametros: el usuario se resuelve del token. Cada fila trae rotulo_ejecucion/rotulo_ejecucion_plural (ya pluralizado en el servidor, no concatenar "s" en el cliente), pk_referente_curricular (informativo, el primero del grupo), grados/asignaturas ([{pk,nombre}]) y grado_asignatura_pares ([{grado,asignatura}], la fuente correcta para filtrar/acotar: dos asignaturas de un mismo grado pueden caer en pestañas distintas). 0 filas si el usuario no tiene ningun alcance. Gate VER sobre PLANEADOR.'
   FROM public.microservice m
  WHERE m.serviceid = 'eval-col'
-ON CONFLICT (uuid) DO UPDATE
-   SET query = EXCLUDED.query, param_types = EXCLUDED.param_types,
-       path_template = EXCLUDED.path_template, http_method = EXCLUDED.http_method,
-       execution_mode = EXCLUDED.execution_mode, microservice_id = EXCLUDED.microservice_id,
-       detail = EXCLUDED.detail;
+-- DO NOTHING: V553/V553.1 amplian esta fila (param_types, query); reaplicar
+-- V525 en una subida no debe devolverla a esta forma.
+ON CONFLICT (uuid) DO NOTHING;
 
 -- Mismos once roles que ya leen /planeador/unidades* y /planeador/actividades*.
 INSERT INTO public.role_query (role_id, query_id)
