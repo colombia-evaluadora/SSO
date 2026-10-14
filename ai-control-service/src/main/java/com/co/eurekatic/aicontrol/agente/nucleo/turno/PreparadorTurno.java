@@ -1,9 +1,13 @@
 package com.co.eurekatic.aicontrol.agente.nucleo.turno;
 
+import com.co.eurekatic.aicontrol.agente.catalogo.invocacion.InvocadorHerramientas;
 import com.co.eurekatic.aicontrol.agente.comun.ErrorAgente;
 import com.co.eurekatic.aicontrol.agente.comun.UsuarioAgente;
 import com.co.eurekatic.aicontrol.agente.nucleo.intencion.Intencion;
 import com.co.eurekatic.aicontrol.agente.nucleo.intencion.RouterIntencion;
+import com.co.eurekatic.aicontrol.agente.nucleo.intencion.TipoIntencion;
+import com.co.eurekatic.aicontrol.agente.persistencia.mensaje.MensajeStore;
+import com.co.eurekatic.aicontrol.agente.persistencia.mensaje.RolMensaje;
 import com.co.eurekatic.aicontrol.agente.nucleo.respuesta.RespuestaAgente;
 import com.co.eurekatic.aicontrol.agente.seguridad.entrada.Evaluacion;
 import com.co.eurekatic.aicontrol.agente.seguridad.entrada.EvaluadorEntrada;
@@ -13,6 +17,7 @@ import com.co.eurekatic.aicontrol.agente.seguridad.limite.LimitadorPorUsuario;
 import org.springframework.stereotype.Component;
 
 import java.time.Duration;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -31,14 +36,16 @@ public class PreparadorTurno {
     private final RouterIntencion router;
     private final SelectorHerramientas selector;
     private final EventoSeguridadService eventos;
+    private final MensajeStore mensajes;
 
     public PreparadorTurno(LimitadorPorUsuario limitador, EvaluadorEntrada evaluador, RouterIntencion router,
-                           SelectorHerramientas selector, EventoSeguridadService eventos) {
+                           SelectorHerramientas selector, EventoSeguridadService eventos, MensajeStore mensajes) {
         this.limitador = limitador;
         this.evaluador = evaluador;
         this.router = router;
         this.selector = selector;
         this.eventos = eventos;
+        this.mensajes = mensajes;
     }
 
     /**
@@ -53,10 +60,42 @@ public class PreparadorTurno {
             registrarBloqueo(conversacionId, usuario, evaluacion);
             return new Preparacion.Bloqueada(new RespuestaAgente.Bloqueado(MENSAJE_BLOQUEO));
         }
-        Intencion intencion = router.clasificar(evaluacion.textoNormalizado(), evaluacion.riesgo());
+        Intencion intencion = continuacion(conversacionId,
+                router.clasificar(evaluacion.textoNormalizado(), evaluacion.riesgo()));
         SelectorHerramientas.Seleccion seleccion = selector.para(usuario, intencion);
         return new Preparacion.Listo(evaluacion.textoNormalizado(), intencion,
                 seleccion.herramientas(), seleccion.callbacks(), seleccion.menus());
+    }
+
+    /**
+     * El router ve el mensaje suelto: "el peso es 100%" o "usa los valores por defecto" le parecen charla, y
+     * sin escrituras ofrecidas el modelo no puede rehacer la accion. Si el agente acaba de preguntar, de
+     * proponer o de fallar al confirmar, el mensaje sigue esa accion: pasa a ACCION con el mismo riesgo.
+     */
+    Intencion continuacion(UUID conversacionId, Intencion intencion) {
+        boolean consultaOCharla = intencion.tipo() == TipoIntencion.CONSULTA || intencion.tipo() == TipoIntencion.CHARLA;
+        if (!consultaOCharla || !sigueUnaAccion(conversacionId)) {
+            return intencion;
+        }
+        return new Intencion(TipoIntencion.ACCION, intencion.accion(), intencion.confianza(), intencion.riesgo());
+    }
+
+    private boolean sigueUnaAccion(UUID conversacionId) {
+        List<MensajeStore.Mensaje> finales = mensajes.listarFinales(conversacionId);
+        for (int i = finales.size() - 1; i >= 0; i--) {
+            MensajeStore.Mensaje m = finales.get(i);
+            if (m.rol() == RolMensaje.ASSISTANT) {
+                return esContinuable(m.tipoRespuesta(), m.contenido());
+            }
+        }
+        return false;
+    }
+
+    static boolean esContinuable(String tipoRespuesta, String contenido) {
+        if ("PREGUNTA".equals(tipoRespuesta) || "CONFIRMACION".equals(tipoRespuesta)) {
+            return true;
+        }
+        return contenido != null && InvocadorHerramientas.PREFIJOS_RECHAZO.stream().anyMatch(contenido::startsWith);
     }
 
     private void registrarBloqueo(UUID conversacionId, UsuarioAgente usuario, Evaluacion evaluacion) {

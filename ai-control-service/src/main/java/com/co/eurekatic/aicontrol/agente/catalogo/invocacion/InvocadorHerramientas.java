@@ -137,6 +137,11 @@ public class InvocadorHerramientas {
     }
 
     /** Frases para el modelo por cada codigo de error del query-service. */
+    /** Comienzos de {@link #traducir}: lo que la persona lee cuando el servicio rechaza una accion. */
+    public static final List<String> PREFIJOS_RECHAZO = List.of("Datos no validos para el servicio academico:",
+            "No tienes permiso para esta accion:", "No se encontro lo pedido:", "Conflicto con el estado actual:",
+            "El servicio academico rechazo la operacion");
+
     public static String traducir(RespuestaQuery.ErrorCliente error) {
         String motivo = error.mensaje();
         return switch (error.status()) {

@@ -6,6 +6,8 @@ import com.co.eurekatic.aicontrol.agente.nucleo.intencion.Intencion;
 import com.co.eurekatic.aicontrol.agente.nucleo.intencion.RouterIntencion;
 import com.co.eurekatic.aicontrol.agente.nucleo.intencion.TipoIntencion;
 import com.co.eurekatic.aicontrol.agente.nucleo.respuesta.RespuestaAgente;
+import com.co.eurekatic.aicontrol.agente.persistencia.mensaje.MensajeStore;
+import com.co.eurekatic.aicontrol.agente.persistencia.mensaje.RolMensaje;
 import com.co.eurekatic.aicontrol.agente.seguridad.CapaSeguridad;
 import com.co.eurekatic.aicontrol.agente.seguridad.Hallazgo;
 import com.co.eurekatic.aicontrol.agente.seguridad.Motivo;
@@ -42,7 +44,38 @@ class PreparadorTurnoTest {
     private final RouterIntencion router = mock(RouterIntencion.class);
     private final SelectorHerramientas selector = mock(SelectorHerramientas.class);
     private final EventoSeguridadService eventos = mock(EventoSeguridadService.class);
-    private final PreparadorTurno preparador = new PreparadorTurno(limitador, evaluador, router, selector, eventos);
+    private final MensajeStore mensajes = mock(MensajeStore.class);
+    private final PreparadorTurno preparador = new PreparadorTurno(limitador, evaluador, router, selector, eventos,
+            mensajes);
+
+    private static MensajeStore.Mensaje asistente(String tipo, String contenido) {
+        return new MensajeStore.Mensaje(1L, CONVERSACION, 2, RolMensaje.ASSISTANT, contenido, tipo, null, null);
+    }
+
+    @Test
+    void trasUnaPreguntaOUnaConfirmacionFallidaLaRespuestaSigueLaAccion() {
+        Intencion charla = new Intencion(TipoIntencion.CHARLA, "", 0.6, Riesgo.BAJO);
+
+        when(mensajes.listarFinales(CONVERSACION)).thenReturn(List.of(asistente("PREGUNTA", "Para continuar...")));
+        assertThat(preparador.continuacion(CONVERSACION, charla).tipo()).isEqualTo(TipoIntencion.ACCION);
+
+        when(mensajes.listarFinales(CONVERSACION)).thenReturn(List.of(asistente("RESPUESTA",
+                "Datos no validos para el servicio academico: indique el peso (%)")));
+        Intencion siguiente = preparador.continuacion(CONVERSACION, charla);
+        assertThat(siguiente.tipo()).isEqualTo(TipoIntencion.ACCION);
+        assertThat(siguiente.riesgo()).isEqualTo(Riesgo.BAJO);
+    }
+
+    @Test
+    void sinAccionEnCursoOConOtraIntencionNoCambiaNada() {
+        Intencion charla = new Intencion(TipoIntencion.CHARLA, "", 0.6, Riesgo.BAJO);
+        when(mensajes.listarFinales(CONVERSACION)).thenReturn(List.of(asistente("RESPUESTA", "Hay 3 sedes.")));
+        assertThat(preparador.continuacion(CONVERSACION, charla).tipo()).isEqualTo(TipoIntencion.CHARLA);
+
+        when(mensajes.listarFinales(CONVERSACION)).thenReturn(List.of(asistente("PREGUNTA", "¿Cuál?")));
+        Intencion analitica = new Intencion(TipoIntencion.ANALITICA, "", 0.9, Riesgo.BAJO);
+        assertThat(preparador.continuacion(CONVERSACION, analitica)).isSameAs(analitica);
+    }
 
     @Test
     void superarElCupoPorMinutoLanzaLimite() {
