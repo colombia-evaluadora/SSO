@@ -15,6 +15,7 @@ import org.springframework.http.HttpMethod;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -47,7 +48,7 @@ class InvocadorHerramientasTest {
         registro = new RegistroIdsEnMemoria();
         almacen = mock(ToolInvocacionStore.class);
         invocador = new InvocadorHerramientas(qs, new VerificadorIds(registro), registro, almacen,
-                PropiedadesAgenteFixture.propiedades());
+                PropiedadesAgenteFixture.propiedades(), new CompletadorSesion(userId -> Optional.empty()));
         propuestas = new ArrayList<>();
     }
 

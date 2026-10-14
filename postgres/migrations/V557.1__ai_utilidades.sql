@@ -1,10 +1,12 @@
 -- V557.1 -- Utilidades del agente: catalogo de herramientas y menus del usuario
 -- Que hace: ai.fn_herramienta_catalogo_interno devuelve cada herramienta activa con su
 --   ruta de eval-col (uuid y microservicio), restricciones y roles. ai.fn_menus_usuario_interno
---   devuelve los permisos por menu del usuario reutilizando academico_test.fn_usuario_permisos_menu.
+--   devuelve los permisos por menu del usuario reutilizando academico_test.fn_usuario_permisos_menu;
+--   ai.fn_funcionario_usuario_interno, su funcionario (fn_funcionario_actual).
 -- Por que aqui: el servicio construye sus tools desde la allowlist ai.herramienta; los menus
 --   se filtran en el agente solo como UX. Sin gate: la autoridad es el gate de cada ruta.
--- Depende de: V557 (ai.herramienta), V303 (fn_usuario_permisos_menu), V299 (fn_get_academico_usuario_id).
+-- Depende de: V557 (ai.herramienta), V303 (fn_usuario_permisos_menu), V299 (fn_get_academico_usuario_id),
+--   V224 (fn_funcionario_actual).
 
 CREATE OR REPLACE FUNCTION ai.fn_herramienta_catalogo_interno()
 RETURNS TABLE (
@@ -83,6 +85,17 @@ $$;
 
 COMMENT ON FUNCTION ai.fn_menus_usuario_interno(BIGINT) IS
     'INTERNO: permisos por menu (ver, crear, editar, eliminar) del usuario public.users p_user_id, reutilizando academico_test.fn_usuario_permisos_menu. El filtro por menus del agente es UX; la autoridad es el gate de cada ruta.';
+
+CREATE OR REPLACE FUNCTION ai.fn_funcionario_usuario_interno(p_user_id BIGINT)
+RETURNS BIGINT
+LANGUAGE sql
+STABLE
+AS $$
+    SELECT academico_test.fn_funcionario_actual(public.fn_get_academico_usuario_id(p_user_id));
+$$;
+
+COMMENT ON FUNCTION ai.fn_funcionario_usuario_interno(BIGINT) IS
+    'INTERNO: pk_tfuncionario del usuario public.users p_user_id (NULL si no es funcionario), reutilizando academico_test.fn_funcionario_actual. El agente lo pone en los parametros de_sesion que el modelo no manda; el gate de la ruta sigue decidiendo.';
 
 CREATE OR REPLACE FUNCTION ai.fn_pantallas_interno()
 RETURNS TABLE (

@@ -83,7 +83,7 @@ SELECT DISTINCT ON (v.codigo)
      TRUE),
     ('crear_unidad_planeador', 'ESCRITURA', 'POST', '/planeador/unidades', 'PLANEADOR',
      'Crea una unidad del planeador para una asignatura y un grado del docente. Requiere confirmacion.',
-     '{"BODY.NOMBRE":{"descripcion":"Nombre de la unidad","resuelve_con":null,"inferible":false},"BODY.DESCRIPCION":{"descripcion":"Descripcion","resuelve_con":null,"inferible":false},"BODY.OBJETIVOS":{"descripcion":"Objetivos","resuelve_con":null,"inferible":false},"BODY.PONDERACION":{"descripcion":"Ponderacion (0-100)","resuelve_con":null,"inferible":false},"BODY.FK_TASIGNATURA":{"descripcion":"Asignatura","resuelve_con":"docentes_grado_asignatura_listar","inferible":true},"BODY.FK_TGRADO":{"descripcion":"Grado","resuelve_con":"docentes_grado_asignatura_listar","inferible":true},"BODY.FK_TFUNCIONARIO":{"descripcion":"Docente responsable","resuelve_con":"funcionarios_listar","inferible":true},"BODY.FK_REFERENTE_CURRICULAR":{"descripcion":"Referente curricular","resuelve_con":"referentes_listar","inferible":true},"BODY.FK_TLV_CALCULO_DEFINITIVA":{"descripcion":"Calculo de la definitiva (catalogo)","resuelve_con":"catalogo_valores","inferible":true},"BODY.CONTENIDOS":{"descripcion":"Contenidos de la unidad","resuelve_con":null,"inferible":false},"BODY.CONTENIDOS_TITULOS":{"descripcion":"Titulos de los contenidos","resuelve_con":null,"inferible":false},"BODY.ENUNCIADOS":{"descripcion":"Enunciados del referente vinculados","resuelve_con":"referente_enunciados_listar","inferible":true}}',
+     '{"BODY.NOMBRE":{"descripcion":"Nombre de la unidad","resuelve_con":null,"inferible":false},"BODY.DESCRIPCION":{"descripcion":"Descripcion","resuelve_con":null,"inferible":false},"BODY.OBJETIVOS":{"descripcion":"Objetivos","resuelve_con":null,"inferible":false},"BODY.PONDERACION":{"descripcion":"Ponderacion (0-100)","resuelve_con":null,"inferible":false},"BODY.FK_TASIGNATURA":{"descripcion":"Asignatura","resuelve_con":"docentes_grado_asignatura_listar","inferible":true},"BODY.FK_TGRADO":{"descripcion":"Grado","resuelve_con":"docentes_grado_asignatura_listar","inferible":true},"BODY.FK_TFUNCIONARIO":{"descripcion":"Docente responsable; omitelo si es la propia persona: el sistema la pone","resuelve_con":"funcionarios_listar","inferible":true},"BODY.FK_REFERENTE_CURRICULAR":{"descripcion":"Referente curricular","resuelve_con":"referentes_listar","inferible":true},"BODY.FK_TLV_CALCULO_DEFINITIVA":{"descripcion":"Calculo de la definitiva (catalogo)","resuelve_con":"catalogo_valores","inferible":true},"BODY.CONTENIDOS":{"descripcion":"Contenidos de la unidad","resuelve_con":null,"inferible":false},"BODY.CONTENIDOS_TITULOS":{"descripcion":"Titulos de los contenidos","resuelve_con":null,"inferible":false},"BODY.ENUNCIADOS":{"descripcion":"Enunciados del referente vinculados","resuelve_con":"referente_enunciados_listar","inferible":true}}',
      TRUE),
     ('editar_unidad_planeador', 'ESCRITURA', 'PUT', '/planeador/unidades/:ID', 'PLANEADOR',
      'Edita una unidad del planeador: nombre, objetivos, ponderacion, referente y contenidos. No quita el referente ni la ponderacion. Requiere confirmacion.',
@@ -278,7 +278,6 @@ UPDATE ai.herramienta h
     ('crear_unidad_planeador', 'BODY.NOMBRE'),
     ('crear_unidad_planeador', 'BODY.FK_TASIGNATURA'),
     ('crear_unidad_planeador', 'BODY.FK_TGRADO'),
-    ('crear_unidad_planeador', 'BODY.FK_TFUNCIONARIO'),
     ('ponderar_actividad_unidad', 'BODY.PONDERACION'),
     ('crear_criterio_unidad', 'BODY.DESCRIPCION'),
     ('crear_criterio_unidad', 'BODY.NIVELES'),
@@ -289,6 +288,14 @@ UPDATE ai.herramienta h
   ) AS v (codigo, param)
           WHERE v.codigo = h.codigo AND h.parametros ? v.param), '{}'::jsonb)
  WHERE h.active = TRUE;
+
+-- de_sesion: fk que el agente pone desde la sesion si el modelo no la manda (ninguna
+-- lectura le da al docente su propio funcionario antes de tener unidades).
+UPDATE ai.herramienta h
+   SET parametros = jsonb_set(h.parametros, ARRAY[v.param],
+                              (h.parametros -> v.param) || jsonb_build_object('de_sesion', v.valor))
+  FROM (VALUES ('crear_unidad_planeador', 'BODY.FK_TFUNCIONARIO', 'FUNCIONARIO')) AS v (codigo, param, valor)
+ WHERE h.codigo = v.codigo AND h.active = TRUE AND h.parametros ? v.param;
 
 -- ---------------------------------------------------------------------------
 -- 2c. Escrituras que reemplazan un conjunto: la funcion destino da de baja lo que

@@ -6,6 +6,7 @@ import com.co.eurekatic.aicontrol.agente.catalogo.dominio.Restriccion;
 import com.co.eurekatic.aicontrol.agente.catalogo.dominio.RutaQuery;
 import com.co.eurekatic.aicontrol.agente.catalogo.dominio.TipoHerramienta;
 import com.co.eurekatic.aicontrol.agente.catalogo.dominio.TipoParametro;
+import com.co.eurekatic.aicontrol.agente.catalogo.dominio.ValorDeSesion;
 import org.springframework.http.HttpMethod;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
@@ -91,7 +92,8 @@ public final class MapeadorHerramienta {
                     textoOpcional(meta, "descripcion").orElse(""),
                     textoOpcional(meta, "resuelve_con"),
                     meta.path("inferible").asBoolean(false),
-                    obligatorio || meta.path("obligatorio").asBoolean(false) || clave.startsWith(SECCION_PARAM)));
+                    obligatorio || meta.path("obligatorio").asBoolean(false) || clave.startsWith(SECCION_PARAM),
+                    textoOpcional(meta, "de_sesion").map(ValorDeSesion::valueOf)));
         }
         return List.copyOf(resultado);
     }

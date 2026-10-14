@@ -13,6 +13,7 @@ import java.util.Optional;
  * @param resuelveCon herramienta de la que sale el valor, si lo hay
  * @param inferible   si el agente puede deducirlo sin preguntar
  * @param obligatorio si la ruta no funciona sin el valor
+ * @param deSesion    valor que el agente pone si el modelo no lo manda
  */
 public record ParametroDef(
         String clave,
@@ -20,7 +21,8 @@ public record ParametroDef(
         String descripcion,
         Optional<String> resuelveCon,
         boolean inferible,
-        boolean obligatorio) {
+        boolean obligatorio,
+        Optional<ValorDeSesion> deSesion) {
 
     /** Las herramientas de control no tienen ruta: sus parametros son texto descriptivo bajo la seccion CONTROL. */
     private static final String PATRON_CLAVE = "(PARAM|QUERY|BODY|CONTROL)(\\.[A-Z0-9_]+)+";
@@ -30,9 +32,15 @@ public record ParametroDef(
         Objects.requireNonNull(tipo, "tipo");
         Objects.requireNonNull(descripcion, "descripcion");
         Objects.requireNonNull(resuelveCon, "resuelveCon");
+        Objects.requireNonNull(deSesion, "deSesion");
         if (!clave.matches(PATRON_CLAVE)) {
             throw new IllegalArgumentException("clave de parametro no canonica: " + clave);
         }
+    }
+
+    public ParametroDef(String clave, TipoParametro tipo, String descripcion, Optional<String> resuelveCon,
+                        boolean inferible, boolean obligatorio) {
+        this(clave, tipo, descripcion, resuelveCon, inferible, obligatorio, Optional.empty());
     }
 
     /** Seccion de la clave: {@code PARAM}, {@code QUERY} o {@code BODY}. */

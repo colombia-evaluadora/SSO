@@ -37,16 +37,19 @@ public class InvocadorHerramientas {
     private final ToolInvocacionStore almacen;
     private final int maxFilas;
     private final FiltroColumnasSensibles filtro;
+    private final CompletadorSesion completador;
     private final ValidadorArgumentos validador = new ValidadorArgumentos();
 
     public InvocadorHerramientas(QueryServiceClient queryService, VerificadorIds verificadorIds,
-                                 RegistroIds registroIds, ToolInvocacionStore almacen, AgenteProperties props) {
+                                 RegistroIds registroIds, ToolInvocacionStore almacen, AgenteProperties props,
+                                 CompletadorSesion completador) {
         this.queryService = queryService;
         this.verificadorIds = verificadorIds;
         this.registroIds = registroIds;
         this.almacen = almacen;
         this.maxFilas = props.catalogo().maxFilas();
         this.filtro = new FiltroColumnasSensibles(props.catalogo().columnasSensibles());
+        this.completador = completador;
     }
 
     /**
@@ -73,7 +76,8 @@ public class InvocadorHerramientas {
                 if (!faltanIds.isEmpty()) {
                     yield Ejecucion.rechazada(new ResultadoHerramienta.ErrorParaModelo(String.join(" ", faltanIds)));
                 }
-                yield despachar(herramienta, valido.argumentos(), contexto);
+                yield despachar(herramienta, completador.completar(herramienta, valido.argumentos(), contexto.userId()),
+                        contexto);
             }
         };
     }
