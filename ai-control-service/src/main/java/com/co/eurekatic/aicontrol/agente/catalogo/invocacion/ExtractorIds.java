@@ -22,22 +22,33 @@ public final class ExtractorIds {
     private ExtractorIds() {
     }
 
+    /**
+     * Tambien dentro de objetos y listas anidados: hay listados paginados que llegan como
+     * {@code {"rows":[{"rows":[...], "total_count":...}]}} y los roles o sedes de una fila van en una lista.
+     */
     public static Set<String> extraer(List<Map<String, Object>> filas) {
         Set<String> ids = new LinkedHashSet<>();
-        for (Map<String, Object> fila : filas) {
-            for (Map.Entry<String, Object> celda : fila.entrySet()) {
+        filas.forEach(fila -> recorrer(fila, ids));
+        return Set.copyOf(ids);
+    }
+
+    private static void recorrer(Object valor, Set<String> ids) {
+        switch (valor) {
+            case Map<?, ?> mapa -> mapa.forEach((clave, celda) -> {
                 if (ids.size() >= MAX_POR_RESULTADO) {
-                    return Set.copyOf(ids);
+                    return;
                 }
-                if (esColumnaId(celda.getKey())) {
-                    String id = textoDe(celda.getValue());
-                    if (id != null) {
-                        ids.add(id);
-                    }
+                String id = esColumnaId(String.valueOf(clave)) ? textoDe(celda) : null;
+                if (id != null) {
+                    ids.add(id);
+                } else {
+                    recorrer(celda, ids);
                 }
+            });
+            case List<?> lista -> lista.forEach(elemento -> recorrer(elemento, ids));
+            case null, default -> {
             }
         }
-        return Set.copyOf(ids);
     }
 
     /**

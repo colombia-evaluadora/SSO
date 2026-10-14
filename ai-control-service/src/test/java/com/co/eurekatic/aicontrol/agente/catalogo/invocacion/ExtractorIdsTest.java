@@ -18,6 +18,17 @@ class ExtractorIdsTest {
     }
 
     @Test
+    void extraeLosIdsDeUnListadoPaginadoAnidado() {
+        // Forma de POST /establecimientos/funcionarios/query: la pagina va dentro de la unica fila.
+        List<Map<String, Object>> filas = List.of(Map.of("rows", List.of(
+                Map.of("pk_empleado", 990610, "primer_nombre", "x",
+                        "roles", List.of(Map.of("id", 14, "nombre", "DOCENTE")))),
+                "total_count", 1));
+
+        assertThat(ExtractorIds.extraer(filas)).containsExactlyInAnyOrder("990610", "14");
+    }
+
+    @Test
     void unEnteroLlegadoComoDecimalSeCanonicalizaComoEntero() {
         assertThat(ExtractorIds.textoDe(12.0)).isEqualTo("12");
         assertThat(ExtractorIds.textoDe(12.5)).isNull();
