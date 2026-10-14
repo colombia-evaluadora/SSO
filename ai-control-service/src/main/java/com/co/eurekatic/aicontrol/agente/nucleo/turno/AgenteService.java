@@ -15,6 +15,7 @@ import org.springframework.stereotype.Service;
 
 import java.util.Optional;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 /**
  * Procesa un mensaje del usuario de principio a fin: conversacion, preparacion (seguridad, intencion,
@@ -131,7 +132,8 @@ public class AgenteService {
                 conversacionId,
                 arranque.mensajeId(),
                 listo.textoNormalizado(),
-                prompts.mensajes(arranque.historial(), listo.textoNormalizado(), contextoUiJson),
+                prompts.mensajes(arranque.historial(),
+                        conEquivalencias(listo.textoNormalizado(), seudonimos), contextoUiJson),
                 listo.callbacks(),
                 contexto,
                 GuardaDeAfirmaciones::objecion));
@@ -158,6 +160,18 @@ public class AgenteService {
         return cerrar(conversacionId, usuario,
                 new RespuestaAgente.Confirmacion(TEXTO_USA_BOTON.formatted(pendiente.resumen()), pendiente),
                 Consumo.NINGUNO, seudonimos, traza);
+    }
+
+    /**
+     * El mensaje con los nombres que la persona escribio a medias y la conversacion ya conoce ("Luis Castro" es
+     * Persona_3): si el modelo no vuelve a consultar en este turno, sin esto no los relaciona con sus alias. Solo
+     * nombra lo que la persona ya escribio. La memoria guarda el mensaje sin la nota.
+     */
+    static String conEquivalencias(String texto, TablaSeudonimos seudonimos) {
+        String pares = seudonimos.equivalencias(texto).entrySet().stream()
+                .map(e -> "\"" + e.getValue() + "\" es " + e.getKey())
+                .collect(Collectors.joining("; "));
+        return pares.isEmpty() ? texto : texto + "\n(Nombres de este mensaje: " + pares + ".)";
     }
 
     /** Accion sin ninguna herramienta de escritura disponible: no hay nada que proponer. */

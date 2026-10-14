@@ -200,6 +200,15 @@ class AgenteServiceTest {
         assertThat(respuesta.texto()).isEqualTo(GuardaDeAfirmaciones.SIN_ACCION);
     }
 
+    @Test
+    void elMensajeAlModeloNombraLosAliasDeLosNombresEscritosAMedias() {
+        TablaSeudonimos tabla = TablaSeudonimos.desde(Map.of("Persona_3", "LUIS FELIPE CASTRO DIAZ"));
+
+        assertThat(AgenteService.conEquivalencias("Reasigna a Luis Castro", tabla))
+                .startsWith("Reasigna a Luis Castro\n").containsIgnoringCase("\"Luis Castro\" es Persona_3");
+        assertThat(AgenteService.conEquivalencias("Lista mis grupos", tabla)).isEqualTo("Lista mis grupos");
+    }
+
     private static Preparacion.Listo listo(TipoIntencion tipo, List<HerramientaDef> herramientas) {
         return new Preparacion.Listo("texto", new Intencion(tipo, "", 0.9, Riesgo.BAJO), herramientas, List.of(), Map.of());
     }
