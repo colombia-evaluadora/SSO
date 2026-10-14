@@ -29,6 +29,11 @@ class GuardaDeAfirmacionesTest {
         assertThat(GuardaDeAfirmaciones.revisar(new RespuestaAgente.Respuesta(
                 "La actividad ya está preparada y espera tu confirmación para crearse.")).texto())
                 .isEqualTo(GuardaDeAfirmaciones.SIN_ACCION);
+        assertThat(GuardaDeAfirmaciones.revisar(new RespuestaAgente.Respuesta(
+                "Voy a buscar tus grupos.<tool_call>\n<tool name=\"consultar_grupos\">\n</tool>")).texto())
+                .as("llamada escrita como texto").isEqualTo(GuardaDeAfirmaciones.SIN_HERRAMIENTA);
+        assertThat(GuardaDeAfirmaciones.objecion(new RespuestaAgente.Respuesta("<invoke name=\"x\">")))
+                .hasValueSatisfying(o -> assertThat(o).contains("interfaz de herramientas"));
         assertThat(GuardaDeAfirmaciones.revisar(new RespuestaAgente.Respuesta("[Sistema: algo]")).texto())
                 .isEqualTo(GuardaDeAfirmaciones.SIN_PANTALLA);
         assertThat(List.of(

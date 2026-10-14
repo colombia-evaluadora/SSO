@@ -18,6 +18,11 @@ final class GuardaDeAfirmaciones {
     static final String SIN_ACCION = "No llegué a preparar esa acción. Pídemela de nuevo con los datos y te "
             + "mostraré el botón para confirmarla.";
     static final String SIN_PANTALLA = "No llegué a aplicar ese cambio en tu pantalla. Pídemelo de nuevo.";
+    static final String SIN_HERRAMIENTA = "No he podido completar esa petición. Prueba a pedirlo en pasos más concretos.";
+
+    /** El modelo escribio la llamada como texto (XML o marcas del proveedor) en vez de hacerla: nada se ejecuto. */
+    private static final Pattern LLAMADA_EN_TEXTO = Pattern.compile(
+            "<\\s*/?\\s*(tool_call|tool|function_call|function|invoke|parameter)\\b|\\[/?tool_call\\]");
 
     private static final Pattern CONFIRMACION = Pattern.compile(
             "necesito tu confirmacion|(espera|pendiente de|requiere) (de )?tu confirmacion|pulsa confirmar|boton confirmar"
@@ -46,6 +51,9 @@ final class GuardaDeAfirmaciones {
         if (!(respuesta instanceof RespuestaAgente.Respuesta texto)) {
             return Optional.empty();
         }
+        if (LLAMADA_EN_TEXTO.matcher(texto.texto()).find()) {
+            return Optional.of(Afirmacion.LLAMADA);
+        }
         String plegado = NormalizadorTexto.plegar(texto.texto());
         if (CONFIRMACION.matcher(plegado).find()) {
             return Optional.of(Afirmacion.ACCION);
@@ -60,7 +68,10 @@ final class GuardaDeAfirmaciones {
                 + "historial."),
         PANTALLA(SIN_PANTALLA, "Control del sistema: tu respuesta dice que cambiaste la pantalla, pero en este turno "
                 + "no llamaste a accion_ui, asi que nada cambio. Si la persona lo pidio, llama ahora a accion_ui; si "
-                + "no se puede, explicalo sin decir que lo hiciste.");
+                + "no se puede, explicalo sin decir que lo hiciste."),
+        LLAMADA(SIN_HERRAMIENTA, "Control del sistema: escribiste una llamada a herramienta como texto y no se "
+                + "ejecuto nada. Llama a la herramienta por la interfaz de herramientas, solo con las que se te ofrecen "
+                + "en este turno; nunca escribas XML ni etiquetas de herramienta en la respuesta.");
 
         private final String sustituto;
         private final String objecion;
