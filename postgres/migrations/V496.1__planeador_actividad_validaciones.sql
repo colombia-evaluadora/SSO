@@ -520,6 +520,50 @@ BEGIN
 END;
 $$;
 
+-- Periodo cerrado (fn_periodo_evaluacion_cerrado, V535): no se planea en un
+-- periodo de evaluación que ya cerró. Se miran los periodos que solapan la
+-- ventana (sin cierre, el día de inicio): es el mismo periodo al que se imputa
+-- la nota. p_omitir: el wrapper pasa fn_es_super_admin, como en informes.
+CREATE OR REPLACE FUNCTION academico_test.fn_actividad_validar_periodo_abierto(
+    p_fk_tgrupo    BIGINT,
+    p_fk_tunidad   BIGINT,
+    p_fecha_inicio DATE,
+    p_fecha_cierre DATE,
+    p_verbo        VARCHAR DEFAULT 'crear',
+    p_omitir       BOOLEAN DEFAULT FALSE
+)
+RETURNS VOID
+LANGUAGE plpgsql
+STABLE
+AS $$
+DECLARE
+    v_cerrado RECORD;
+BEGIN
+    IF COALESCE(p_omitir, FALSE) OR p_fecha_inicio IS NULL THEN
+        RETURN;
+    END IF;
+    SELECT pe.NOMBRE, pe.FECHA_FIN INTO v_cerrado
+      FROM academico_test.TGRADO g
+      JOIN academico_test.TPERIODO_EVALUACION pe
+        ON pe.FK_TPERIODO_ACADEMICO = g.FK_TPERIODO_ACADEMICO AND pe.ACTIVE = TRUE
+     WHERE g.PK_TGRADO = academico_test.fn_actividad_grado(p_fk_tgrupo, p_fk_tunidad)
+       AND pe.FECHA_INICIO <= COALESCE(p_fecha_cierre, p_fecha_inicio)
+       AND pe.FECHA_FIN    >= p_fecha_inicio
+       AND academico_test.fn_periodo_evaluacion_cerrado(pe.PK_TPERIODO_EVALUACION)
+     ORDER BY pe.FECHA_INICIO
+     LIMIT 1;
+    IF FOUND THEN
+        RAISE EXCEPTION 'No puedes % actividades en un periodo de evaluación cerrado (%, cerró el %).',
+            p_verbo, v_cerrado.NOMBRE, to_char(v_cerrado.FECHA_FIN, 'DD/MM/YYYY')
+            USING ERRCODE = '23514',
+                  HINT    = 'Elige fechas de un periodo de evaluación abierto.';
+    END IF;
+END;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_actividad_validar_periodo_abierto(BIGINT, BIGINT, DATE, DATE, VARCHAR, BOOLEAN)
+    IS 'INTERNO: 23514 si la ventana [fecha_inicio, fecha_cierre] de la actividad cae en un periodo de evaluación cerrado (fn_periodo_evaluacion_cerrado: NO Calificable y fecha fin vencida) del periodo académico de su grado. p_verbo arma el mensaje (crear / mover); p_omitir TRUE la salta (super admin). La usan los wrappers fn_actividad_crear y fn_actividad_actualizar.';
+
 -- Regla 24: la unidad es "compatible" si es de la misma asignatura y del grado
 -- del grupo. Aplica al crear o editar con unidad, no solo al vincular.
 CREATE OR REPLACE FUNCTION academico_test.fn_actividad_validar_unidad_compatible(
