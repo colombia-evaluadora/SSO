@@ -1,13 +1,7 @@
--- Que hace: el menu de un rol pasa a ser un CONJUNTO; su orden es siempre el
---   del catalogo (tmenu.orden). GET /roles/:ROLEID/menus ordena como el arbol
---   de GET /menus, PUT /roles/:ROLEID/menus deja de escribir trol_menu.orden_rol
---   y se anula el que habia, para que fn_list_my_menus caiga a tmenu.orden.
--- Parte las 4 funciones de la pantalla roles-menus en wrapper (gate + etiqueta
---   de auditoria) y nucleo _interno sin permisos, con las validaciones como
---   fn_*_validar_* reutilizables. Contratos HTTP identicos (roles-permisos-dtos).
--- Depende de: V113 (tmenu.fk_tplan, trol_menu.orden_rol, fn_assert_superadmin),
---   V123/V198 (contrato JSONB), V99 (SOLO_LECTURA), V66 (fn_audit_declarar),
---   V215 (fn_get_academico_usuario_id).
+-- El menu de un rol es un CONJUNTO ordenado como el catalogo (tmenu.orden).
+-- Funciones de la pantalla roles-menus en wrapper (gate + auditoria) y nucleo
+-- _interno. Los permisos del rol se escriben y leen en TROL_MENU_PERMISO.
+-- Depende de: V113, V123/V198, V99 (SOLO_LECTURA y TROL_MENU_PERMISO), V66, V215.
 
 SET search_path TO academico_test, public;
 
@@ -119,11 +113,8 @@ COMMENT ON FUNCTION academico_test.fn_menus_validar_hermanos(BIGINT[])
 -- Nucleos
 -- ---------------------------------------------------------------------------
 
--- Solo sale un menu con toda su cadena de ancestros activa: se desciende desde
--- las raices vivas (V115; hay datos legacy de tres niveles). Orden del arbol:
--- por el camino (menuOrder, pk) desde la raiz, asi el grupo va por SU
--- menuOrder (antes por pk: reordenar grupos no se veia) y cada hijo bajo su
--- padre. menuOrder NULL va al final de sus hermanos.
+-- Solo menus con toda su cadena de ancestros activa, en orden de arbol
+-- (menuOrder, pk desde la raiz); menuOrder NULL va al final de sus hermanos.
 CREATE OR REPLACE FUNCTION academico_test.fn_menu_catalogo_listar_interno()
 RETURNS TABLE (
     pk_tmenu BIGINT,
@@ -171,28 +162,53 @@ $$;
 COMMENT ON FUNCTION academico_test.fn_menu_catalogo_listar_interno()
     IS 'INTERNO: catalogo activo de TMENU en orden de arbol (posicion 1..n). Unica fuente del orden: la usan GET /menus (fn_list_available_menus) y GET /roles/:ROLEID/menus (fn_rol_menus_listar_interno).';
 
+-- Cambia el RETURNS TABLE: se sueltan wrapper y nucleo antes de recrearlos.
+DROP FUNCTION IF EXISTS academico_test.fn_rol_menus_listar(BIGINT, BIGINT);
+DROP FUNCTION IF EXISTS academico_test.fn_rol_menus_listar_interno(BIGINT);
+
 CREATE OR REPLACE FUNCTION academico_test.fn_rol_menus_listar_interno(p_pk_trol BIGINT)
-RETURNS TABLE (id BIGINT, solo_lectura BOOLEAN)
+RETURNS TABLE (id BIGINT, solo_lectura BOOLEAN, guardar BOOLEAN, eliminar BOOLEAN)
 LANGUAGE sql
 STABLE
 SET search_path = academico_test, public
 AS $$
     SELECT c.pk_tmenu,
-           COALESCE(bool_or(tm.solo_lectura = 'SI'), FALSE)
+           NOT COALESCE(bool_or(p.crear OR p.editar OR p.eliminar), FALSE),
+           COALESCE(bool_or(p.crear OR p.editar), FALSE),
+           COALESCE(bool_or(p.eliminar), FALSE)
       FROM academico_test.fn_menu_catalogo_listar_interno() c
       JOIN academico_test.trol_menu tm
         ON tm.fk_tmenu = c.pk_tmenu
        AND tm.fk_trol  = p_pk_trol
        AND tm.active   = TRUE
+      LEFT JOIN academico_test.trol_menu_permiso p
+        ON p.fk_trol_menu = tm.pk_trol_menu
      GROUP BY c.pk_tmenu, c.posicion
      ORDER BY c.posicion;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_rol_menus_listar_interno(BIGINT)
-    IS 'INTERNO: menus activos asignados a un TROL con su marca de solo lectura, en el orden del catalogo (no hay orden propio del rol). Lo usa GET /roles/:ROLEID/menus.';
+    IS 'INTERNO: menus activos asignados a un TROL con sus permisos (TROL_MENU_PERMISO): guardar = crear o editar, eliminar, y solo_lectura = ninguno de los tres. Orden del catalogo. Lo usa GET /roles/:ROLEID/menus.';
 
--- Conjunto: el orden del array no significa nada y un id repetido cuenta una
--- vez. Repetido con soloLectura distinto es ambiguo y se rechaza.
+-- Payload a filas; sin guardar/eliminar se derivan de soloLectura (payload viejo).
+CREATE OR REPLACE FUNCTION academico_test.fn_rol_menus_items(p_menus JSONB)
+RETURNS TABLE (id BIGINT, guardar BOOLEAN, eliminar BOOLEAN)
+LANGUAGE sql
+IMMUTABLE
+AS $$
+    SELECT (e ->> 'id')::BIGINT,
+           COALESCE(NULLIF(e ->> 'guardar', '')::BOOLEAN, NOT s.solo),
+           COALESCE(NULLIF(e ->> 'eliminar', '')::BOOLEAN, NOT s.solo)
+      FROM jsonb_array_elements(p_menus) e
+     CROSS JOIN LATERAL (
+           SELECT COALESCE(NULLIF(e ->> 'soloLectura', '')::BOOLEAN, FALSE) AS solo
+     ) s;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_rol_menus_items(JSONB)
+    IS 'INTERNO: convierte p_menus=[{"id","guardar","eliminar"} | {"id","soloLectura"}] en filas (id, guardar, eliminar). Lo usa fn_rol_menus_asignar_interno.';
+
+-- Conjunto: un id repetido cuenta una vez; con permisos distintos se rechaza.
 CREATE OR REPLACE FUNCTION academico_test.fn_rol_menus_asignar_interno(
     p_pk_trol        BIGINT,
     p_menus          JSONB,
@@ -218,17 +234,17 @@ BEGIN
     END IF;
 
     IF EXISTS (
-        SELECT 1 FROM jsonb_array_elements(p_menus) e
-         GROUP BY (e ->> 'id')::BIGINT
-        HAVING COUNT(DISTINCT COALESCE(NULLIF(e ->> 'soloLectura', '')::BOOLEAN, FALSE)) > 1
+        SELECT 1 FROM academico_test.fn_rol_menus_items(p_menus) i
+         GROUP BY i.id
+        HAVING COUNT(DISTINCT (i.guardar, i.eliminar)) > 1
     ) THEN
-        RAISE EXCEPTION 'Un mismo menu viene repetido con soloLectura distinto'
+        RAISE EXCEPTION 'Un mismo menu viene repetido con permisos distintos'
             USING ERRCODE = '22023';
     END IF;
 
-    SELECT COALESCE(array_agg(DISTINCT (e ->> 'id')::BIGINT), ARRAY[]::BIGINT[])
+    SELECT COALESCE(array_agg(DISTINCT i.id), ARRAY[]::BIGINT[])
       INTO v_ids
-      FROM jsonb_array_elements(p_menus) e;
+      FROM academico_test.fn_rol_menus_items(p_menus) i;
 
     IF p_full_replace THEN
         PERFORM academico_test.fn_rol_menus_validar_jerarquia(v_ids);
@@ -243,12 +259,10 @@ BEGIN
     END IF;
 
     FOR v_item IN
-        SELECT DISTINCT ON ((e ->> 'id')::BIGINT)
-               (e ->> 'id')::BIGINT AS id,
-               CASE WHEN COALESCE(NULLIF(e ->> 'soloLectura', '')::BOOLEAN, FALSE)
-                    THEN 'SI' END AS solo_lectura
-          FROM jsonb_array_elements(p_menus) e
-         ORDER BY (e ->> 'id')::BIGINT
+        SELECT DISTINCT ON (i.id) i.id, i.guardar, i.eliminar,
+               CASE WHEN NOT (i.guardar OR i.eliminar) THEN 'SI' END AS solo_lectura
+          FROM academico_test.fn_rol_menus_items(p_menus) i
+         ORDER BY i.id
     LOOP
         pk_tmenu     := v_item.id;
         pk_trol_menu := NULL;
@@ -262,8 +276,7 @@ BEGIN
             CONTINUE;
         END IF;
 
-        -- Buscar-y-decidir y no ON CONFLICT: el unico de trol_menu es parcial
-        -- (WHERE active) y un par dado de baja no colisionaria (ver V123).
+        -- Sin ON CONFLICT: el unico de trol_menu es parcial (WHERE active).
         SELECT tm.pk_trol_menu INTO v_pk
           FROM academico_test.trol_menu tm
          WHERE tm.fk_trol = p_pk_trol AND tm.fk_tmenu = v_item.id
@@ -276,8 +289,7 @@ BEGIN
             RETURNING academico_test.trol_menu.pk_trol_menu INTO v_pk;
             status := 'inserted';
         ELSE
-            -- orden_rol := NULL: fn_list_my_menus ordena por
-            -- COALESCE(orden_rol, tmenu.orden); anulado manda el catalogo.
+            -- orden_rol NULL: manda el orden del catalogo.
             UPDATE academico_test.trol_menu tm
                SET active       = TRUE,
                    orden_rol    = NULL,
@@ -288,6 +300,16 @@ BEGIN
             status := 'reactivated';
         END IF;
 
+        -- Despues del trigger de SOLO_LECTURA: guardar y eliminar por separado.
+        UPDATE academico_test.trol_menu_permiso p
+           SET ver         = TRUE,
+               crear       = v_item.guardar,
+               editar      = v_item.guardar,
+               eliminar    = v_item.eliminar,
+               modified_by = TRIM(p_modificado_por),
+               modified_at = v_now
+         WHERE p.fk_trol_menu = v_pk;
+
         pk_trol_menu := v_pk;
         RETURN NEXT;
     END LOOP;
@@ -295,7 +317,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_rol_menus_asignar_interno(BIGINT, JSONB, VARCHAR, BOOLEAN)
-    IS 'INTERNO: asigna a un TROL el CONJUNTO p_menus=[{"id","soloLectura"}] (orden ignorado, repetidos cuentan una vez). p_full_replace=TRUE da de baja lo ausente y exige la jerarquia completa. No escribe orden_rol. Menu inexistente => fila status=menu_not_found_or_inactive sin abortar. Lo usa PUT /roles/:ROLEID/menus (fn_associate_menus_to_rol).';
+    IS 'INTERNO: asigna a un TROL el CONJUNTO p_menus=[{"id","guardar","eliminar"}] (o {"id","soloLectura"}, de donde se derivan) y escribe TROL_MENU_PERMISO: guardar = crear y editar. Orden ignorado, repetidos cuentan una vez. p_full_replace=TRUE da de baja lo ausente y exige la jerarquia completa. Menu inexistente => status=menu_not_found_or_inactive sin abortar. Lo usa PUT /roles/:ROLEID/menus (fn_associate_menus_to_rol).';
 
 CREATE OR REPLACE FUNCTION academico_test.fn_menus_reordenar_interno(
     p_items          JSONB,
@@ -342,10 +364,8 @@ COMMENT ON FUNCTION academico_test.fn_menus_reordenar_interno(JSONB, VARCHAR)
     IS 'INTERNO: fija tmenu.orden de un grupo de hermanos, p_items=[{"id","menuOrder"}]. 22023 lista invalida/repetidos/no hermanos, P0002 id inexistente. Lo usa PUT /menus/order (fn_reorder_menus).';
 
 -- ---------------------------------------------------------------------------
--- Wrappers (gate + etiqueta). Firmas de V113/V123 conservadas salvo
--- fn_reorder_menus, que recibe el correo del actor para modified_by (antes
--- guardaba CURRENT_USER, el rol de base de datos). Con DEFAULT, para que la
--- llamada de 2 argumentos que query-service tiene cacheada siga resolviendo.
+-- Wrappers (gate + etiqueta). fn_reorder_menus recibe el correo del actor,
+-- con DEFAULT para la llamada de 2 argumentos cacheada en query-service.
 -- ---------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION academico_test.fn_list_available_menus(p_user_pk BIGINT)
 RETURNS TABLE (
@@ -378,7 +398,7 @@ COMMENT ON FUNCTION academico_test.fn_list_available_menus(BIGINT)
     IS 'GET /menus: catalogo completo de menus (MenuNode[]) en orden de arbol, sin filtrar por rol. Gate fn_assert_superadmin; el catalogo lo arma fn_menu_catalogo_listar_interno.';
 
 CREATE OR REPLACE FUNCTION academico_test.fn_rol_menus_listar(p_user_pk BIGINT, p_pk_trol BIGINT)
-RETURNS TABLE (id BIGINT, solo_lectura BOOLEAN)
+RETURNS TABLE (id BIGINT, solo_lectura BOOLEAN, guardar BOOLEAN, eliminar BOOLEAN)
 LANGUAGE plpgsql
 STABLE
 SET search_path = academico_test, public
@@ -386,13 +406,13 @@ AS $$
 BEGIN
     PERFORM academico_test.fn_assert_superadmin(p_user_pk);
 
-    RETURN QUERY SELECT r.id, r.solo_lectura
+    RETURN QUERY SELECT r.id, r.solo_lectura, r.guardar, r.eliminar
                    FROM academico_test.fn_rol_menus_listar_interno(p_pk_trol) r;
 END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_rol_menus_listar(BIGINT, BIGINT)
-    IS 'GET /roles/:ROLEID/menus: menus asignados a un rol (RoleMenuAssignment {id, soloLectura}) en el orden del catalogo; [] si el rol no existe o no tiene menus. Gate fn_assert_superadmin. Nucleo fn_rol_menus_listar_interno.';
+    IS 'GET /roles/:ROLEID/menus: menus asignados a un rol (RoleMenuAssignment {id, soloLectura, guardar, eliminar}) en el orden del catalogo; [] si el rol no existe o no tiene menus. Gate fn_assert_superadmin. Nucleo fn_rol_menus_listar_interno.';
 
 CREATE OR REPLACE FUNCTION academico_test.fn_associate_menus_to_rol(
     p_user_pk      BIGINT,
@@ -471,8 +491,7 @@ COMMENT ON COLUMN academico_test.trol_menu.orden_rol
     IS 'Obsoleta: el orden del menu de un rol es el del catalogo (tmenu.orden). Ya no se escribe; se conserva porque fn_list_my_menus la lee con COALESCE(orden_rol, tmenu.orden).';
 
 -- ---------------------------------------------------------------------------
--- Filas de public.query. UPDATE por ruta (no por uuid) porque en los
--- servidores las filas no siempre tienen el uuid de V119/V126/V129.
+-- Filas de public.query por ruta: en los servidores no siempre tienen el uuid.
 -- ---------------------------------------------------------------------------
 UPDATE public.query q
    SET query  = $q$SELECT id, solo_lectura AS "soloLectura"
