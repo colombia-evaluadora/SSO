@@ -40,9 +40,11 @@ public class RegistradorTurno {
     public Inicio iniciar(UUID conversacionId, String textoNormalizado) {
         String clave = conversacionId.toString();
         List<Message> historial = memoria.get(clave);
+        // A la memoria antes que a la base: si Redis esta vacio, add la reconstruye desde ai.mensaje y, con el
+        // mensaje ya insertado, lo tendria dos veces.
+        memoria.add(clave, new UserMessage(PromptTurno.bloqueUsuario(textoNormalizado)));
         long mensajeId = mensajes.insertar(conversacionId,
                 new NuevoMensaje(RolMensaje.USER, textoNormalizado, null, null, null, null, null, null, null));
-        memoria.add(clave, new UserMessage(PromptTurno.bloqueUsuario(textoNormalizado)));
         return new Inicio(mensajeId, historial);
     }
 
