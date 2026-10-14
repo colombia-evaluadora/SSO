@@ -23,8 +23,9 @@ public class EsquemaDeAccionHerramienta implements ProveedorHerramientasControl 
     static final String NO_DISPONIBLE = "La accion pedida no esta disponible en este turno.";
 
     private static final String DESCRIPCION = """
-            Devuelve el JSON Schema de los argumentos de una accion disponible en este turno: campos,
-            obligatorios, formatos y de donde sale cada valor. Usala antes de pedir datos para una accion.
+            Devuelve el JSON Schema de los argumentos de una accion o consulta disponible en este turno (campos,
+            obligatorios, formatos y de donde sale cada valor) y el contrato de su endpoint: que exige, admite y
+            devuelve. Usala antes de pedir datos para una accion o si no sabes que filtros acepta una consulta.
             """;
 
     private static final String ESQUEMA = """
@@ -47,8 +48,13 @@ public class EsquemaDeAccionHerramienta implements ProveedorHerramientasControl 
             return "Indica el codigo de la accion.";
         }
         return turno.herramienta(texto.trim())
-                .map(EsquemaDeAccionHerramienta::esquema)
+                .map(EsquemaDeAccionHerramienta::conContrato)
                 .orElse(NO_DISPONIBLE);
+    }
+
+    /** Esquema y, si lo hay, el contrato del endpoint. */
+    static String conContrato(HerramientaDef herramienta) {
+        return esquema(herramienta) + herramienta.detalle().map(d -> "\nContrato: " + d).orElse("");
     }
 
     /** Esquema de una herramienta, con las restricciones de su ruta. */

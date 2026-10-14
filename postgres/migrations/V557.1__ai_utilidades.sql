@@ -8,6 +8,9 @@
 -- Depende de: V557 (ai.herramienta), V303 (fn_usuario_permisos_menu), V299 (fn_get_academico_usuario_id),
 --   V224 (fn_funcionario_actual).
 
+-- La columna detalle cambia el tipo de resultado: CREATE OR REPLACE no puede, hay que soltarla antes.
+DROP FUNCTION IF EXISTS ai.fn_herramienta_catalogo_interno();
+
 CREATE OR REPLACE FUNCTION ai.fn_herramienta_catalogo_interno()
 RETURNS TABLE (
     id                    BIGINT,
@@ -24,7 +27,8 @@ RETURNS TABLE (
     http_method           VARCHAR,
     param_types           JSONB,
     restricciones         JSONB,
-    roles                 TEXT[]
+    roles                 TEXT[],
+    detalle               TEXT
 )
 LANGUAGE sql
 STABLE
@@ -49,7 +53,8 @@ AS $$
            (SELECT array_agg(r.name::TEXT ORDER BY r.name)
               FROM public.role_query rq
               JOIN public.role r ON r.id_role = rq.role_id
-             WHERE rq.query_id = q.id_query)
+             WHERE rq.query_id = q.id_query),
+           q.detail::TEXT
       FROM ai.herramienta h
       LEFT JOIN public.microservice ms ON ms.serviceid = 'eval-col'
       LEFT JOIN public.query q
@@ -61,7 +66,7 @@ AS $$
 $$;
 
 COMMENT ON FUNCTION ai.fn_herramienta_catalogo_interno() IS
-    'INTERNO: catalogo de herramientas activas del agente para el arranque del servicio. Une ai.herramienta con public.query por uuid y eval-col; devuelve restricciones y roles. Sin gate: la autoridad es el gate de cada ruta. Lo lee solo ai-control-service.';
+    'INTERNO: catalogo de herramientas activas del agente para el arranque del servicio. Une ai.herramienta con public.query por uuid y eval-col; devuelve restricciones, roles y el detail del endpoint (contrato para el modelo). Sin gate: la autoridad es el gate de cada ruta. Lo lee solo ai-control-service.';
 
 -- p_user_id es public.users.id (claim uid del JWT). Sin usuario academico, el puente devuelve NULL.
 CREATE OR REPLACE FUNCTION ai.fn_menus_usuario_interno(p_user_id BIGINT)

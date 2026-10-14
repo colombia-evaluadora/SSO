@@ -22,11 +22,22 @@ public record FilaCatalogo(
         String paramTypesJson,
         String restriccionesJson,
         List<String> roles,
-        String avisoConfirmacion) {
+        String avisoConfirmacion,
+        String detalle) {
 
     public FilaCatalogo {
         roles = roles == null ? List.of() : List.copyOf(roles);
         avisoConfirmacion = avisoConfirmacion == null ? "" : avisoConfirmacion;
+        detalle = detalle == null ? "" : detalle;
+    }
+
+    /** Fila sin detail del endpoint. */
+    public FilaCatalogo(long id, String codigo, String tipo, String descripcionModelo, String parametrosJson,
+                        boolean requiereConfirmacion, String ejemplosJson, int version, String menuCodigo,
+                        String pathTemplate, String httpMethod, String paramTypesJson, String restriccionesJson,
+                        List<String> roles, String avisoConfirmacion) {
+        this(id, codigo, tipo, descripcionModelo, parametrosJson, requiereConfirmacion, ejemplosJson, version,
+                menuCodigo, pathTemplate, httpMethod, paramTypesJson, restriccionesJson, roles, avisoConfirmacion, "");
     }
 
     /** Fila sin aviso de confirmacion. */

@@ -66,7 +66,7 @@ public class FabricaToolCallbacks {
                         (Map<String, Object> argumentos, ToolContext contexto) ->
                                 ejecutar(herramienta, argumentos == null ? Map.<String, Object>of() : argumentos,
                                         contexto))
-                .description(herramienta.descripcion())
+                .description(herramienta.descripcionParaModelo())
                 .inputSchema(esquema)
                 // El texto va al modelo tal cual: el conversor por defecto lo envolveria en comillas JSON.
                 .toolCallResultConverter((resultado, tipo) -> String.valueOf(resultado))
