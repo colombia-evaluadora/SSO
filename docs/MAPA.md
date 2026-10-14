@@ -1199,7 +1199,7 @@ Las secciones son las categorias funcionales de `scripts/migration-analysis/anal
 | `academico_test.fn_fun_enlazar_establecimiento` | 3 | V51 | V93 |
 | `academico_test.fn_fun_filtros_permiso_actualizar` | 3 | V199 | — |
 | `academico_test.fn_fun_filtros_permiso_listar` | 2 | V199 | — |
-| `academico_test.fn_fun_permisos_actualizar` | 3 | V297 | V93, V111, V399 |
+| `academico_test.fn_fun_permisos_actualizar` | 3 | V297 | V93, V399 |
 | `academico_test.fn_funcionario_actual` | 1 | V224 | V251, V469.4, V481, V492.3, V496.1, V553 |
 | `academico_test.fn_funcionario_archivo_crear` | 5 | V443 | V445 |
 | `academico_test.fn_funcionario_archivo_eliminar` | 2 | V443 | V445 |
@@ -1233,7 +1233,7 @@ Las secciones son las categorias funcionales de `scripts/migration-analysis/anal
 | `academico_test.fn_sed_actualizar` | 11 | V414 | V95 |
 | `academico_test.fn_sed_buscar_por_pk` | 2 | V52 | V95 |
 | `academico_test.fn_sed_contar` | 3 | V116 | — |
-| `academico_test.fn_sed_crear` | 11 | V414 | V95, V111 |
+| `academico_test.fn_sed_crear` | 11 | V414 | V95 |
 | `academico_test.fn_sed_listar` | 7 | V116 | V67, V69, V95 |
 | `academico_test.fn_sed_listar_todos` | 1 | V52 | V95 |
 | `academico_test.fn_sed_soft_delete` | 2 | V354 | V95 |
@@ -1258,7 +1258,7 @@ Las secciones son las categorias funcionales de `scripts/migration-analysis/anal
 | Funcion | Params | Migracion dueña | La usan |
 |---|---|---|---|
 | `academico_test.fn_est_actualizar` | 34 | V399 | V64, V98 |
-| `academico_test.fn_est_buscar_por_nit` | 2 | V53 | V111, V354, V399, V414 |
+| `academico_test.fn_est_buscar_por_nit` | 2 | V53 | V354, V399, V414 |
 | `academico_test.fn_est_buscar_por_pk` | 2 | V53 | V98 |
 | `academico_test.fn_est_contar` | 5 | V116 | — |
 | `academico_test.fn_est_crear` | 32 | V414 | V64, V98 |
@@ -1268,7 +1268,7 @@ Las secciones son las categorias funcionales de `scripts/migration-analysis/anal
 | `academico_test.fn_est_soft_delete` | 2 | V354 | V98 |
 | `academico_test.fn_est_soft_delete_bulk` | 2 | V354 | V98 |
 | `academico_test.fn_grupo_establecimiento` | 1 | V40 | V138, V429, V496.20, V507, V542 |
-| `academico_test.fn_puede_afectar_establecimiento` | 1 | V302 | V111 |
+| `academico_test.fn_puede_afectar_establecimiento` | 1 | V302 | V414 |
 | `academico_test.fn_resolver_establecimiento_unico` | 1 | V112 | V51 |
 | `academico_test.fn_sed_por_establecimiento` | 2 | V52 | V95 |
 
