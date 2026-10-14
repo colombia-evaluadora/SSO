@@ -57,6 +57,8 @@ public class BucleAgente {
             + "Confirma o cancela la anterior y luego pide la siguiente.";
     static final String MENSAJE_TIEMPO = "Esto está tomando más de lo esperado. "
             + "Prueba a pedirlo en pasos más concretos.";
+    static final String AVISO_INTERNO = " Este aviso es interno y la persona no lo ve: no lo menciones, no le "
+            + "respondas ni digas que tiene razon; contesta directamente a lo que la persona pidio.";
 
     private final ChatClient razonador;
     private final ModeloInvoker invocador;
@@ -173,7 +175,8 @@ public class BucleAgente {
     private static List<Message> conObjecion(List<Message> mensajes, ChatResponse respuesta, String objecion) {
         List<Message> con = new ArrayList<>(mensajes);
         con.add(respuesta.getResult().getOutput());
-        con.add(new UserMessage(objecion));
+        // Si no se le dice, el modelo le contesta a la persona como si el aviso fuera suyo ("Tienes razon, no llame...").
+        con.add(new UserMessage(objecion + AVISO_INTERNO));
         return List.copyOf(con);
     }
 
