@@ -216,7 +216,7 @@
               "pm.test('200', () => pm.response.to.have.status(200));",
               "const rows = pm.response.json().rows;",
               "pm.test('rows es array', () => pm.expect(rows).to.be.an('array'));",
-              "if (rows.length) pm.test('fila { id, soloLectura }', () => { pm.expect(rows[0]).to.have.property('id'); pm.expect(rows[0].soloLectura).to.be.a('boolean'); });",
+              "if (rows.length) pm.test('fila { id, soloLectura, guardar, eliminar }', () => { pm.expect(rows[0]).to.have.property('id'); ['soloLectura', 'guardar', 'eliminar'].forEach((k) => pm.expect(rows[0][k]).to.be.a('boolean')); });",
               "const orden = JSON.parse(pm.collectionVariables.get('ordenCatalogo') || '[]');",
               "if (orden.length && rows.length) pm.test('en el orden del catálogo', () => {",
               "  const pos = rows.map(r => orden.indexOf(r.id));",
@@ -248,7 +248,7 @@
             "menus"
           ]
         },
-        "description": "Menús activos asignados al rol como `{ id, soloLectura }` (mismo elemento que el body del `PUT`), en el orden del catálogo de `GET /menus`. `[]` si el rol no existe o no tiene menús."
+        "description": "Menús activos asignados al rol como `{ id, soloLectura, guardar, eliminar }` (mismo elemento que el body del `PUT`), en el orden del catálogo de `GET /menus`. `guardar` = crear y editar; `soloLectura` = ni guardar ni eliminar. `[]` si el rol no existe o no tiene menús."
       }
     },
     {
@@ -297,6 +297,46 @@
           ]
         },
         "description": "Reemplazo completo de los menús del rol. `menuPadre` se concede completo; `menuHijo` en **solo lectura** (`trol_menu.SOLO_LECTURA = 'SI'`). Cualquier otro menú que el rol tuviera activo se desactiva.\n\nPara **degradar** `menuHijo` a concesión completa, repite el `PUT` con `{ \"id\": {{menuHijo}}, \"soloLectura\": false }` (o sin la clave).\n\nPara **vaciar** el menú del rol: `{ \"menus\": [] }`."
+      }
+    },
+    {
+      "name": "3 — GET total de funcionarios del rol",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200', () => pm.response.to.have.status(200));",
+              "const rows = pm.response.json().rows;",
+              "pm.test('una fila { total }', () => { pm.expect(rows).to.have.lengthOf(1); pm.expect(Number(rows[0].total)).to.be.at.least(0); });"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/eval-col/roles/{{roleId}}/funcionarios/total",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "eval-col",
+            "roles",
+            "{{roleId}}",
+            "funcionarios",
+            "total"
+          ]
+        },
+        "description": "Cuántos funcionarios tienen el rol: personas distintas con una asignación activa (TSEDE_USUARIO) del rol en cualquier sede, con la cuenta activa. Lo usa la confirmación de quitar permisos. Mismo gate y roles que `GET /roles/:ROLEID/menus`."
       }
     },
     {
