@@ -1337,7 +1337,7 @@ Las secciones son las categorias funcionales de `scripts/migration-analysis/anal
 | `academico_test.fn_listavalor_listar` | 3 | V103 | V104 |
 | `academico_test.fn_rango_supera` | 4 | V298 | V297 |
 | `academico_test.fn_rol_categoria_nivel` | 1 | V29 | V297, V298, V300, V489, V535, V553 |
-| `academico_test.fn_sincronizar_rol_publico` | 1 | V302 | V150, V300, V301, V399, V414 |
+| `academico_test.fn_sincronizar_rol_publico` | 1 | V302 | V111, V300, V301, V399, V414 |
 | `academico_test.fn_solicitud_aprobacion_assert_rol_aprobador` | 2 | V496.20 | V531.3 |
 | `academico_test.fn_solicitud_aprobacion_listar` | 4 | V496.20 | V496.21 |
 | `academico_test.fn_solicitud_aprobacion_roles_ee` | 0 | V496.18 | — |
