@@ -1,6 +1,9 @@
 package com.co.eurekatic.aicontrol.agente.catalogo.invocacion;
 
 import com.co.eurekatic.aicontrol.agente.catalogo.dominio.RutaQuery;
+import com.co.eurekatic.aicontrol.agente.catalogo.dominio.TipoParametro;
+import com.co.eurekatic.aicontrol.agente.catalogo.dominio.TipoSql;
+import tools.jackson.databind.json.JsonMapper;
 
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
@@ -21,6 +24,7 @@ import java.util.stream.Collectors;
 public final class ConstructorPeticion {
 
     private static final Pattern MARCADOR = Pattern.compile(":([A-Za-z_][A-Za-z0-9_]*)");
+    private static final JsonMapper JSON = JsonMapper.builder().build();
 
     private ConstructorPeticion() {
     }
@@ -30,7 +34,24 @@ public final class ConstructorPeticion {
                 ruta.metodo(),
                 sustituirPath(ruta.pathTemplate(), argumentos.pathParams()),
                 aTexto(argumentos.query()),
-                argumentos.body());
+                jsonbComoTexto(ruta, argumentos).body());
+    }
+
+    /**
+     * El ParamBinder del query-service espera un JSONB como texto JSON: con un objeto anidado el
+     * {@code CAST(:BODY.X AS JSONB)} recibe otra cosa y la funcion lo rechaza ("no tiene el formato esperado").
+     * Solo cambia la peticion: la accion pendiente y su huella siguen guardando el objeto.
+     */
+    static ArgumentosCanonicos jsonbComoTexto(RutaQuery ruta, ArgumentosCanonicos argumentos) {
+        Map<String, Object> planos = new LinkedHashMap<>();
+        argumentos.planos().forEach((clave, valor) -> {
+            String tipo = ruta.paramTypes().get(clave);
+            boolean jsonb = tipo != null && TipoParametro.de(tipo).base() == TipoSql.OBJETO;
+            planos.put(clave, jsonb && (valor instanceof Map<?, ?> || valor instanceof List<?>)
+                    ? JSON.writeValueAsString(valor)
+                    : valor);
+        });
+        return new ArgumentosCanonicos(planos);
     }
 
     static String sustituirPath(String plantilla, Map<String, Object> pathParams) {

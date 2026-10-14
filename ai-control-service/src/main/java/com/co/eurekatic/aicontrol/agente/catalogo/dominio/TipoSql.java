@@ -38,7 +38,8 @@ public enum TipoSql {
     TEXTO("string", null, List.of(), v -> v instanceof String,
             "TEXT", "VARCHAR", "CHAR(1)", "UUID", "STRING",
             "ESTADO_AI", "ESTADO_AC", "ESTADO_ACTIVO_INACTIVO", "NODO_CURRICULAR", "TITULACION_GRADO"),
-    OBJETO("object", null, List.of(), v -> v instanceof Map,
+    /** Un JSONB es objeto o arreglo: las adaptaciones, los materiales o los niveles son listas. */
+    OBJETO("object", null, List.of(), v -> v instanceof Map || v instanceof List,
             "JSONB", "JSON");
 
     private static final Map<String, TipoSql> POR_ALIAS = Arrays.stream(values())

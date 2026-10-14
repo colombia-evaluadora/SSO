@@ -35,6 +35,22 @@ class ConstructorPeticionTest {
     }
 
     @Test
+    void unJsonbViajaComoTextoJsonPorqueAsiLoEsperaElParamBinder() {
+        RutaQuery ruta = new RutaQuery(HttpMethod.PUT, "/planeador/actividades/:ID/instrumento",
+                Map.of("PARAM.ID", "BIGINT", "BODY.DEFINICION", "JSONB", "BODY.ADAPTACIONES", "JSONB",
+                        "BODY.TITULO", "VARCHAR"), Map.of());
+        ArgumentosCanonicos args = new ArgumentosCanonicos(Map.of("PARAM.ID", 654,
+                "BODY.DEFINICION", Map.of("tipoEscala", 279), "BODY.ADAPTACIONES", List.of(Map.of("tipo", 1)),
+                "BODY.TITULO", "Taller"));
+
+        Peticion p = ConstructorPeticion.construir(ruta, args);
+
+        assertThat(p.body()).containsEntry("DEFINICION", "{\"tipoEscala\":279}")
+                .containsEntry("ADAPTACIONES", "[{\"tipo\":1}]").containsEntry("TITULO", "Taller");
+        assertThat(args.planos().get("BODY.DEFINICION")).as("la accion guardada conserva el objeto").isInstanceOf(Map.class);
+    }
+
+    @Test
     void multivalorDeQueryViajaComoCsvYElBodySaleAnidado() {
         HerramientaDef h = CatalogoFixture.actividadesMiasDef();
         ArgumentosCanonicos args = new ArgumentosCanonicos(Map.of(
