@@ -1,7 +1,7 @@
 # Mapa del dominio
 
 **Generado** por `python scripts/migration-analysis mapa` — no editar a mano.
-Estado: 497 migraciones (V1–V559.3), 1349 funciones vivas, 49 endpoints vivos. Ultima generacion: 2026-10-14.
+Estado: 502 migraciones (V1–V559.3), 1357 funciones vivas, 49 endpoints vivos. Ultima generacion: 2026-10-14.
 
 Para una **funcion**, la migracion dueña es la que hay que editar: es su ultima escritura viva, no la que la creo.
 
@@ -22,16 +22,16 @@ Las secciones son las categorias funcionales de `scripts/migration-analysis/anal
 - [Planilla de calificación](#planilla) — 34 funcion(es), 0 endpoint(s)
 - [Calificación con instrumentos](#calificacion) — 119 funcion(es), 1 endpoint(s)
 - [Referentes curriculares](#referentes) — 68 funcion(es), 1 endpoint(s)
-- [Planeador (unidades, actividades)](#planeador) — 284 funcion(es), 15 endpoint(s)
+- [Planeador (unidades, actividades)](#planeador) — 286 funcion(es), 15 endpoint(s)
 - [Auditoría](#auditoria) — 12 funcion(es), 9 endpoint(s)
 - [Periodos académicos](#periodos) — 113 funcion(es), 0 endpoint(s)
-- [Funcionarios](#funcionarios) — 42 funcion(es), 2 endpoint(s)
+- [Funcionarios](#funcionarios) — 43 funcion(es), 2 endpoint(s)
 - [Sedes](#sedes) — 29 funcion(es), 0 endpoint(s)
 - [Establecimiento](#establecimiento) — 14 funcion(es), 0 endpoint(s)
-- [Menús](#menus) — 33 funcion(es), 1 endpoint(s)
+- [Menús](#menus) — 35 funcion(es), 1 endpoint(s)
 - [Permisos](#permisos) — 23 funcion(es), 0 endpoint(s)
 - [Estructura académica](#academico) — 171 funcion(es), 0 endpoint(s)
-- [Plataforma SSO](#plataforma) — 52 funcion(es), 0 endpoint(s)
+- [Plataforma SSO](#plataforma) — 55 funcion(es), 0 endpoint(s)
 
 <a id="pigse"></a>
 
@@ -264,7 +264,7 @@ Las secciones son las categorias funcionales de `scripts/migration-analysis/anal
 | `academico_test.fn_periodo_resolver_matricula` | 4 | V415 | V127 |
 | `academico_test.fn_periodo_validar_limite_matricula` | 3 | V37.1 | — |
 | `academico_test.fn_usu_autocompletar_por_documento` | 2 | V51 | V93 |
-| `academico_test.fn_usu_tiene_otros_vinculos` | 1 | V51 | V300 |
+| `academico_test.fn_usu_tiene_otros_vinculos` | 1 | V51 | V300, V556 |
 | `academico_test.fn_usuario_administrado_crear` | 10 | V30 | V219 |
 
 <a id="informes"></a>
@@ -795,6 +795,7 @@ Las secciones son las categorias funcionales de `scripts/migration-analysis/anal
 | `academico_test.fn_actividad_material_reemplazar` | 3 | V496.3 | V246, V496.4 |
 | `academico_test.fn_actividad_material_reemplazar_interno` | 3 | V496.2 | V496.3 |
 | `academico_test.fn_actividad_materiales_reutilizables_listar` | 8 | V429 | V246 |
+| `academico_test.fn_actividad_motivo_no_editable` | 1 | V496.1 | V553 |
 | `academico_test.fn_actividad_observar_estudiante` | 7 | V463 | V246, V496.8 |
 | `academico_test.fn_actividad_observar_estudiante_interno` | 7 | V496.6 | V463 |
 | `academico_test.fn_actividad_observar_grupal` | 7 | V463 | V246, V496.8 |
@@ -843,7 +844,7 @@ Las secciones son las categorias funcionales de `scripts/migration-analysis/anal
 | `academico_test.fn_actividad_validar_coherencia` | 17 | V496.1 | V496.2 |
 | `academico_test.fn_actividad_validar_criterio` | 5 | V496.1 | V496.2 |
 | `academico_test.fn_actividad_validar_cumplido` | 1 | V496.5 | V496.6 |
-| `academico_test.fn_actividad_validar_editable` | 1 | V496.1 | V496.3 |
+| `academico_test.fn_actividad_validar_editable` | 1 | V496.1 | V492.3, V496.3 |
 | `academico_test.fn_actividad_validar_eliminable` | 1 | V482 | V496.3 |
 | `academico_test.fn_actividad_validar_estado_coherente` | 1 | V496.5 | V496.6 |
 | `academico_test.fn_actividad_validar_estado_resultado_asignable` | 1 | V496.5 | V496.6 |
@@ -862,6 +863,7 @@ Las secciones son las categorias funcionales de `scripts/migration-analysis/anal
 | `academico_test.fn_actividad_validar_materiales` | 4 | V496.1 | V496.2 |
 | `academico_test.fn_actividad_validar_momento` | 1 | V496.5 | V496.6 |
 | `academico_test.fn_actividad_validar_otro_definicion` | 2 | V496.5 | — |
+| `academico_test.fn_actividad_validar_periodo_abierto` | 6 | V496.1 | V496.3 |
 | `academico_test.fn_actividad_validar_periodo_evaluacion_unico` | 6 | V496.1 | — |
 | `academico_test.fn_actividad_validar_peso_requerido` | 5 | V496.1 | — |
 | `academico_test.fn_actividad_validar_ponderacion` | 6 | V496.1 | — |
@@ -1032,7 +1034,7 @@ Las secciones son las categorias funcionales de `scripts/migration-analysis/anal
 |---|---|---|---|
 | `academico_test.fn_audit_ctx` | 0 | V184 | V88, V256, V261, V276, V283, V378 |
 | `academico_test.fn_audit_declarar` | 5 | V66 | V37.2, V37.3, V38.3, V39.3, V40.4, V41.4… |
-| `academico_test.fn_cdc_asegurar_auditoria` | 2 | V283 | V496.1, V496.18, V559 |
+| `academico_test.fn_cdc_asegurar_auditoria` | 2 | V283 | V496.1, V496.18, V557, V559 |
 | `academico_test.fn_cdc_evento_tabla_nueva` | 0 | V283 | — |
 | `academico_test.fn_grado_grupo_etiqueta` | 3 | V224 | V251, V452, V481, V490, V526, V528… |
 | `academico_test.fn_listavalor_actualizar` | 5 | V103 | V104 |
@@ -1112,7 +1114,7 @@ Las secciones son las categorias funcionales de `scripts/migration-analysis/anal
 | `academico_test.fn_periodo_eval_validar_unico` | 4 | V39.1 | — |
 | `academico_test.fn_periodo_evaluacion_admite_refuerzo` | 1 | V496.18 | — |
 | `academico_test.fn_periodo_evaluacion_calificable` | 1 | V496.18 | — |
-| `academico_test.fn_periodo_evaluacion_cerrado` | 1 | V535 | V537 |
+| `academico_test.fn_periodo_evaluacion_cerrado` | 1 | V535 | V496.1, V537 |
 | `academico_test.fn_periodo_evaluacion_listar` | 5 | V469.4 | V469.5 |
 | `academico_test.fn_periodo_evaluacion_listar_interno` | 2 | V469.3 | V469.4 |
 | `academico_test.fn_periodo_gate_escritura` | 5 | V29 | V37.3, V38.3, V39.3, V40.4, V41.4, V42.3… |
@@ -1200,7 +1202,7 @@ Las secciones son las categorias funcionales de `scripts/migration-analysis/anal
 | `academico_test.fn_fun_filtros_permiso_actualizar` | 3 | V199 | — |
 | `academico_test.fn_fun_filtros_permiso_listar` | 2 | V199 | — |
 | `academico_test.fn_fun_permisos_actualizar` | 3 | V297 | V93, V399 |
-| `academico_test.fn_funcionario_actual` | 1 | V224 | V251, V469.4, V481, V492.3, V496.1, V553 |
+| `academico_test.fn_funcionario_actual` | 1 | V224 | V251, V469.4, V481, V492.3, V496.1, V553… |
 | `academico_test.fn_funcionario_archivo_crear` | 5 | V443 | V445 |
 | `academico_test.fn_funcionario_archivo_eliminar` | 2 | V443 | V445 |
 | `academico_test.fn_funcionario_archivo_listar` | 2 | V443 | — |
@@ -1216,6 +1218,7 @@ Las secciones son las categorias funcionales de `scripts/migration-analysis/anal
 | `academico_test.fn_usu_empleados_contar` | 6 | V116 | — |
 | `academico_test.fn_usu_empleados_listar` | 10 | V116 | V67, V69, V93 |
 | `academico_test.fn_usu_empleados_listar_paginado` | 10 | V116 | V93 |
+| `ai.fn_funcionario_usuario_interno` | 1 | V557.1 | — |
 
 <a id="sedes"></a>
 
@@ -1223,7 +1226,7 @@ Las secciones son las categorias funcionales de `scripts/migration-analysis/anal
 
 | Funcion | Params | Migracion dueña | La usan |
 |---|---|---|---|
-| `academico_test.fn_es_super_admin` | 1 | V37 | V486, V490, V538 |
+| `academico_test.fn_es_super_admin` | 1 | V37 | V486, V490, V496.3, V538 |
 | `academico_test.fn_est_zona_sede_defecto` | 1 | V414 | — |
 | `academico_test.fn_est_zona_sede_permitida` | 2 | V414 | — |
 | `academico_test.fn_est_zonas_sede_permitidas` | 1 | V414 | V442 |
@@ -1315,8 +1318,10 @@ Las secciones son las categorias funcionales de `scripts/migration-analysis/anal
 | `academico_test.fn_upsert_menu` | 11 | V113 | V126 |
 | `academico_test.fn_upsert_menu_interno` | 10 | V113 | — |
 | `academico_test.fn_usu_actualizar` | 19 | V179 | — |
-| `academico_test.fn_usuario_permisos_menu` | 1 | V303 | V29, V127 |
+| `academico_test.fn_usuario_permisos_menu` | 1 | V303 | V29, V127, V557.1 |
 | `academico_test.fn_usuario_puede_en_menu` | 3 | V29 | V40, V43.3, V51, V52, V53, V116… |
+| `ai.fn_menus_usuario_interno` | 1 | V557.1 | — |
+| `ai.fn_pantallas_interno` | 0 | V557.1 | — |
 
 <a id="permisos"></a>
 
@@ -1339,7 +1344,7 @@ Las secciones son las categorias funcionales de `scripts/migration-analysis/anal
 | `academico_test.fn_listavalor_listar` | 3 | V103 | V104 |
 | `academico_test.fn_rango_supera` | 4 | V298 | V297 |
 | `academico_test.fn_rol_categoria_nivel` | 1 | V29 | V297, V298, V300, V489, V535, V553 |
-| `academico_test.fn_sincronizar_rol_publico` | 1 | V302 | V111, V300, V301, V399, V414 |
+| `academico_test.fn_sincronizar_rol_publico` | 1 | V302 | V51, V111, V300, V301, V399, V414… |
 | `academico_test.fn_solicitud_aprobacion_assert_rol_aprobador` | 2 | V496.20 | V531.3 |
 | `academico_test.fn_solicitud_aprobacion_listar` | 4 | V496.20 | V496.21 |
 | `academico_test.fn_solicitud_aprobacion_roles_ee` | 0 | V496.18 | — |
@@ -1580,6 +1585,9 @@ Las secciones son las categorias funcionales de `scripts/migration-analysis/anal
 | `academico_test.fn_usuario_otros_usos` | 3 | V162 | V160, V161 |
 | `academico_test.fn_usuario_peso_categoria` | 1 | V298 | — |
 | `academico_test.fn_usuario_rango_en_ee` | 4 | V298 | V297 |
+| `ai.fn_formularios_ui_interno` | 0 | V557.1 | — |
+| `ai.fn_herramienta_catalogo_interno` | 0 | V557.1 | — |
+| `ai.fn_herramienta_estructura_interno` | 1 | V557.1 | — |
 | `public.fn_get_academico_usuario_id` | 1 | V299 | V64, V67, V69, V75, V76, V77… |
 | `public.fn_microservice_validar_file_storage` | 0 | V147 | — |
 | `public.fn_sync_app_users` | 1 | V151 | V302 |

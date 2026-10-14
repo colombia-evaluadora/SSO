@@ -14,9 +14,10 @@
     <name>ai-control-service</name>
     <description>
         Endpoints de IA del ecosistema. Habla con un proveedor de inferencia
-        compatible con OpenAI (NVIDIA NIM por defecto) via Spring AI. No tiene
-        base de datos: lee y guarda a traves del query-service reenviando el
-        JWT del llamante, asi que hereda el gate PL/pgSQL de cada endpoint.
+        compatible con OpenAI (MiniMax por defecto) via Spring AI. Los datos
+        academicos se leen y guardan a traves del query-service reenviando el
+        JWT del llamante, asi que heredan el gate PL/pgSQL de cada endpoint.
+        Solo accede al schema ai (historial del agente).
     </description>
 
     <properties>
@@ -55,6 +56,18 @@
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-data-redis</artifactId>
+        </dependency>
+
+        <!-- Solo para el schema ai del agente (JdbcClient, pool propio). El
+             resto del servicio sigue leyendo por query-service. -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-jdbc</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.postgresql</groupId>
+            <artifactId>postgresql</artifactId>
+            <scope>runtime</scope>
         </dependency>
         <dependency>
             <groupId>org.springframework.cloud</groupId>

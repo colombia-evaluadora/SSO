@@ -449,7 +449,8 @@ services:
       # Timeouts del cliente HTTP del gateway (ver application.yml).
       GATEWAY_RESPONSE_TIMEOUT: ${GATEWAY_RESPONSE_TIMEOUT:-180s}
       GATEWAY_REPORTING_RESPONSE_TIMEOUT_MS: ${GATEWAY_REPORTING_RESPONSE_TIMEOUT_MS:-300000}
-      GATEWAY_AI_RESPONSE_TIMEOUT_MS: ${GATEWAY_AI_RESPONSE_TIMEOUT_MS:-125000}
+      # Debe quedar por encima del stream del agente (AI_AGENTE_STREAM_TIMEOUT, 165 s).
+      GATEWAY_AI_RESPONSE_TIMEOUT_MS: ${GATEWAY_AI_RESPONSE_TIMEOUT_MS:-170000}
       GATEWAY_FILE_RESPONSE_TIMEOUT_MS: ${GATEWAY_FILE_RESPONSE_TIMEOUT_MS:-300000}
       # Sólo verifica: la pareja pública de la JWT_PRIVATE_KEY
       # de auth-center. El gateway no puede emitir tokens.
@@ -1931,6 +1932,10 @@ services:
     mem_limit: 512m
     mem_reservation: 256m
     depends_on:
+      # Schema ai (V557*) migrado antes de arrancar: el pool del agente
+      # conecta a la base en cuanto se usa.
+      flyway:
+        condition: service_completed_successfully
       eurekaserver:
         condition: service_started
       # Cache de resumenes. El servicio tolera que falte (genera sin cache),
@@ -1940,6 +1945,19 @@ services:
     environment:
       EUREKA_URL: "http://eurekaserver:8761/eureka"
       AI_QUERY_SERVICE_URL: "${AI_QUERY_SERVICE_URL:-http://query-service-eval-col:8084}"
+      # Base del agente (schema ai). Mismas credenciales que el resto; AI_DB_*
+      # solo si el agente debe usar otra base o usuario. Sin AI_DB_USER ni
+      # AI_DB_PASSWORD vacios: un valor vacio no cae al default de Spring.
+      DB_URL: ${DB_URL}
+      DB_NAME: ${DB_NAME}
+      DB_USER: ${DB_USER}
+      DB_PASSWORD: ${DB_PASSWORD}
+      DB_SSLMODE: "${DB_SSLMODE:-require}"
+      DB_CHANNEL_BINDING: "${DB_CHANNEL_BINDING:-prefer}"
+      AI_DB_URL: "${AI_DB_URL:-jdbc:postgresql://${DB_URL}/${DB_NAME}?sslmode=${DB_SSLMODE:-require}&channel_binding=${DB_CHANNEL_BINDING:-prefer}}"
+      AI_DB_USER: "${AI_DB_USER:-${DB_USER}}"
+      AI_DB_PASSWORD: "${AI_DB_PASSWORD:-${DB_PASSWORD}}"
+      AI_DB_POOL_MAX: "${AI_DB_POOL_MAX:-4}"
       REDIS_HOST: redis
       REDIS_PORT: "6379"
       REDIS_PASSWORD: ${REDIS_PASSWORD:-}
@@ -1960,6 +1978,32 @@ services:
       AI_CACHE_TTL: "${AI_CACHE_TTL:-7d}"
       AI_RATE_LIMIT_PER_MIN: "${AI_RATE_LIMIT_PER_MIN:-35}"
       AI_MAX_CONCURRENT: "${AI_MAX_CONCURRENT:-4}"
+      # Agente: modelo rapido (router, redaccion) y razonador (planea y elige
+      # herramientas). Por defecto, el mismo AI_MODEL.
+      AI_MODEL_FAST: "${AI_MODEL_FAST:-${AI_MODEL:-MiniMax-M3}}"
+      AI_MODEL_REASONING: "${AI_MODEL_REASONING:-${AI_MODEL:-MiniMax-M3}}"
+      AI_MAX_TOKENS_FAST: "${AI_MAX_TOKENS_FAST:-1500}"
+      AI_MAX_TOKENS_REASONING: "${AI_MAX_TOKENS_REASONING:-6000}"
+      AI_EXTRA_BODY_FAST_JSON: '${AI_EXTRA_BODY_FAST_JSON:-{"thinking":{"type":"disabled"}}}'
+      AI_EXTRA_BODY_REASONING_JSON: '${AI_EXTRA_BODY_REASONING_JSON:-{"thinking":{"type":"adaptive"},"reasoning_split":true}}'
+      # Limites, memoria y catalogo del agente. Escalonados: turno (140 s) <
+      # stream (165 s) < gateway (GATEWAY_AI_RESPONSE_TIMEOUT_MS).
+      AI_AGENTE_MAX_TOOL_CALLS: "${AI_AGENTE_MAX_TOOL_CALLS:-15}"
+      AI_AGENTE_MAX_CALLS_POR_HERRAMIENTA: "${AI_AGENTE_MAX_CALLS_POR_HERRAMIENTA:-8}"
+      AI_AGENTE_RATE_LIMIT_USUARIO_POR_MIN: "${AI_AGENTE_RATE_LIMIT_USUARIO_POR_MIN:-20}"
+      AI_AGENTE_TEXTO_MAX_CARACTERES: "${AI_AGENTE_TEXTO_MAX_CARACTERES:-4000}"
+      AI_AGENTE_MAX_CONCURRENT_REASONING: "${AI_AGENTE_MAX_CONCURRENT_REASONING:-2}"
+      AI_AGENTE_CONTEXTO_MAX_CARACTERES: "${AI_AGENTE_CONTEXTO_MAX_CARACTERES:-20000}"
+      AI_AGENTE_DURACION_MAXIMA_TURNO: "${AI_AGENTE_DURACION_MAXIMA_TURNO:-PT140S}"
+      AI_AGENTE_STREAM_TIMEOUT: "${AI_AGENTE_STREAM_TIMEOUT:-PT165S}"
+      AI_AGENTE_MEMORIA_MAX_MENSAJES: "${AI_AGENTE_MEMORIA_MAX_MENSAJES:-30}"
+      AI_AGENTE_MEMORIA_TTL: "${AI_AGENTE_MEMORIA_TTL:-24h}"
+      AI_AGENTE_ACCION_EXPIRA: "${AI_AGENTE_ACCION_EXPIRA:-10m}"
+      AI_AGENTE_CATALOGO_REFRESCO: "${AI_AGENTE_CATALOGO_REFRESCO:-PT5M}"
+      AI_AGENTE_CATALOGO_REINTENTO: "${AI_AGENTE_CATALOGO_REINTENTO:-PT30S}"
+      AI_AGENTE_MENUS_TTL: "${AI_AGENTE_MENUS_TTL:-60s}"
+      AI_AGENTE_MAX_FILAS: "${AI_AGENTE_MAX_FILAS:-50}"
+      AI_AGENTE_MAX_CARACTERES: "${AI_AGENTE_MAX_CARACTERES:-12000}"
       JWT_PUBLIC_KEY: ${JWT_PUBLIC_KEY}
       OTEL_EXPORTER_OTLP_ENDPOINT: "${OTEL_EXPORTER_OTLP_ENDPOINT:-http://alloy:4318}"
       MANAGEMENT_TRACING_EXPORT_ENABLED: "${SSO_TELEMETRY_ENABLED:-false}"

@@ -51,7 +51,9 @@ public class SecurityConfig {
                 .authorizeHttpRequests(a -> a
                         // Sin esto el reenvio a /error llega sin SecurityContext
                         // y un 409/429 del servicio se convierte en un 403 opaco.
-                        .dispatcherTypeMatchers(DispatcherType.ERROR).permitAll()
+                        // ASYNC: al cerrar un SseEmitter Tomcat redespacha la peticion
+                        // sin el JWT; la autenticacion ya se hizo en el despacho original.
+                        .dispatcherTypeMatchers(DispatcherType.ERROR, DispatcherType.ASYNC).permitAll()
                         .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
                         .requestMatchers("/actuator/health", "/actuator/health/**",
                                 "/actuator/info").permitAll()
@@ -66,7 +68,7 @@ public class SecurityConfig {
     public CorsConfigurationSource corsConfigurationSource() {
         CorsConfiguration cfg = new CorsConfiguration();
         cfg.setAllowedOriginPatterns(List.of("*"));
-        cfg.setAllowedMethods(List.of("GET", "POST", "OPTIONS"));
+        cfg.setAllowedMethods(List.of("GET", "POST", "PUT", "OPTIONS"));
         cfg.setAllowedHeaders(List.of("Authorization", "Content-Type", "X-Requested-With"));
         cfg.setExposedHeaders(List.of("Retry-After"));
         cfg.setAllowCredentials(false);
