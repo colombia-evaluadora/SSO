@@ -94,11 +94,14 @@ COMMENT ON FUNCTION ai.fn_menus_usuario_interno(BIGINT) IS
 -- Estructura esperada de cualquier herramienta, sacada del codigo que ejecuta su endpoint: sigue las
 -- llamadas academico_test.fn_* desde public.query (3 niveles) y junta las claves JSON que leen (->> 'x')
 -- y los mensajes de sus validaciones. Gates y alcance quedan fuera: no son estructura.
+DROP FUNCTION IF EXISTS ai.fn_herramienta_estructura_interno(BIGINT);
+
 CREATE OR REPLACE FUNCTION ai.fn_herramienta_estructura_interno(p_herramienta_id BIGINT)
 RETURNS TABLE (
     bloque       VARCHAR,
     claves       TEXT[],
-    validaciones TEXT[]
+    validaciones TEXT[],
+    pistas       TEXT[]
 )
 LANGUAGE sql
 STABLE
@@ -129,14 +132,20 @@ AS $$
                  ORDER BY 1),
            ARRAY(SELECT DISTINCT replace(replace(r[1], '''''', ''''), '%', '…')
                    FROM regexp_matches(c.def, 'RAISE\s+EXCEPTION\s+''((?:[^'']|'''')*)''', 'gi') r
-                  ORDER BY 1)
+                  ORDER BY 1),
+           -- (x->>'clave')::BIGINT dice el tipo; si va seguido de 'CATEGORIA', es un pk de ese catalogo.
+           ARRAY(SELECT CASE WHEN max(t[3]) IS NOT NULL
+                             THEN t[1] || ': pk del catalogo ' || max(t[3]) || ' (catalogo_valores), no su texto'
+                             ELSE t[1] || ': ' || lower(max(t[2])) END
+                   FROM regexp_matches(c.def, '->>\s*''([A-Za-z_][A-Za-z0-9_]*)''\s*\)\s*::\s*(BIGINT|INTEGER|INT|NUMERIC|BOOLEAN|DATE)(?:\s*,\s*''([A-Z_]+)'')?', 'gi') t
+                  GROUP BY t[1] ORDER BY 1)
       FROM cuerpos c
      WHERE c.def ~ '->>?\s*''[A-Za-z_]' OR c.def ~* 'RAISE\s+EXCEPTION'
      ORDER BY 1;
 $$;
 
 COMMENT ON FUNCTION ai.fn_herramienta_estructura_interno(BIGINT) IS
-    'INTERNO: por bloque de codigo del endpoint de la herramienta, las claves JSON que lee y los mensajes de sus validaciones, recorriendo academico_test.fn_* desde public.query hasta 3 niveles. Generico para cualquier herramienta con ruta; sin gates. Lo usa la herramienta estructura_esperada del agente.';
+    'INTERNO: por bloque de codigo del endpoint de la herramienta, las claves JSON que lee, los mensajes de sus validaciones y pistas de tipo (numero, pk de catalogo), recorriendo academico_test.fn_* desde public.query hasta 3 niveles. Generico para cualquier herramienta con ruta; sin gates. Lo usa la herramienta estructura_esperada del agente.';
 
 CREATE OR REPLACE FUNCTION ai.fn_funcionario_usuario_interno(p_user_id BIGINT)
 RETURNS BIGINT

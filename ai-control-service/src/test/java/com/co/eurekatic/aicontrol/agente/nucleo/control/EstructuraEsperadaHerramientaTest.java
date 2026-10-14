@@ -32,7 +32,8 @@ class EstructuraEsperadaHerramientaTest {
     @Test
     void juntaEsquemaContratoYLoQueLaBaseLeeYValidaDeCualquierHerramienta() {
         EstructuraEndpoint estructura = id -> id == 5L ? List.of(new EstructuraEndpoint.Bloque("actividad_escala_definir",
-                List.of("tipoEscala", "valorMax", "valorMin"), List.of("La escala numérica de … necesita valor mínimo y valor máximo")))
+                List.of("tipoEscala", "valorMax", "valorMin"), List.of("La escala numérica de … necesita valor mínimo y valor máximo"),
+                List.of("tipoEscala: pk del catalogo TIPO_ESCALA (catalogo_valores), no su texto")))
                 : List.of();
         String salida = new EstructuraEsperadaHerramienta(estructura).callbacks().get(0)
                 .call("{\"codigo\":\"actualizar_instrumento_actividad\"}",
@@ -40,7 +41,7 @@ class EstructuraEsperadaHerramientaTest {
 
         assertThat(salida).contains("\"definicion\"").contains("Contrato: Define el instrumento")
                 .contains("actividad_escala_definir: claves tipoEscala, valorMax, valorMin")
-                .contains("rechaza si: La escala numérica");
+                .contains("rechaza si: La escala numérica").contains("tipos: tipoEscala: pk del catalogo TIPO_ESCALA");
     }
 
     @Test

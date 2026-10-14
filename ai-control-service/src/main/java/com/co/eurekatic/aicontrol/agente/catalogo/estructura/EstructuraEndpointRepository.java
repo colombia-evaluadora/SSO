@@ -13,7 +13,7 @@ import java.util.List;
 public class EstructuraEndpointRepository implements EstructuraEndpoint {
 
     private static final String SQL = """
-            SELECT bloque, claves, validaciones FROM ai.fn_herramienta_estructura_interno(:herramienta)
+            SELECT bloque, claves, validaciones, pistas FROM ai.fn_herramienta_estructura_interno(:herramienta)
             """;
 
     private final JdbcClient jdbc;
@@ -27,7 +27,7 @@ public class EstructuraEndpointRepository implements EstructuraEndpoint {
         return jdbc.sql(SQL)
                 .param("herramienta", herramientaId)
                 .query((rs, fila) -> new Bloque(rs.getString("bloque"), textos(rs.getArray("claves")),
-                        textos(rs.getArray("validaciones"))))
+                        textos(rs.getArray("validaciones")), textos(rs.getArray("pistas"))))
                 .list();
     }
 

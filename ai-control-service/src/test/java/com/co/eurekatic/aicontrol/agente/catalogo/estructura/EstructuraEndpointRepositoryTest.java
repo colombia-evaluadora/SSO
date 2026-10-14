@@ -30,6 +30,8 @@ class EstructuraEndpointRepositoryTest {
         assertThat(bloques).anySatisfy(b -> assertThat(b.claves()).contains("nombre", "niveles", "ponderacion"));
         assertThat(bloques).flatMap(EstructuraEndpoint.Bloque::validaciones)
                 .anySatisfy(v -> assertThat(v).contains("valor mínimo y valor máximo"));
+        assertThat(bloques).flatMap(EstructuraEndpoint.Bloque::pistas).as("tipoEscala es un pk de catalogo, no su texto")
+                .anySatisfy(p -> assertThat(p).contains("tipoEscala").contains("TIPO_ESCALA"));
         assertThat(bloques).as("los gates no son estructura").noneSatisfy(b -> assertThat(b.bloque()).contains("assert"));
     }
 }

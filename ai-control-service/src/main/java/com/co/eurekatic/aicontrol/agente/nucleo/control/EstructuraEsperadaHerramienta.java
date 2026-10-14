@@ -93,6 +93,9 @@ public class EstructuraEsperadaHerramienta implements ProveedorHerramientasContr
         if (!bloque.claves().isEmpty()) {
             texto.append(": claves ").append(String.join(", ", bloque.claves()));
         }
+        if (!bloque.pistas().isEmpty()) {
+            texto.append(texto.isEmpty() ? ": " : "; ").append("tipos: ").append(String.join(" | ", bloque.pistas()));
+        }
         if (!bloque.validaciones().isEmpty()) {
             texto.append(texto.isEmpty() ? ": " : "; ").append("rechaza si: ").append(bloque.validaciones().stream()
                     .limit(MAX_VALIDACIONES_POR_BLOQUE).collect(Collectors.joining(" | ")));
