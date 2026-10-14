@@ -1,7 +1,7 @@
 # Mapa del dominio
 
 **Generado** por `python scripts/migration-analysis mapa` — no editar a mano.
-Estado: 497 migraciones (V1–V559.3), 1347 funciones vivas, 49 endpoints vivos. Ultima generacion: 2026-10-14.
+Estado: 497 migraciones (V1–V559.3), 1349 funciones vivas, 49 endpoints vivos. Ultima generacion: 2026-10-14.
 
 Para una **funcion**, la migracion dueña es la que hay que editar: es su ultima escritura viva, no la que la creo.
 
@@ -28,7 +28,7 @@ Las secciones son las categorias funcionales de `scripts/migration-analysis/anal
 - [Funcionarios](#funcionarios) — 42 funcion(es), 2 endpoint(s)
 - [Sedes](#sedes) — 29 funcion(es), 0 endpoint(s)
 - [Establecimiento](#establecimiento) — 14 funcion(es), 0 endpoint(s)
-- [Menús](#menus) — 31 funcion(es), 1 endpoint(s)
+- [Menús](#menus) — 33 funcion(es), 1 endpoint(s)
 - [Permisos](#permisos) — 23 funcion(es), 0 endpoint(s)
 - [Estructura académica](#academico) — 171 funcion(es), 0 endpoint(s)
 - [Plataforma SSO](#plataforma) — 52 funcion(es), 0 endpoint(s)
@@ -1288,6 +1288,8 @@ Las secciones son las categorias funcionales de `scripts/migration-analysis/anal
 | `academico_test.fn_delete_menu` | 2 | V115 | V126 |
 | `academico_test.fn_list_available_menus` | 1 | V498 | V119 |
 | `academico_test.fn_list_my_menus` | 1 | V193 | V194 |
+| `academico_test.fn_menu_acciones_cambiar` | 5 | V498 | — |
+| `academico_test.fn_menu_acciones_cambiar_interno` | 4 | V498 | — |
 | `academico_test.fn_menu_catalogo_admin_listar` | 1 | V498 | — |
 | `academico_test.fn_menu_catalogo_admin_listar_interno` | 0 | V498 | — |
 | `academico_test.fn_menu_catalogo_listar_interno` | 0 | V498 | — |

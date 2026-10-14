@@ -164,6 +164,10 @@ COMMENT ON FUNCTION academico_test.fn_menu_catalogo_listar_interno()
 
 -- Catalogo de la pestana Modulos y submodulos: tambien los inactivos (estado
 -- 'I'), que siguen listados con su estado; los dados de baja (active) no.
+-- Cambia el RETURNS TABLE: se sueltan wrapper y nucleo antes de recrearlos.
+DROP FUNCTION IF EXISTS academico_test.fn_menu_catalogo_admin_listar(BIGINT);
+DROP FUNCTION IF EXISTS academico_test.fn_menu_catalogo_admin_listar_interno();
+
 CREATE OR REPLACE FUNCTION academico_test.fn_menu_catalogo_admin_listar_interno()
 RETURNS TABLE (
     pk_tmenu BIGINT,
@@ -177,6 +181,8 @@ RETURNS TABLE (
     type     VARCHAR,
     activo   BOOLEAN,
     en_uso   BOOLEAN,
+    admite_guardar  BOOLEAN,
+    admite_eliminar BOOLEAN,
     posicion BIGINT
 )
 LANGUAGE sql
@@ -206,15 +212,17 @@ AS $$
            (m.estado = 'A'),
            EXISTS (SELECT 1 FROM academico_test.trol_menu tm
                     WHERE tm.fk_tmenu = m.pk_tmenu AND tm.active = TRUE),
+           m.admite_guardar,
+           m.admite_eliminar,
            ROW_NUMBER() OVER (ORDER BY a.camino)
       FROM arbol a
       JOIN academico_test.tmenu m ON m.pk_tmenu = a.pk_tmenu
      WHERE NOT a.es_ciclo
-     ORDER BY 12;
+     ORDER BY 14;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_menu_catalogo_admin_listar_interno()
-    IS 'INTERNO: catalogo de TMENU no dado de baja (active), activos e inactivos, en orden de arbol, con activo (estado = A) y en_uso (asignado a algun rol). Lo usa GET /menus/catalogo.';
+    IS 'INTERNO: catalogo de TMENU no dado de baja (active), activos e inactivos, en orden de arbol, con activo (estado = A), en_uso (asignado a algun rol) y las acciones que admite. Lo usa GET /menus/catalogo.';
 
 CREATE OR REPLACE FUNCTION academico_test.fn_menu_estado_cambiar_interno(
     p_pk_tmenu       BIGINT,
@@ -249,6 +257,41 @@ $$;
 COMMENT ON FUNCTION academico_test.fn_menu_estado_cambiar_interno(BIGINT, BOOLEAN, VARCHAR)
     IS 'INTERNO: activa o inactiva un menu (estado A/I) sin tocar el de sus submenus. P0002 si no existe o esta dado de baja. Lo usa PUT /menus/:ID/estado.';
 
+CREATE OR REPLACE FUNCTION academico_test.fn_menu_acciones_cambiar_interno(
+    p_pk_tmenu       BIGINT,
+    p_guardar        BOOLEAN,
+    p_eliminar       BOOLEAN,
+    p_modificado_por VARCHAR
+)
+RETURNS VOID
+LANGUAGE plpgsql
+VOLATILE
+SET search_path = academico_test, public
+AS $$
+BEGIN
+    IF p_guardar IS NULL OR p_eliminar IS NULL THEN
+        RAISE EXCEPTION 'Indique si la vista admite guardar y eliminar' USING ERRCODE = '22023';
+    END IF;
+
+    -- Los permisos de los roles no se tocan: se limitan al leerlos, y vuelven
+    -- si la accion se habilita de nuevo.
+    UPDATE academico_test.tmenu m
+       SET admite_guardar  = p_guardar,
+           admite_eliminar = p_eliminar,
+           modified_by     = TRIM(p_modificado_por),
+           modified_at     = CURRENT_TIMESTAMP
+     WHERE m.pk_tmenu = p_pk_tmenu
+       AND m.active   = TRUE;
+
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'El menu pk=% no existe', p_pk_tmenu USING ERRCODE = 'P0002';
+    END IF;
+END;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_menu_acciones_cambiar_interno(BIGINT, BOOLEAN, BOOLEAN, VARCHAR)
+    IS 'INTERNO: fija las acciones que admite un menu (TMENU.ADMITE_GUARDAR/ADMITE_ELIMINAR). P0002 si no existe o esta dado de baja. Lo usa PUT /menus/:ID/acciones.';
+
 -- Cambia el RETURNS TABLE: se sueltan wrapper y nucleo antes de recrearlos.
 DROP FUNCTION IF EXISTS academico_test.fn_rol_menus_listar(BIGINT, BIGINT);
 DROP FUNCTION IF EXISTS academico_test.fn_rol_menus_listar_interno(BIGINT);
@@ -260,10 +303,12 @@ STABLE
 SET search_path = academico_test, public
 AS $$
     SELECT c.pk_tmenu,
-           NOT COALESCE(bool_or(p.crear OR p.editar OR p.eliminar), FALSE),
-           COALESCE(bool_or(p.crear OR p.editar), FALSE),
-           COALESCE(bool_or(p.eliminar), FALSE)
+           NOT COALESCE(bool_or((m.admite_guardar AND (p.crear OR p.editar))
+                                OR (m.admite_eliminar AND p.eliminar)), FALSE),
+           COALESCE(bool_or(m.admite_guardar AND (p.crear OR p.editar)), FALSE),
+           COALESCE(bool_or(m.admite_eliminar AND p.eliminar), FALSE)
       FROM academico_test.fn_menu_catalogo_listar_interno() c
+      JOIN academico_test.tmenu m ON m.pk_tmenu = c.pk_tmenu
       JOIN academico_test.trol_menu tm
         ON tm.fk_tmenu = c.pk_tmenu
        AND tm.fk_trol  = p_pk_trol
@@ -275,7 +320,7 @@ AS $$
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_rol_menus_listar_interno(BIGINT)
-    IS 'INTERNO: menus activos asignados a un TROL con sus permisos (TROL_MENU_PERMISO): guardar = crear o editar, eliminar, y solo_lectura = ninguno de los tres. Orden del catalogo. Lo usa GET /roles/:ROLEID/menus.';
+    IS 'INTERNO: menus activos asignados a un TROL con sus permisos (TROL_MENU_PERMISO): guardar = crear o editar, eliminar, y solo_lectura = ninguno de los tres, limitados a lo que admite el menu. Orden del catalogo. Lo usa GET /roles/:ROLEID/menus.';
 
 CREATE OR REPLACE FUNCTION academico_test.fn_rol_funcionarios_contar_interno(p_pk_trol BIGINT)
 RETURNS BIGINT
@@ -526,7 +571,9 @@ RETURNS TABLE (
     plan_id  BIGINT,
     type     VARCHAR,
     activo   BOOLEAN,
-    en_uso   BOOLEAN
+    en_uso   BOOLEAN,
+    admite_guardar  BOOLEAN,
+    admite_eliminar BOOLEAN
 )
 LANGUAGE plpgsql
 STABLE
@@ -537,14 +584,15 @@ BEGIN
 
     RETURN QUERY
     SELECT c.pk_tmenu, c.pk_padre, c.nombre, c.url, c.icono, c.visible,
-           c.orden, c.plan_id, c.type, c.activo, c.en_uso
+           c.orden, c.plan_id, c.type, c.activo, c.en_uso,
+           c.admite_guardar, c.admite_eliminar
       FROM academico_test.fn_menu_catalogo_admin_listar_interno() c
      ORDER BY c.posicion;
 END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_menu_catalogo_admin_listar(BIGINT)
-    IS 'GET /menus/catalogo: catalogo de menus para la pestana Modulos y submodulos, con inactivos, activo y enUso. Gate fn_assert_superadmin. Nucleo fn_menu_catalogo_admin_listar_interno.';
+    IS 'GET /menus/catalogo: catalogo de menus para la pestana Modulos y submodulos, con inactivos, activo, enUso y las acciones que admite. Gate fn_assert_superadmin. Nucleo fn_menu_catalogo_admin_listar_interno.';
 
 CREATE OR REPLACE FUNCTION academico_test.fn_menu_estado_cambiar(
     p_user_pk        BIGINT,
@@ -580,6 +628,41 @@ $$;
 
 COMMENT ON FUNCTION academico_test.fn_menu_estado_cambiar(BIGINT, BIGINT, BOOLEAN, VARCHAR)
     IS 'PUT /menus/:ID/estado: activa o inactiva un menu, body {activo}. Respuesta {status, message}. P0002 si no existe, gate fn_assert_superadmin, 22023 si falta activo. Nucleo fn_menu_estado_cambiar_interno.';
+
+CREATE OR REPLACE FUNCTION academico_test.fn_menu_acciones_cambiar(
+    p_user_pk        BIGINT,
+    p_pk_tmenu       BIGINT,
+    p_guardar        BOOLEAN,
+    p_eliminar       BOOLEAN,
+    p_modificado_por VARCHAR
+)
+RETURNS TABLE (status VARCHAR, message VARCHAR)
+LANGUAGE plpgsql
+VOLATILE
+SET search_path = academico_test, public
+AS $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM academico_test.tmenu m
+                    WHERE m.pk_tmenu = p_pk_tmenu AND m.active = TRUE) THEN
+        RAISE EXCEPTION 'El menu pk=% no existe', p_pk_tmenu USING ERRCODE = 'P0002';
+    END IF;
+
+    PERFORM academico_test.fn_assert_superadmin(p_user_pk);
+
+    PERFORM academico_test.fn_audit_declarar(
+        public.fn_get_academico_usuario_id(p_user_pk),
+        'Acciones disponibles del menu '
+            || (SELECT m.nombre FROM academico_test.tmenu m WHERE m.pk_tmenu = p_pk_tmenu),
+        NULL, NULL, ARRAY['ROLES_MENUS']);
+
+    PERFORM academico_test.fn_menu_acciones_cambiar_interno(p_pk_tmenu, p_guardar, p_eliminar, p_modificado_por);
+
+    RETURN QUERY SELECT 'success'::VARCHAR, 'Acciones actualizadas'::VARCHAR;
+END;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_menu_acciones_cambiar(BIGINT, BIGINT, BOOLEAN, BOOLEAN, VARCHAR)
+    IS 'PUT /menus/:ID/acciones: fija si la vista admite guardar y eliminar, body {guardar, eliminar}. Respuesta {status, message}. P0002 si no existe, gate fn_assert_superadmin, 22023 si falta un valor. Nucleo fn_menu_acciones_cambiar_interno.';
 
 CREATE OR REPLACE FUNCTION academico_test.fn_rol_menus_listar(p_user_pk BIGINT, p_pk_trol BIGINT)
 RETURNS TABLE (id BIGINT, solo_lectura BOOLEAN, guardar BOOLEAN, eliminar BOOLEAN)
@@ -777,13 +860,14 @@ SELECT
     'eval-col-menus-catalogo-001',
     $q$SELECT pk_tmenu AS id, pk_padre AS "idParent", nombre AS name, url AS path,
               icono AS icon, visible, orden AS "menuOrder", plan_id AS "planId", type,
-              activo, en_uso AS "enUso"
+              activo, en_uso AS "enUso", admite_guardar AS "admiteGuardar",
+              admite_eliminar AS "admiteEliminar"
        FROM academico_test.fn_menu_catalogo_admin_listar(:CONTEXT.USER_ID::BIGINT);$q$,
     'postgres', false, false,
     m.id_microservice,
     '/menus/catalogo', 'SELECT', 'GET',
     '{}'::jsonb,
-    'roles-permisos: catalogo de menus con inactivos, activo y enUso (pestana Modulos y submodulos).',
+    'roles-permisos: catalogo de menus con inactivos, activo, enUso y acciones que admite (pestana Modulos y submodulos).',
     'menus-catalogo',
     false
   FROM public.microservice m
@@ -821,6 +905,34 @@ ON CONFLICT (microservice_id, path_template, http_method)
                   param_types = EXCLUDED.param_types,
                   detail      = EXCLUDED.detail;
 
+INSERT INTO public.query
+    (uuid, query, type, public_end, captcha, microservice_id, path_template,
+     execution_mode, http_method, param_types, detail, action, cacheable)
+SELECT
+    'eval-col-menus-acciones-001',
+    $q$SELECT status, message
+       FROM academico_test.fn_menu_acciones_cambiar(
+           :CONTEXT.USER_ID::BIGINT,
+           CAST(:PARAM.ID AS BIGINT),
+           CAST(:BODY.GUARDAR AS BOOLEAN),
+           CAST(:BODY.ELIMINAR AS BOOLEAN),
+           :CONTEXT.EMAIL
+       );$q$,
+    'postgres', false, false,
+    m.id_microservice,
+    '/menus/:ID/acciones', 'SELECT', 'PUT',
+    '{"PARAM.ID": "BIGINT", "BODY.GUARDAR": "BOOLEAN", "BODY.ELIMINAR": "BOOLEAN"}'::jsonb,
+    'roles-permisos: fija si la vista admite guardar y eliminar, body {guardar, eliminar}. Respuesta {status, message}.',
+    'menus-acciones',
+    false
+  FROM public.microservice m
+ WHERE m.serviceid = 'eval-col'
+ON CONFLICT (microservice_id, path_template, http_method)
+    WHERE path_template IS NOT NULL
+    DO UPDATE SET query       = EXCLUDED.query,
+                  param_types = EXCLUDED.param_types,
+                  detail      = EXCLUDED.detail;
+
 INSERT INTO public.role_query (role_id, query_id)
 SELECT rq.role_id, q.id_query
   FROM public.query q
@@ -832,7 +944,8 @@ SELECT rq.role_id, q.id_query
   JOIN public.role_query rq ON rq.query_id = qm.id_query
  WHERE m.serviceid = 'eval-col'
    AND ((q.path_template = '/menus/catalogo' AND q.http_method = 'GET')
-     OR (q.path_template = '/menus/:ID/estado' AND q.http_method = 'PUT'))
+     OR (q.path_template = '/menus/:ID/estado' AND q.http_method = 'PUT')
+     OR (q.path_template = '/menus/:ID/acciones' AND q.http_method = 'PUT'))
 ON CONFLICT DO NOTHING;
 
 DO $$
@@ -845,7 +958,8 @@ BEGIN
              OR (q.path_template = '/menus' AND q.http_method = 'GET')
              OR (q.path_template = '/roles/:ROLEID/funcionarios/total' AND q.http_method = 'GET')
              OR (q.path_template = '/menus/catalogo' AND q.http_method = 'GET')
-             OR (q.path_template = '/menus/:ID/estado' AND q.http_method = 'PUT'))) <> 7
+             OR (q.path_template = '/menus/:ID/estado' AND q.http_method = 'PUT')
+             OR (q.path_template = '/menus/:ID/acciones' AND q.http_method = 'PUT'))) <> 8
     THEN
         RAISE EXCEPTION 'Faltan filas de public.query de la pantalla roles-menus (eval-col)';
     END IF;
