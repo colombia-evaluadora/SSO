@@ -1,5 +1,7 @@
 package com.co.eurekatic.aicontrol.agente.nucleo.control;
 
+import com.co.eurekatic.aicontrol.agente.catalogo.dominio.HerramientaDef;
+import com.co.eurekatic.aicontrol.agente.catalogo.dominio.ParametroDef;
 import com.co.eurekatic.aicontrol.agente.nucleo.Faltante;
 import com.co.eurekatic.aicontrol.agente.nucleo.TurnoContexto;
 import com.co.eurekatic.aicontrol.agente.nucleo.respuesta.RespuestaAgente;
@@ -12,6 +14,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 /**
@@ -26,10 +29,15 @@ public class PedirDatosFaltantesHerramienta implements ProveedorHerramientasCont
     static final String ACUSE = "Pregunta enviada a la persona. No hagas mas llamadas en este turno.";
     static final String ERROR = "Indica al menos un dato faltante, con su campo y su pregunta.";
     static final String TEXTO = "Para continuar necesito estos datos.";
+    static final String CONSULTA_ANTES = "Todavia no consultaste nada en este turno y la persona no ve esta pregunta. "
+            + "Busca primero lo que se pueda con las consultas que resuelven los datos de la accion; despues pregunta "
+            + "solo lo que siga faltando o sea ambiguo, con sus opciones. Consultas disponibles: ";
 
     private static final String DESCRIPCION = """
-            Usala cuando falten datos obligatorios para una accion y no puedas deducirlos con certeza.
-            Termina el turno y muestra a la persona las preguntas. Nunca supongas valores en su lugar.
+            Ultimo recurso: usala solo despues de consultar. Si a la accion le falta un dato que sale de una consulta
+            (grupo, asignatura, unidad, estudiante, catalogo), llama primero a esa consulta. Usala para lo que
+            ninguna herramienta da (un texto, una nota, una fecha) o para elegir entre varias opciones reales, y
+            pon esas opciones. Termina el turno y muestra a la persona las preguntas. Nunca supongas valores.
             """;
 
     private static final String ESQUEMA = """
@@ -56,8 +64,33 @@ public class PedirDatosFaltantesHerramienta implements ProveedorHerramientasCont
         if (pregunta.isEmpty()) {
             return ERROR;
         }
+        List<String> consultas = consultasQueResuelven(turno);
+        if (turno.lecturas() == 0 && !consultas.isEmpty() && turno.devolverPreguntaUnaVez()) {
+            // Preguntar sin haber mirado nada es la forma en que el modelo se rinde: se le devuelve una vez.
+            return CONSULTA_ANTES + String.join(", ", consultas) + ".";
+        }
         turno.responderDirecto(pregunta.get());
         return ACUSE;
+    }
+
+    /**
+     * Las consultas del turno de las que salen los datos de sus escrituras ({@code resuelve_con}): lo que el modelo
+     * podia mirar antes de preguntar.
+     */
+    static List<String> consultasQueResuelven(TurnoContexto turno) {
+        Set<String> ofrecidas = turno.herramientas().stream()
+                .filter(h -> !h.tipo().escribe())
+                .map(HerramientaDef::codigo)
+                .collect(Collectors.toSet());
+        return turno.herramientas().stream()
+                .filter(h -> h.tipo().escribe())
+                .flatMap(h -> h.parametros().stream())
+                .map(ParametroDef::resuelveCon)
+                .flatMap(Optional::stream)
+                .filter(ofrecidas::contains)
+                .distinct()
+                .sorted()
+                .toList();
     }
 
     /** Lee los argumentos del modelo. Vacio si la forma no es valida: el modelo debe corregirla. */
