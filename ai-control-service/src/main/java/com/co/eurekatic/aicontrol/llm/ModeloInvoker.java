@@ -9,6 +9,7 @@ import io.github.resilience4j.ratelimiter.RequestNotPermitted;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpHeaders;
+import org.springframework.context.annotation.Primary;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Component;
 import org.springframework.web.server.ResponseStatusException;
@@ -19,7 +20,11 @@ import java.util.function.Supplier;
  * Ejecuta una llamada al modelo detras del rate limiter, el bulkhead y el
  * circuit breaker, y traduce cada rechazo a un status HTTP que el front
  * pueda mostrar.
+ *
+ * <p>Hay una instancia por modelo: la primaria (resumenes) y la del razonador
+ * del agente, que comparten cupo y circuito y tienen bulkhead propio.
  */
+@Primary
 @Component
 public class ModeloInvoker {
 

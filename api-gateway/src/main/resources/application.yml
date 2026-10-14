@@ -338,7 +338,7 @@ spring:
             - id: api-ai-control-service
               uri: lb://ai-control-service
               metadata:
-                response-timeout: ${GATEWAY_AI_RESPONSE_TIMEOUT_MS:125000}
+                response-timeout: ${GATEWAY_AI_RESPONSE_TIMEOUT_MS:170000}
               predicates:
                 - Path=/api/ai/**
               filters:
