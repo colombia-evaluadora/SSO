@@ -538,10 +538,13 @@ UPDATE public.query q
    AND q.query LIKE '%fn_actividad_calendario_docente%';
 
 -- El detalle tambien dice de quien es la actividad (seccion "Identificacion"
--- del panel), con el mismo criterio que las filas de mias y calendario.
+-- del panel), con el mismo criterio que las filas de mias y calendario, y si
+-- se puede editar (Regla 37) para que el front oculte "Editar".
 UPDATE public.query q
    SET query = $q$SELECT d.*,
        academico_test.fn_actividad_es_formativa(d.pk_tactividad) AS es_formativa,
+       ne.motivo AS motivo_no_editable,
+       CASE WHEN ne.motivo IS NULL THEN 'S' ELSE 'N' END AS editable,
        dd.fk_tfuncionario_docente, dd.docente_nombre, COALESCE(dd.es_propia, 'N') AS es_propia
   FROM academico_test.fn_actividad_buscar_por_pk(
     public.fn_get_academico_usuario_id(:CONTEXT.USER_ID::BIGINT),
@@ -550,7 +553,8 @@ UPDATE public.query q
 ) d
   LEFT JOIN LATERAL academico_test.fn_actividad_docente_dicta(
            d.pk_tactividad,
-           academico_test.fn_funcionario_actual(public.fn_get_academico_usuario_id(:CONTEXT.USER_ID::BIGINT))) dd ON TRUE;$q$
+           academico_test.fn_funcionario_actual(public.fn_get_academico_usuario_id(:CONTEXT.USER_ID::BIGINT))) dd ON TRUE
+  CROSS JOIN LATERAL (SELECT academico_test.fn_actividad_motivo_no_editable(d.pk_tactividad) AS motivo) ne;$q$
   FROM public.microservice m
  WHERE m.id_microservice = q.microservice_id
    AND m.serviceid       = 'eval-col'
