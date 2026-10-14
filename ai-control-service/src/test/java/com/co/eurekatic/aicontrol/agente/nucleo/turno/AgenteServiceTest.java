@@ -108,6 +108,20 @@ class AgenteServiceTest {
     }
 
     @Test
+    void unaAccionSinEscriturasPorElRiesgoDelMensajePideLosDatosSinRomperLaTraza() {
+        Preparacion.Listo listo = new Preparacion.Listo("borra al funcionario",
+                new Intencion(TipoIntencion.ACCION, "", 0.9, Riesgo.MEDIO), List.of(LECTURA), List.of(), Map.of());
+        when(preparador.preparar(CONVERSACION, USUARIO, "borra al funcionario")).thenReturn(listo);
+
+        RespuestaAgente respuesta = servicio.procesar(CONVERSACION, USUARIO, "borra al funcionario", "");
+
+        // Antes, INTENCION -> RESPUESTA no era una transicion valida y la persona recibia un 500.
+        assertThat(respuesta).isInstanceOfSatisfying(RespuestaAgente.Respuesta.class,
+                r -> assertThat(r.texto()).isEqualTo(AgenteService.MENSAJE_DATOS_CONCRETOS));
+        verify(bucle, never()).ejecutar(any());
+    }
+
+    @Test
     void unTextoFinalSeGuardaYSeDevuelve() {
         Preparacion.Listo listo = listo(TipoIntencion.CONSULTA, List.of(LECTURA));
         when(preparador.preparar(CONVERSACION, USUARIO, "hola")).thenReturn(listo);

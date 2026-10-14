@@ -119,7 +119,13 @@ public class AgenteService {
         RegistradorTurno.Inicio arranque = registrador.iniciar(conversacionId, listo.textoNormalizado());
         if (sinHerramientaDeEscritura(listo.intencion(), listo)) {
             // Si lo que apaga las escrituras es el riesgo del mensaje, no es falta de permiso: decirlo asi confunde.
-            RespuestaAgente sinEscrituras = listo.intencion().riesgo().permiteEscritura()
+            boolean sinPermiso = listo.intencion().riesgo().permiteEscritura();
+            if (!sinPermiso) {
+                // El permiso esta; es el riesgo: la traza llega a RESPUESTA por el camino normal.
+                traza.pasar(EstadoTurno.PERMISO_OK);
+                traza.pasar(EstadoTurno.RECOLECTANDO);
+            }
+            RespuestaAgente sinEscrituras = sinPermiso
                     ? new RespuestaAgente.SinPermiso(MENSAJE_SIN_PERMISO)
                     : new RespuestaAgente.Respuesta(MENSAJE_DATOS_CONCRETOS);
             return cerrar(conversacionId, usuario, sinEscrituras, Consumo.NINGUNO, seudonimos, traza,
