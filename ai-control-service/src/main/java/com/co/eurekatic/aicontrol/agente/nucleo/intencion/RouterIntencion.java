@@ -3,6 +3,7 @@ package com.co.eurekatic.aicontrol.agente.nucleo.intencion;
 import com.co.eurekatic.aicontrol.agente.comun.DatosDelUsuario;
 import com.co.eurekatic.aicontrol.agente.comun.JsonDelModelo;
 import com.co.eurekatic.aicontrol.agente.comun.Plantillas;
+import com.co.eurekatic.aicontrol.agente.seguridad.NormalizadorTexto;
 import com.co.eurekatic.aicontrol.agente.seguridad.Riesgo;
 import com.co.eurekatic.aicontrol.llm.ModeloInvoker;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
@@ -34,6 +35,10 @@ public class RouterIntencion {
     private static final String PLANTILLA = "prompts/agente-router.st";
     private static final String ETIQUETA = "mensaje_usuario";
     private static final Pattern CODIGO_ACCION = Pattern.compile("[A-Z_]{1,60}");
+    /** Verbos que piden escribir, plegados (sin tildes) y con o sin pronombre: "cambiale", "asignala". */
+    private static final Pattern VERBO_DE_CAMBIO = Pattern.compile(
+            "\\b(cambi|edit|actualiz|modific|cre|calific|asign|registr|vincul|ponder|ponle|ponles|quita)"
+                    + "(a|ar|ale|ala|alo|ales|e|en)?\\b");
     private static final String SIN_ACCION = "NULL";
 
     private final ChatClient rapido;
@@ -73,12 +78,25 @@ public class RouterIntencion {
             return alternativa(riesgoEntrada);
         }
         try {
-            return leer(salida, riesgoEntrada);
+            return pedidoDeCambio(leer(salida, riesgoEntrada), textoNormalizado);
         } catch (RuntimeException e) {
             log.warn("Salida del router ilegible; el turno se trata como CONSULTA de riesgo MEDIO: {}",
                     e.getClass().getSimpleName());
             return alternativa(riesgoEntrada);
         }
+    }
+
+    /**
+     * Un mensaje que pide un cambio con un verbo de escritura ("busca al funcionario y cambiale el telefono") no
+     * es una consulta aunque el router lo diga: sin las escrituras ofrecidas, el modelo finge la confirmacion. Pasa
+     * a ACCION con el mismo riesgo; la escritura sigue pidiendo confirmacion a la persona.
+     */
+    static Intencion pedidoDeCambio(Intencion intencion, String texto) {
+        boolean consultaOCharla = intencion.tipo() == TipoIntencion.CONSULTA || intencion.tipo() == TipoIntencion.CHARLA;
+        if (!consultaOCharla || texto == null || !VERBO_DE_CAMBIO.matcher(NormalizadorTexto.plegar(texto)).find()) {
+            return intencion;
+        }
+        return new Intencion(TipoIntencion.ACCION, intencion.accion(), intencion.confianza(), intencion.riesgo());
     }
 
     /** Lo que se usa cuando el router falla: una consulta, sin escrituras ni UI. */

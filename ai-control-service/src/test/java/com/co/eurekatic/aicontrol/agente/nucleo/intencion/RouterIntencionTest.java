@@ -52,6 +52,28 @@ class RouterIntencionTest {
     }
 
     @Test
+    void unaConsultaQuePideUnCambioPasaAAccionConElMismoRiesgo() {
+        when(llamada.content()).thenReturn("{\"tipo\": \"CONSULTA\", \"accion\": null, \"confianza\": 0.7}");
+
+        Intencion intencion = router.clasificar("Busca al funcionario de apellido Objetivo y cámbiale el teléfono",
+                Riesgo.BAJO);
+
+        assertThat(intencion.tipo()).isEqualTo(TipoIntencion.ACCION);
+        assertThat(intencion.riesgo()).isEqualTo(Riesgo.BAJO);
+    }
+
+    @Test
+    void unaPreguntaSinVerboDeCambioSigueSiendoConsulta() {
+        when(llamada.content()).thenReturn("{\"tipo\": \"CONSULTA\", \"accion\": null, \"confianza\": 0.7}");
+
+        assertThat(router.clasificar("¿Qué asignaturas dicto y cuál es mi calificación promedio?", Riesgo.BAJO).tipo())
+                .isEqualTo(TipoIntencion.CONSULTA);
+        assertThat(RouterIntencion.pedidoDeCambio(new Intencion(TipoIntencion.ANALITICA, "", 0.9, Riesgo.BAJO),
+                "cambia el filtro de las estadisticas").tipo()).as("solo consulta o charla se reclasifican")
+                .isEqualTo(TipoIntencion.ANALITICA);
+    }
+
+    @Test
     void accionNulaOInvalidaSeDescarta() {
         when(llamada.content()).thenReturn("{\"tipo\": \"CONSULTA\", \"accion\": \"null\", \"confianza\": 0.5}");
         assertThat(router.clasificar("lista sedes", Riesgo.BAJO).accion()).isEmpty();
