@@ -297,6 +297,27 @@ UPDATE ai.herramienta h
   FROM (VALUES ('crear_unidad_planeador', 'BODY.FK_TFUNCIONARIO', 'FUNCIONARIO')) AS v (codigo, param, valor)
  WHERE h.codigo = v.codigo AND h.active = TRUE AND h.parametros ? v.param;
 
+-- Categoria real de cada fk de catalogo, la que valida fn_actividad_validar_catalogo: sin ella
+-- el modelo la adivina (JERARQUIA es TIPO_JERARQUIA_ACTIVIDAD) y catalogo_valores vuelve vacio.
+UPDATE ai.herramienta h
+   SET parametros = h.parametros || (
+         SELECT jsonb_object_agg(c.param, (h.parametros -> c.param) || jsonb_build_object('descripcion',
+                    (h.parametros -> c.param ->> 'descripcion') || '; catalogo_valores con categoria ' || c.categoria))
+           FROM (VALUES ('BODY.FK_TLV_TIPO_ACTIVIDAD', 'TIPO_ACTIVIDAD'),
+                        ('BODY.FK_TLV_MODALIDAD', 'MODALIDAD'),
+                        ('BODY.FK_TLV_JERARQUIA', 'TIPO_JERARQUIA_ACTIVIDAD'),
+                        ('BODY.FK_TLV_TIPO_CALCULO', 'TIPO_CALCULO'),
+                        ('BODY.FK_TLV_METODO_VALORACION', 'METODO_VALORACION'),
+                        ('BODY.FK_TLV_INSTRUMENTO_EVALUACION', 'INSTRUMENTO_EVALUACION'),
+                        ('BODY.FK_TLV_TIPO_EVIDENCIA', 'TIPO_EVIDENCIA'),
+                        ('BODY.FK_TLV_CALCULO_DEFINITIVA', 'CALCULO_DEFINITIVA')) AS c (param, categoria)
+          WHERE h.parametros ? c.param)
+ WHERE h.active = TRUE
+   AND h.parametros ?| ARRAY['BODY.FK_TLV_TIPO_ACTIVIDAD', 'BODY.FK_TLV_MODALIDAD', 'BODY.FK_TLV_JERARQUIA',
+                             'BODY.FK_TLV_TIPO_CALCULO', 'BODY.FK_TLV_METODO_VALORACION',
+                             'BODY.FK_TLV_INSTRUMENTO_EVALUACION', 'BODY.FK_TLV_TIPO_EVIDENCIA',
+                             'BODY.FK_TLV_CALCULO_DEFINITIVA'];
+
 -- ---------------------------------------------------------------------------
 -- 2c. Escrituras que reemplazan un conjunto: la funcion destino da de baja lo que
 --     no se incluye. Se permiten, pero la confirmacion lo dice; el resto queda sin aviso.

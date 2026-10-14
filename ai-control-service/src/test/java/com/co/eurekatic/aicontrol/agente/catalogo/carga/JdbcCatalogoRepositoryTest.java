@@ -48,6 +48,14 @@ class JdbcCatalogoRepositoryTest {
     }
 
     @Test
+    void cadaFkDeListaValorDiceSuCategoriaParaQueElModeloNoLaAdivine() {
+        assertThat(mapeadas()).flatMap(HerramientaDef::parametros)
+                .filteredOn(p -> p.clave().contains(".FK_TLV_") && p.resuelveCon().filter("catalogo_valores"::equals).isPresent())
+                .isNotEmpty()
+                .allSatisfy(p -> assertThat(p.descripcion()).as(p.clave()).containsPattern("con categoria [A-Z_]+"));
+    }
+
+    @Test
     void cadaHerramientaTraeSuIdDeBaseYLosObligatoriosVienenDelCatalogo() {
         List<HerramientaDef> mapeadas = mapeadas();
 
