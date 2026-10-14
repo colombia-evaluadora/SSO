@@ -108,7 +108,7 @@ public class QueryServiceClient {
      * @param rutaResuelta path sin prefijo de gateway, con los {@code PARAM} ya sustituidos
      *                     y codificados (lo hace {@code ConstructorPeticion})
      * @param query        binds {@code :QUERY.*}; los codifica este metodo
-     * @param body         binds {@code :BODY.*} ya anidados; se ignora en GET
+     * @param body         binds {@code :BODY.*} ya anidados; se ignora en GET y, vacio, viaja como {@code {}}
      * @param bearer       token del usuario, sin el prefijo "Bearer "
      */
     public RespuestaQuery invocar(HttpMethod metodo, String rutaResuelta, Map<String, String> query,
@@ -123,10 +123,10 @@ public class QueryServiceClient {
         try {
             RestClient.RequestBodySpec spec = rest.method(metodo).uri(uri)
                     .header(HttpHeaders.AUTHORIZATION, "Bearer " + bearer);
-            boolean conCuerpo = metodo != HttpMethod.GET && body != null && !body.isEmpty();
-            RestClient.RequestHeadersSpec<?> peticion = conCuerpo
-                    ? spec.contentType(MediaType.APPLICATION_JSON).body(body)
-                    : spec;
+            // Fuera de GET siempre va JSON, aunque sea {}: sin Content-Type el query-service responde 415.
+            RestClient.RequestHeadersSpec<?> peticion = metodo == HttpMethod.GET
+                    ? spec
+                    : spec.contentType(MediaType.APPLICATION_JSON).body(body == null ? Map.of() : body);
             Map<String, Object> respuesta = peticion.retrieve().body(new ParameterizedTypeReference<>() {});
             return new RespuestaQuery.Exito(filasDe(respuesta));
         } catch (HttpStatusCodeException e) {

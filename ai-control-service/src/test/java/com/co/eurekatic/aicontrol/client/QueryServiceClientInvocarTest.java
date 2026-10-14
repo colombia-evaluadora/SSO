@@ -35,6 +35,7 @@ class QueryServiceClientInvocarTest {
             recibidas.add(intercambio.getRequestMethod() + " " + intercambio.getRequestURI().getRawPath()
                     + "?" + intercambio.getRequestURI().getRawQuery()
                     + " auth=" + intercambio.getRequestHeaders().getFirst("Authorization")
+                    + " tipo=" + intercambio.getRequestHeaders().getFirst("Content-Type")
                     + " body=" + cuerpo);
             byte[] bytes = respuesta.getBytes(StandardCharsets.UTF_8);
             intercambio.getResponseHeaders().add("Content-Type", "application/json");
@@ -78,6 +79,13 @@ class QueryServiceClientInvocarTest {
 
         assertThat(recibidas.get(0)).startsWith("POST /planeador/actividades")
                 .contains("\"PERSON\"").contains("\"EMAIL\"");
+    }
+
+    @Test
+    void unPostSinArgumentosEnviaUnObjetoJsonVacio() {
+        cliente().invocar(HttpMethod.POST, "/periodos-academicos/query", Map.of(), Map.of(), "tkn");
+
+        assertThat(recibidas.get(0)).contains("tipo=application/json").endsWith("body={}");
     }
 
     @Test
