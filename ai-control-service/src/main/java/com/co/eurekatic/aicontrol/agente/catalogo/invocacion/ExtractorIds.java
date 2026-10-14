@@ -18,6 +18,8 @@ public final class ExtractorIds {
 
     /** Columnas que parecen ids: {@code id}, {@code pk_*}, {@code fk_*}, {@code *_id}, {@code idParent}. */
     private static final Pattern COLUMNA_ID = Pattern.compile("(?i)(id|idparent|pk_.+|fk_.+|.+_id|fn_.+_(?:crear|agregar)(?:_interno)?)");
+    /** Las mismas en camelCase, como las devuelven los JSONB de detalle: {@code pkTmatricula}, {@code grupoId}, {@code pk}. */
+    private static final Pattern COLUMNA_ID_CAMEL = Pattern.compile("pk|(?:pk|fk)[A-Z]\\w*|[a-z]\\w*Id");
 
     /**
      * Una escritura que crea devuelve su pk en una columna con el nombre de la funcion:
@@ -96,7 +98,7 @@ public final class ExtractorIds {
 
     /** Entidad de una columna de id: {@code pk_tgrupo}, {@code fk_tgrupo} y {@code grupo_id} dan {@code grupo}. */
     static Optional<String> entidadDeColumna(String columna) {
-        String c = columna.toLowerCase(Locale.ROOT);
+        String c = aSnake(columna).toLowerCase(Locale.ROOT);
         String entidad;
         if (c.startsWith("fk_tlv_") || c.equals("pk_lista_valor")) {
             return Optional.of("lista_valor");
@@ -153,7 +155,14 @@ public final class ExtractorIds {
 
     /** Si el nombre de una columna es de identificador. Lo usan la extraccion de ids y el filtro de columnas. */
     public static boolean esColumnaId(String columna) {
-        return COLUMNA_ID.matcher(columna).matches();
+        return COLUMNA_ID.matcher(columna).matches() || COLUMNA_ID_CAMEL.matcher(columna).matches();
+    }
+
+    /** {@code pkTactividadEstudiante} es {@code pk_tactividad_estudiante}: los JSONB de detalle van en camelCase. */
+    private static String aSnake(String columna) {
+        return COLUMNA_ID_CAMEL.matcher(columna).matches()
+                ? columna.replaceAll("([a-z0-9])([A-Z])", "$1_$2").toLowerCase(Locale.ROOT)
+                : columna;
     }
 
     public static String textoDe(Object valor) {

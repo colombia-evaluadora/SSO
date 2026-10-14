@@ -48,6 +48,22 @@ class ExtractorIdsTest {
     }
 
     @Test
+    void reconoceLosIdsEnCamelCaseDeLosJsonbDeDetalle() {
+        // Forma de GET /planeador/actividades/:ID: estudiantes[] y la unidad van en camelCase.
+        List<Map<String, Object>> filas = List.of(Map.of(
+                "estudiantes", List.of(Map.of("estudiante", "Persona_1", "pkTactividadEstudiante", 9001,
+                        "pkTmatricula", 995001, "fkTestudiante", 995001)),
+                "unidad_configuracion", Map.of("pkTunidad", 153, "referenteCurricular", Map.of("pk", 7)),
+                "grupoId", 990201, "pkTotal", 3, "picks", 9));
+
+        assertThat(ExtractorIds.extraer(filas)).contains("9001", "995001", "153", "7", "990201");
+        assertThat(ExtractorIds.extraerTipados(filas))
+                .contains("actividad_estudiante=9001", "matricula=995001", "unidad=153", "grupo=990201");
+        assertThat(ExtractorIds.esColumnaId("picks")).isFalse();
+        assertThat(ExtractorIds.esColumnaId("estudiante")).isFalse();
+    }
+
+    @Test
     void unEnteroLlegadoComoDecimalSeCanonicalizaComoEntero() {
         assertThat(ExtractorIds.textoDe(12.0)).isEqualTo("12");
         assertThat(ExtractorIds.textoDe(12.5)).isNull();
