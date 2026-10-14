@@ -32,6 +32,9 @@ class GuardaDeAfirmacionesTest {
         assertThat(GuardaDeAfirmaciones.revisar(new RespuestaAgente.Respuesta(
                 "Voy a buscar tus grupos.<tool_call>\n<tool name=\"consultar_grupos\">\n</tool>")).texto())
                 .as("llamada escrita como texto").isEqualTo(GuardaDeAfirmaciones.SIN_HERRAMIENTA);
+        assertThat(GuardaDeAfirmaciones.revisar(new RespuestaAgente.Respuesta("Voy a consultar.\n{\"name\": "
+                + "\"estructura_esperada\", \"input\": {\"entidad\": \"instrumento\"}}")).texto())
+                .as("llamada escrita como JSON").isEqualTo(GuardaDeAfirmaciones.SIN_HERRAMIENTA);
         assertThat(GuardaDeAfirmaciones.objecion(new RespuestaAgente.Respuesta("<invoke name=\"x\">")))
                 .hasValueSatisfying(o -> assertThat(o).contains("interfaz de herramientas"));
         RespuestaAgente impersonal = new RespuestaAgente.Respuesta(

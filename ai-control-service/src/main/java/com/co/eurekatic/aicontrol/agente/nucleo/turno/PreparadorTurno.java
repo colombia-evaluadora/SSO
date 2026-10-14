@@ -80,12 +80,19 @@ public class PreparadorTurno {
         return new Intencion(TipoIntencion.ACCION, intencion.accion(), intencion.confianza(), intencion.riesgo());
     }
 
+    /** Mensajes del agente que se miran hacia atras: una respuesta suelta entre medias no corta la accion. */
+    static final int VENTANA_CONTINUIDAD = 3;
+
     private boolean sigueUnaAccion(UUID conversacionId) {
         List<MensajeStore.Mensaje> finales = mensajes.listarFinales(conversacionId);
-        for (int i = finales.size() - 1; i >= 0; i--) {
+        int vistos = 0;
+        for (int i = finales.size() - 1; i >= 0 && vistos < VENTANA_CONTINUIDAD; i--) {
             MensajeStore.Mensaje m = finales.get(i);
             if (m.rol() == RolMensaje.ASSISTANT) {
-                return esContinuable(m.tipoRespuesta(), m.contenido());
+                vistos++;
+                if (esContinuable(m.tipoRespuesta(), m.contenido())) {
+                    return true;
+                }
             }
         }
         return false;
@@ -95,7 +102,8 @@ public class PreparadorTurno {
         if ("PREGUNTA".equals(tipoRespuesta) || "CONFIRMACION".equals(tipoRespuesta)) {
             return true;
         }
-        return contenido != null && InvocadorHerramientas.PREFIJOS_RECHAZO.stream().anyMatch(contenido::startsWith);
+        return contenido != null && (InvocadorHerramientas.PREFIJOS_RECHAZO.stream().anyMatch(contenido::startsWith)
+                || GuardaDeAfirmaciones.esLlamadaEnTexto(contenido));
     }
 
     private void registrarBloqueo(UUID conversacionId, UsuarioAgente usuario, Evaluacion evaluacion) {

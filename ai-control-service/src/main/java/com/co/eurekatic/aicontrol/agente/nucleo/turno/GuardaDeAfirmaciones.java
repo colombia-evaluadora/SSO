@@ -22,7 +22,14 @@ final class GuardaDeAfirmaciones {
 
     /** El modelo escribio la llamada como texto (XML o marcas del proveedor) en vez de hacerla: nada se ejecuto. */
     private static final Pattern LLAMADA_EN_TEXTO = Pattern.compile(
-            "<\\s*/?\\s*(tool_call|tool|function_call|function|invoke|parameter)\\b|\\[/?tool_call\\]");
+            "<\\s*/?\\s*(tool_call|tool|function_call|function|invoke|parameter)\\b|\\[/?tool_call\\]"
+                    // Tambien como JSON: {"name": "estructura_esperada", "input"|"arguments"|"parameters": {...}}
+                    + "|\\{\\s*\"(name|tool|function)\"\\s*:\\s*\"[a-z_]+\"\\s*,\\s*\"(input|arguments|parameters|args)\"\\s*:");
+
+    /** Si el texto trae una llamada a herramienta escrita en vez de hecha. */
+    static boolean esLlamadaEnTexto(String texto) {
+        return texto != null && LLAMADA_EN_TEXTO.matcher(texto).find();
+    }
 
     private static final Pattern CONFIRMACION = Pattern.compile(
             "necesito tu confirmacion|(espera|pendiente de|requiere) (de )?tu confirmacion|pulsa confirmar|boton confirmar"

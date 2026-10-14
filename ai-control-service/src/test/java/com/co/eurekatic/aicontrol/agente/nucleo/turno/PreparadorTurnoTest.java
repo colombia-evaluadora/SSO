@@ -67,6 +67,17 @@ class PreparadorTurnoTest {
     }
 
     @Test
+    void unaRespuestaSueltaEntreMediasNoCortaLaAccionEnCurso() {
+        Intencion charla = new Intencion(TipoIntencion.CHARLA, "", 0.6, Riesgo.BAJO);
+        when(mensajes.listarFinales(CONVERSACION)).thenReturn(List.of(
+                asistente("RESPUESTA", "Datos no validos para el servicio academico: tipo esperado bigint"),
+                asistente("RESPUESTA", "La persona decidio: {niveles=...}"),
+                asistente("RESPUESTA", "Voy a consultar.\n{\"name\": \"estructura_esperada\", \"input\": {}}")));
+
+        assertThat(preparador.continuacion(CONVERSACION, charla).tipo()).isEqualTo(TipoIntencion.ACCION);
+    }
+
+    @Test
     void sinAccionEnCursoOConOtraIntencionNoCambiaNada() {
         Intencion charla = new Intencion(TipoIntencion.CHARLA, "", 0.6, Riesgo.BAJO);
         when(mensajes.listarFinales(CONVERSACION)).thenReturn(List.of(asistente("RESPUESTA", "Hay 3 sedes.")));
