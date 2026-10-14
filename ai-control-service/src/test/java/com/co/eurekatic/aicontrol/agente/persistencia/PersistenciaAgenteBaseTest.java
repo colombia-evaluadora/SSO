@@ -91,11 +91,15 @@ class PersistenciaAgenteBaseTest {
                 Duration.ofMinutes(10)));
         assertThat(acciones.buscar(accion.id(), USUARIO)).get().extracting(AccionPendienteStore.AccionPendiente::estado)
                 .isEqualTo(EstadoAccion.PENDIENTE);
+        assertThat(acciones.pendienteVigente(conversacion.id(), USUARIO)).get()
+                .extracting(AccionPendienteStore.AccionPendiente::id).isEqualTo(accion.id());
+        assertThat(acciones.pendienteVigente(conversacion.id(), USUARIO + 1)).as("ajena").isEmpty();
         assertThat(acciones.transicionar(accion.id(), USUARIO, EstadoAccion.EJECUTADA, AccionPendienteStore.MARCA_EN_CURSO))
                 .isTrue();
         assertThat(acciones.transicionar(accion.id(), USUARIO, EstadoAccion.EJECUTADA, AccionPendienteStore.MARCA_EN_CURSO))
                 .as("doble confirmacion").isFalse();
         assertThat(acciones.completar(accion.id(), USUARIO, EstadoAccion.EJECUTADA, "{\"ok\":true}")).isTrue();
+        assertThat(acciones.pendienteVigente(conversacion.id(), USUARIO)).as("ya resuelta").isEmpty();
         assertThat(acciones.marcarExpiradas()).isGreaterThanOrEqualTo(0);
 
         assertThat(conversaciones.archivar(conversacion.id(), USUARIO)).isTrue();

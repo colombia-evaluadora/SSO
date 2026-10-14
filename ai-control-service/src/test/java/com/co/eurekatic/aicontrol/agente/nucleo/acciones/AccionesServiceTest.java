@@ -104,6 +104,9 @@ class AccionesServiceTest {
         assertThat(AccionesService.resumenConAviso("Asignar 2 estudiantes", reemplaza))
                 .isEqualTo("Asignar 2 estudiantes Atención: Los que no incluyas saldrán de la actividad.");
         assertThat(AccionesService.resumenConAviso("Crear a Ana", escritura)).isEqualTo("Crear a Ana");
+        assertThat(AccionesService.mensajeHecho("Asignar 2 estudiantes Atención: Los que no incluyas saldrán."))
+                .isEqualTo("Hecho: Asignar 2 estudiantes.");
+        assertThat(AccionesService.mensajeHecho("Crear a Ana.")).isEqualTo("Hecho: Crear a Ana.");
     }
 
     @Test

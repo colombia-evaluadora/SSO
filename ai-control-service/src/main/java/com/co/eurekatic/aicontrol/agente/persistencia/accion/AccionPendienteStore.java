@@ -45,6 +45,9 @@ public interface AccionPendienteStore {
     /** Accion propia por id; vacio si no existe o es ajena. */
     Optional<AccionPendiente> buscar(UUID id, long fkUsuario);
 
+    /** La accion mas reciente de la conversacion que sigue esperando confirmacion y no ha vencido. */
+    Optional<AccionPendiente> pendienteVigente(UUID conversacionId, long fkUsuario);
+
     /**
      * Pasa una accion de PENDIENTE a {@code nuevo} solo si sigue pendiente y no ha vencido.
      *

@@ -50,6 +50,7 @@ public class AccionesService {
     private static final String MENSAJE_CANCELADA = "Acción cancelada. No se ha hecho ningún cambio.";
     private static final String MENSAJE_NO_DISPONIBLE = "Esa acción ya no está disponible. No se ha hecho ningún cambio.";
     private static final String MENSAJE_HECHO = "Hecho: %s.";
+    private static final String PREFIJO_AVISO = " Atención: ";
     private static final String MENSAJE_SERVIDOR =
             "No se pudo completar la acción por un problema del servicio académico. Revisa antes de volver a intentarlo.";
     private static final String MOTIVO_HUELLA = "HUELLA_NO_COINCIDE";
@@ -87,10 +88,17 @@ public class AccionesService {
         return new AccionPropuesta(creada.id(), creada.resumen(), creada.expiraAt());
     }
 
+    /** Lo hecho, sin el aviso de confirmacion (ya no aplica) y sin doble punto final. */
+    static String mensajeHecho(String resumen) {
+        int aviso = resumen.indexOf(PREFIJO_AVISO);
+        String accion = (aviso >= 0 ? resumen.substring(0, aviso) : resumen).strip();
+        return MENSAJE_HECHO.formatted(accion.endsWith(".") ? accion.substring(0, accion.length() - 1) : accion);
+    }
+
     /** Las escrituras que reemplazan un conjunto dicen, antes de confirmar, que daran de baja lo no incluido. */
     static String resumenConAviso(String resumen, HerramientaDef herramienta) {
         return herramienta.avisoConfirmacion()
-                .map(aviso -> resumen + " Atención: " + aviso)
+                .map(aviso -> resumen + PREFIJO_AVISO + aviso)
                 .orElse(resumen);
     }
 
@@ -106,6 +114,12 @@ public class AccionesService {
     }
 
     /** Descarta una accion pendiente. Nada se ejecuta. */
+    /** La accion de la conversacion que espera confirmacion, si la hay. */
+    public Optional<AccionPropuesta> pendienteVigente(UUID conversacionId, UsuarioAgente usuario) {
+        return acciones.pendienteVigente(conversacionId, usuario.userId())
+                .map(a -> new AccionPropuesta(a.id(), a.resumen(), a.expiraAt()));
+    }
+
     public RespuestaAgente cancelar(UUID id, UsuarioAgente usuario) {
         AccionPendiente accion = acciones.buscar(id, usuario.userId()).orElseThrow(ErrorAgente.AccionNoEncontrada::new);
         if (!acciones.transicionar(id, usuario.userId(), EstadoAccion.DESCARTADA, null)) {
@@ -142,7 +156,7 @@ public class AccionesService {
         }
         RespuestaQuery resultado = invocar(accion, ruta.get(), usuario);
         return switch (resultado) {
-            case RespuestaQuery.Exito _ -> cerrar(accion, EstadoAccion.EJECUTADA, MENSAJE_HECHO.formatted(accion.resumen()));
+            case RespuestaQuery.Exito _ -> cerrar(accion, EstadoAccion.EJECUTADA, mensajeHecho(accion.resumen()));
             case RespuestaQuery.ErrorCliente error -> cerrar(accion, EstadoAccion.FALLIDA, InvocadorHerramientas.traducir(error));
             case RespuestaQuery.ErrorServidor _ -> cerrar(accion, EstadoAccion.FALLIDA, MENSAJE_SERVIDOR);
         };

@@ -31,6 +31,15 @@ public class AccionPendienteRepository implements AccionPendienteStore {
             WHERE id = :id AND fk_usuario = :fkUsuario AND active = TRUE
             """;
 
+    private static final String SQL_PENDIENTE_VIGENTE = """
+            SELECT\s""" + COLUMNAS + """
+             FROM ai.accion_pendiente
+            WHERE conversacion_id = :conversacionId AND fk_usuario = :fkUsuario AND active = TRUE
+              AND estado = 'PENDIENTE' AND expira_at > LOCALTIMESTAMP
+            ORDER BY created_at DESC
+            LIMIT 1
+            """;
+
     /** Solo cambia una accion PENDIENTE y no vencida: es lo que hace atomica la confirmacion. */
     private static final String SQL_TRANSICIONAR = """
             UPDATE ai.accion_pendiente
@@ -99,6 +108,15 @@ public class AccionPendienteRepository implements AccionPendienteStore {
     public Optional<AccionPendiente> buscar(UUID id, long fkUsuario) {
         return jdbc.sql(SQL_BUSCAR)
                 .param("id", id)
+                .param("fkUsuario", fkUsuario)
+                .query(FILA)
+                .optional();
+    }
+
+    @Override
+    public Optional<AccionPendiente> pendienteVigente(UUID conversacionId, long fkUsuario) {
+        return jdbc.sql(SQL_PENDIENTE_VIGENTE)
+                .param("conversacionId", conversacionId)
                 .param("fkUsuario", fkUsuario)
                 .query(FILA)
                 .optional();

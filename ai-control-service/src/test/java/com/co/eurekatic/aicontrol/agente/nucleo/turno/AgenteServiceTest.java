@@ -143,6 +143,32 @@ class AgenteServiceTest {
                 org.mockito.ArgumentMatchers.argThat(r -> r.texto().equals("Persona_1 tiene 4.5")), any(Consumo.class));
     }
 
+    @Test
+    void unSiEscritoConUnaAccionPendienteNoLlegaAlModeloYRecuerdaElBoton() {
+        AccionPropuesta pendiente = new AccionPropuesta(UUID.randomUUID(), "Editar la actividad", LocalDateTime.now());
+        when(acciones.pendienteVigente(CONVERSACION, USUARIO)).thenReturn(Optional.of(pendiente));
+
+        RespuestaAgente respuesta = servicio.procesar(CONVERSACION, USUARIO, "Sí, confirmo", "");
+
+        assertThat(respuesta).isInstanceOfSatisfying(RespuestaAgente.Confirmacion.class, c -> {
+            assertThat(c.accion()).isEqualTo(pendiente);
+            assertThat(c.texto()).contains("pulsa Confirmar");
+        });
+        verify(preparador, never()).preparar(any(), any(), anyString());
+        verify(bucle, never()).ejecutar(any());
+        verify(acciones, never()).confirmar(any(), any());
+    }
+
+    @Test
+    void unSiSinAccionPendienteSigueElTurnoNormal() {
+        Preparacion.Listo listo = listo(TipoIntencion.CHARLA, List.of());
+        when(preparador.preparar(CONVERSACION, USUARIO, "sí")).thenReturn(listo);
+        when(bucle.ejecutar(any())).thenReturn(new ResultadoBucle.Final(
+                new RespuestaAgente.Respuesta("¿Sí a qué?"), Uso.NINGUNO, "MiniMax-M3"));
+
+        assertThat(servicio.procesar(CONVERSACION, USUARIO, "sí", "").texto()).isEqualTo("¿Sí a qué?");
+    }
+
     private static Preparacion.Listo listo(TipoIntencion tipo, List<HerramientaDef> herramientas) {
         return new Preparacion.Listo("texto", new Intencion(tipo, "", 0.9, Riesgo.BAJO), herramientas, List.of(), Map.of());
     }

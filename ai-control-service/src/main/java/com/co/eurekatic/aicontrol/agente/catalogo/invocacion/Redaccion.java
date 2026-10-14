@@ -47,7 +47,23 @@ public final class Redaccion {
                 .filter(p -> argumentos.planos().containsKey(p.clave()))
                 .map(p -> etiqueta(p) + ": " + texto(argumentos.planos().get(p.clave())))
                 .collect(Collectors.joining("; "));
-        return pares.isEmpty() ? herramienta.descripcion() : herramienta.descripcion() + " - " + pares;
+        String accion = accion(herramienta.descripcion());
+        return pares.isEmpty() ? accion : accion + " (" + pares + ")";
+    }
+
+    /**
+     * Lo que la persona lee al confirmar: la primera frase de la descripcion, hasta los dos puntos o el punto
+     * ("Edita una actividad existente del planeador"), no la descripcion entera pensada para el modelo.
+     */
+    public static String accion(String descripcion) {
+        int corte = descripcion.length();
+        for (char separador : new char[] {':', '.'}) {
+            int i = descripcion.indexOf(separador);
+            if (i > 0 && i < corte) {
+                corte = i;
+            }
+        }
+        return descripcion.substring(0, corte).strip();
     }
 
     private static String etiqueta(ParametroDef parametro) {

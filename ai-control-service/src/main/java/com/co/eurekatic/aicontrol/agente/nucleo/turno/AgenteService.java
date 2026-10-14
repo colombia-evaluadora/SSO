@@ -4,6 +4,7 @@ import com.co.eurekatic.aicontrol.agente.comun.UsuarioAgente;
 import com.co.eurekatic.aicontrol.agente.nucleo.AccionPropuesta;
 import com.co.eurekatic.aicontrol.agente.nucleo.TurnoContexto;
 import com.co.eurekatic.aicontrol.agente.nucleo.acciones.AccionesService;
+import com.co.eurekatic.aicontrol.agente.nucleo.acciones.AfirmacionEnChat;
 import com.co.eurekatic.aicontrol.agente.nucleo.intencion.Intencion;
 import com.co.eurekatic.aicontrol.agente.nucleo.intencion.TipoIntencion;
 import com.co.eurekatic.aicontrol.agente.nucleo.respuesta.RespuestaAgente;
@@ -12,6 +13,7 @@ import com.co.eurekatic.aicontrol.agente.seguridad.seudonimos.TablaSeudonimos;
 import com.co.eurekatic.aicontrol.agente.ui.contexto.LectorContextoUi;
 import org.springframework.stereotype.Service;
 
+import java.util.Optional;
 import java.util.UUID;
 
 /**
@@ -24,6 +26,8 @@ public class AgenteService {
 
     static final String MENSAJE_SIN_PERMISO = "No tienes permiso para hacer esa acción desde el asistente.";
     static final String TEXTO_CONFIRMACION = "Antes de hacerlo necesito tu confirmación: %s";
+    static final String TEXTO_USA_BOTON = "Para hacerlo, pulsa Confirmar en la acción pendiente: %s. "
+            + "Escribirlo en el chat no la ejecuta.";
     private static final long NANOS_POR_MILISEGUNDO = 1_000_000L;
 
     private final ConversacionesService conversaciones;
@@ -80,6 +84,13 @@ public class AgenteService {
         traza.pasar(EstadoTurno.VALIDADO);
         // Desde aqui todo lo que va al proveedor del modelo lleva los nombres conocidos como seudonimos.
         TablaSeudonimos seudonimos = almacenSeudonimos.cargar(conversacionId);
+        Optional<AccionPropuesta> pendiente = AfirmacionEnChat.es(texto)
+                ? acciones.pendienteVigente(conversacionId, usuario)
+                : Optional.empty();
+        if (pendiente.isPresent()) {
+            return recordarConfirmacion(conversacionId, usuario, seudonimos.ocultar(texto), pendiente.get(),
+                    seudonimos, traza);
+        }
         Preparacion preparacion = preparador.preparar(conversacionId, usuario, seudonimos.ocultar(texto));
         return switch (preparacion) {
             case Preparacion.Bloqueada bloqueada -> {
@@ -118,6 +129,22 @@ public class AgenteService {
             case ResultadoBucle.Propuesta propuesta -> confirmacion(conversacionId, usuario, propuesta);
         };
         return cerrar(conversacionId, usuario, respuesta, consumo, seudonimos, traza);
+    }
+
+    /**
+     * Un "si" escrito con una accion pendiente: no llega al modelo ni ejecuta nada; se recuerda el boton y se
+     * vuelve a mostrar la accion. Pasa por la salida segura y el registro como cualquier otro turno.
+     */
+    private RespuestaAgente recordarConfirmacion(UUID conversacionId, UsuarioAgente usuario, String texto,
+                                                 AccionPropuesta pendiente, TablaSeudonimos seudonimos,
+                                                 TrazaTurno traza) {
+        traza.pasar(EstadoTurno.INTENCION);
+        registrador.iniciar(conversacionId, texto);
+        traza.pasar(EstadoTurno.PERMISO_OK);
+        traza.pasar(EstadoTurno.RECOLECTANDO);
+        return cerrar(conversacionId, usuario,
+                new RespuestaAgente.Confirmacion(TEXTO_USA_BOTON.formatted(pendiente.resumen()), pendiente),
+                Consumo.NINGUNO, seudonimos, traza);
     }
 
     /** Accion sin ninguna herramienta de escritura disponible: no hay nada que proponer. */
