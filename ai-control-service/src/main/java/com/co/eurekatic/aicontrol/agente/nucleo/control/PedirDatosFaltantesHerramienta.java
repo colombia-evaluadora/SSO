@@ -2,6 +2,7 @@ package com.co.eurekatic.aicontrol.agente.nucleo.control;
 
 import com.co.eurekatic.aicontrol.agente.catalogo.dominio.HerramientaDef;
 import com.co.eurekatic.aicontrol.agente.catalogo.dominio.ParametroDef;
+import com.co.eurekatic.aicontrol.agente.memoria.NotaDeMemoria;
 import com.co.eurekatic.aicontrol.agente.nucleo.Faltante;
 import com.co.eurekatic.aicontrol.agente.nucleo.TurnoContexto;
 import com.co.eurekatic.aicontrol.agente.nucleo.respuesta.RespuestaAgente;
@@ -28,7 +29,7 @@ public class PedirDatosFaltantesHerramienta implements ProveedorHerramientasCont
     static final String NOMBRE = "pedir_datos_faltantes";
     static final String ACUSE = "Pregunta enviada a la persona. No hagas mas llamadas en este turno.";
     static final String ERROR = "Indica al menos un dato faltante, con su campo y su pregunta.";
-    static final String TEXTO = "Para continuar necesito estos datos.";
+    static final String TEXTO = NotaDeMemoria.TEXTO_PREGUNTA;
     static final String CONSULTA_ANTES = "Todavia no consultaste nada en este turno y la persona no ve esta pregunta. "
             + "Los resultados de turnos anteriores no los tienes: busca primero lo que se pueda con las consultas que "
             + "resuelven los datos de la accion; despues pregunta solo lo que siga faltando o sea ambiguo, con opciones "

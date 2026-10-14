@@ -73,6 +73,7 @@ class AgenteServiceTest {
         salida = mock(SalidaTurno.class);
         when(salida.revisar(any(), any(), anyLong())).thenAnswer(i -> i.getArgument(0));
         when(registrador.iniciar(any(), anyString())).thenReturn(new RegistradorTurno.Inicio(9L, List.of()));
+        when(registrador.dichoPorLaPersona(any())).thenReturn("");
         servicio = new AgenteService(conversaciones, preparador, registrador,
                 new PromptTurno(new org.springframework.core.io.ClassPathResource("prompts/agente-sistema.st"),
                         PropiedadesAgenteFixture.propiedades().limites().textoMaxCaracteres()),
@@ -206,9 +207,10 @@ class AgenteServiceTest {
     void elMensajeAlModeloNombraLosAliasDeLosNombresEscritosAMedias() {
         TablaSeudonimos tabla = TablaSeudonimos.desde(Map.of("Persona_3", "LUIS FELIPE CASTRO DIAZ"));
 
-        assertThat(AgenteService.conEquivalencias("Reasigna a Luis Castro", tabla))
-                .startsWith("Reasigna a Luis Castro\n").containsIgnoringCase("\"Luis Castro\" es Persona_3");
-        assertThat(AgenteService.conEquivalencias("Lista mis grupos", tabla)).isEqualTo("Lista mis grupos");
+        assertThat(AgenteService.equivalencias("Deja solo a Luis Castro\nUsa los valores por defecto", tabla))
+                .as("tambien lo que dijo en un mensaje anterior")
+                .startsWith("\n(Nombres que escribio la persona:").containsIgnoringCase("\"Luis Castro\" es Persona_3");
+        assertThat(AgenteService.equivalencias("Lista mis grupos", tabla)).isEmpty();
     }
 
     @Test

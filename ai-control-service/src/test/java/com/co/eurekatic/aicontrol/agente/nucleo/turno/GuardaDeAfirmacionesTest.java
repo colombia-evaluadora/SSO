@@ -47,6 +47,10 @@ class GuardaDeAfirmacionesTest {
                 .isEqualTo("La persona confirmo y el sistema ejecuto: Registra la asistencia.");
         assertThat(GuardaDeAfirmaciones.objecion(new RespuestaAgente.Respuesta("Para continuar necesito estos datos.")))
                 .as("el aviso de datos faltantes sin la herramienta").contains(GuardaDeAfirmaciones.PREGUNTA_SIN_HERRAMIENTA);
+        assertThat(List.of("Para seguir necesito estos datos.", "Para poder avanzar, necesito los siguientes datos:",
+                "Pedi a la persona con la herramienta pedir_datos_faltantes los datos que faltaban."))
+                .allSatisfy(x -> assertThat(GuardaDeAfirmaciones.objecion(new RespuestaAgente.Respuesta(x)))
+                        .as(x).contains(GuardaDeAfirmaciones.PREGUNTA_SIN_HERRAMIENTA));
         assertThat(NotaDeMemoria.para("RESPUESTA", "Datos no validos para el servicio academico: indique el peso (%)"))
                 .startsWith("La persona confirmo la accion anterior pero el servicio la rechazo")
                 .contains("vuelve a llamar a la misma herramienta");

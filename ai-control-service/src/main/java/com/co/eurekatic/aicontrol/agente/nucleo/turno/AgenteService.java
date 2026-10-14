@@ -133,13 +133,15 @@ public class AgenteService {
         TurnoContexto contexto = new TurnoContexto(listo.herramientas(), LectorContextoUi.leer(contextoUiJson),
                 listo.menus(), seudonimos);
         Optional<BorradorAccion> borrador = borradores.cargar(conversacionId);
+        String dichoPorLaPersona = registrador.dichoPorLaPersona(conversacionId);
         ResultadoBucle resultado = bucle.ejecutar(new BucleAgente.Entrada(
                 usuario,
                 conversacionId,
                 arranque.mensajeId(),
-                listo.textoNormalizado(),
+                dichoPorLaPersona,
                 prompts.mensajes(arranque.historial(),
-                        conEquivalencias(listo.textoNormalizado(), seudonimos) + notaDeBorrador(borrador, listo),
+                        listo.textoNormalizado() + equivalencias(dichoPorLaPersona, seudonimos)
+                                + notaDeBorrador(borrador, listo),
                         contextoUiJson),
                 listo.callbacks(),
                 contexto,
@@ -176,11 +178,11 @@ public class AgenteService {
      * Persona_3): si el modelo no vuelve a consultar en este turno, sin esto no los relaciona con sus alias. Solo
      * nombra lo que la persona ya escribio. La memoria guarda el mensaje sin la nota.
      */
-    static String conEquivalencias(String texto, TablaSeudonimos seudonimos) {
-        String pares = seudonimos.equivalencias(texto).entrySet().stream()
+    static String equivalencias(String dichoPorLaPersona, TablaSeudonimos seudonimos) {
+        String pares = seudonimos.equivalencias(dichoPorLaPersona).entrySet().stream()
                 .map(e -> "\"" + e.getValue() + "\" es " + e.getKey())
                 .collect(Collectors.joining("; "));
-        return pares.isEmpty() ? texto : texto + "\n(Nombres de este mensaje: " + pares + ".)";
+        return pares.isEmpty() ? "" : "\n(Nombres que escribio la persona: " + pares + ".)";
     }
 
     /**

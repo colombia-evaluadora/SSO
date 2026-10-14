@@ -14,7 +14,7 @@ import java.util.function.Consumer;
  * @param bearer       token del usuario, con el que se llama al query-service
  * @param conversationId conversacion, para el registro de ids
  * @param mensajeId    mensaje del usuario ya persistido; las invocaciones cuelgan de el
- * @param textoUsuario  ultimo mensaje del usuario, para la regla de ids
+ * @param textoUsuario  todo lo que la persona escribio en la conversacion, para la regla de ids y los alias
  * @param alProponer    recibe cada escritura validada que espera confirmacion
  */
 public record ContextoInvocacion(

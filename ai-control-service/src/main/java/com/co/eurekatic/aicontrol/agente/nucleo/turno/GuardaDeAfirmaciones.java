@@ -45,7 +45,10 @@ final class GuardaDeAfirmaciones {
             "\\bse (actualizo|cambio|modifico|creo|guardo|registro|asigno|califico|elimino|vinculo)\\b"
                     + "|\\b(quedo|ha quedado|quedaron|han quedado) (actualizad|cambiad|registrad|guardad|asignad|calificad|cread)");
     /** El texto que pone pedir_datos_faltantes, escrito por el modelo sin llamarla: la persona no ve que falta. */
-    private static final Pattern PREGUNTA_IMITADA = Pattern.compile("^\\W*para continuar necesito estos datos\\W*$");
+    private static final Pattern PREGUNTA_IMITADA = Pattern.compile(
+            "^\\W*(para (poder )?(continuar|seguir|avanzar|terminar|prepararla|prepararlo),? )?necesito "
+                    + "(estos|los siguientes|unos|algunos|mas) datos\\W*$"
+                    + "|pedi a la persona con la herramienta pedir_datos_faltantes");
     static final String PREGUNTA_SIN_HERRAMIENTA = "Control del sistema: escribiste el aviso de datos faltantes sin "
             + "decir cuales. Si ya tienes los datos, llama a la herramienta de escritura; si falta alguno que ninguna "
             + "consulta da, llama a pedir_datos_faltantes con cada pregunta y sus opciones.";

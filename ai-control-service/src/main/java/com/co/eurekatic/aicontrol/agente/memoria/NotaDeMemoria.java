@@ -28,6 +28,12 @@ public final class NotaDeMemoria {
             case "CONFIRMACION" -> "Prepare con la herramienta la accion «" + sinPrefijo(texto)
                     + "», que espera el boton Confirmar de la persona; todavia no se ha ejecutado.";
             case "UI" -> "Envie acciones a la pantalla con la herramienta y le dije a la persona: " + texto;
+            // Literal ("Para continuar necesito estos datos"), el modelo lo repite como respuesta sin preguntar nada.
+            case "PREGUNTA" -> texto.startsWith(TEXTO_PREGUNTA)
+                    ? "Pedi a la persona con la herramienta pedir_datos_faltantes los datos que faltaban; su respuesta "
+                            + "llega en el mensaje siguiente."
+                    : "Pedi a la persona con la herramienta pedir_datos_faltantes: " + texto + ". Su respuesta llega en "
+                            + "el mensaje siguiente.";
             // El resultado de confirmar lo escribe el sistema: si vuelve literal ("Hecho: ..."), el modelo lo copia
             // y da por hecha una accion que no propuso.
             default -> texto.startsWith(PREFIJO_HECHO)
@@ -35,6 +41,9 @@ public final class NotaDeMemoria {
                     : rechazoAlConfirmar(texto);
         };
     }
+
+    /** Texto con que se muestra una pregunta de pedir_datos_faltantes; las preguntas van aparte. */
+    public static final String TEXTO_PREGUNTA = "Para continuar necesito estos datos.";
 
     /** Comienzo del texto de una accion confirmada y ejecutada (lo escribe el servicio de acciones). */
     public static final String PREFIJO_HECHO = "Hecho: ";

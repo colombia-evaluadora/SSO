@@ -13,6 +13,7 @@ import org.springframework.stereotype.Component;
 
 import java.util.List;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 /**
  * Persistencia y memoria de un turno: el mensaje del usuario al empezar, la respuesta al terminar.
@@ -60,7 +61,29 @@ public class RegistradorTurno {
                 null,
                 conModelo ? (int) consumo.latenciaMs() : null));
         memoria.add(conversacionId.toString(),
-                new AssistantMessage(NotaDeMemoria.para(respuesta.tipo().name(), respuesta.texto())));
+                new AssistantMessage(NotaDeMemoria.para(respuesta.tipo().name(), textoParaMemoria(respuesta))));
+    }
+
+    /**
+     * Todo lo que la persona escribio en la conversacion, incluido el mensaje del turno (ya guardado al iniciar):
+     * "deja solo a Brayan y a Luis" y despues "usa los valores por defecto". Con el mensaje actual solo, los
+     * nombres y los ids de los anteriores se pierden; la ventana de memoria tambien los recorta.
+     */
+    public String dichoPorLaPersona(UUID conversacionId) {
+        return mensajes.listar(conversacionId).stream()
+                .filter(m -> m.rol() == RolMensaje.USER)
+                .map(MensajeStore.Mensaje::contenido)
+                .collect(Collectors.joining("\n"));
+    }
+
+    /** Una pregunta vuelve con lo que pregunto: su texto ("Para continuar necesito estos datos") no lo dice. */
+    static String textoParaMemoria(RespuestaAgente respuesta) {
+        return respuesta instanceof RespuestaAgente.Pregunta pregunta && !pregunta.faltantes().isEmpty()
+                ? pregunta.faltantes().stream()
+                        .map(f -> f.campo() + ": " + f.pregunta()
+                                + (f.opciones().isEmpty() ? "" : " (opciones: " + String.join(", ", f.opciones()) + ")"))
+                        .collect(Collectors.joining("; "))
+                : respuesta.texto();
     }
 
     /**
