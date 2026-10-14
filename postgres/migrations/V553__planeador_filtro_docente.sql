@@ -444,6 +444,36 @@ UPDATE public.query q
    AND q.http_method     = 'GET'
    AND q.query LIKE '%fn_unidad_listar%';
 
+-- El export PDF/Excel de unidades (reporting-service planeador-unidades) con
+-- el mismo alcance que el listado: sin SEDE/PERIODO el archivo traia unidades
+-- de otras sedes/jornadas que la pantalla no mostraba.
+UPDATE public.query q
+   SET query = $q$SELECT * FROM academico_test.fn_unidad_listar(
+    public.fn_get_academico_usuario_id(:CONTEXT.USER_ID::BIGINT),
+    CAST(:BODY.FILTERS.SEARCH AS VARCHAR),
+    CAST(:BODY.FILTERS.ASIGNATURA AS BIGINT),
+    CAST(:BODY.FILTERS.GRADO AS BIGINT),
+    CAST(:BODY.FILTERS.FUNCIONARIO AS BIGINT),
+    COALESCE(CAST(:BODY.FILTERS.INCLUIR_INACTIVOS AS BOOLEAN), FALSE),
+    COALESCE(CAST(:BODY.SORTING.ID AS VARCHAR), 'nombre'),
+    COALESCE(CAST(:BODY.SORTING.DESC AS TEXT), 'false') <> 'true',
+    NULL::INT,
+    0,
+    CAST(:BODY.FILTERS.DIA AS DATE),
+    COALESCE(CAST(:BODY.FILTERS.DIAS_GRACIA AS INT), 2),
+    CAST(:BODY.FILTERS.SEDE AS BIGINT),
+    CAST(:BODY.FILTERS.PERIODO AS BIGINT)
+) t
+WHERE CAST(:BODY.FILTERS.IDS AS BIGINT[]) IS NULL
+   OR t.pk_tunidad = ANY(CAST(:BODY.FILTERS.IDS AS BIGINT[]));$q$,
+       param_types = COALESCE(q.param_types, '{}'::jsonb) || '{"BODY.FILTERS.SEDE": "BIGINT", "BODY.FILTERS.PERIODO": "BIGINT"}'::jsonb
+  FROM public.microservice m
+ WHERE m.id_microservice = q.microservice_id
+   AND m.serviceid       = 'eval-col'
+   AND q.path_template   = '/planeador/unidades/export-all'
+   AND q.http_method     = 'POST'
+   AND q.query LIKE '%fn_unidad_listar%';
+
 UPDATE public.query q
    SET query = $q$SELECT f.*, d.fk_tfuncionario_docente, d.docente_nombre, COALESCE(d.es_propia, 'N') AS es_propia
   FROM academico_test.fn_actividad_listar_docente(
