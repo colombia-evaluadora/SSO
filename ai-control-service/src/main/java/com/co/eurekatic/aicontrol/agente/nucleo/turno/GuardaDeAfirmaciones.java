@@ -42,10 +42,27 @@ final class GuardaDeAfirmaciones {
                 .orElse(respuesta);
     }
 
-    /** Lo que se le devuelve al modelo para que rehaga un texto que afirma lo que no hizo. */
+    /**
+     * Lo que se le devuelve al modelo para que rehaga un texto que afirma lo que no hizo, o que ofrece consultar
+     * en vez de hacerlo ("si quiere, puedo consultarla"). Lo segundo no se sustituye si insiste: es honesto.
+     */
     static Optional<String> objecion(RespuestaAgente respuesta) {
-        return afirmacion(respuesta).map(a -> a.objecion);
+        Optional<String> afirmada = afirmacion(respuesta).map(a -> a.objecion);
+        if (afirmada.isPresent() || !(respuesta instanceof RespuestaAgente.Respuesta texto)) {
+            return afirmada;
+        }
+        return OFRECE_CONSULTAR.matcher(NormalizadorTexto.plegar(texto.texto())).find()
+                ? Optional.of(CONSULTA_EN_VEZ_DE_OFRECER)
+                : Optional.empty();
     }
+
+    /** "Si quiere, puedo consultarla", "revisela en su pantalla": ofrecer o mandar a buscar lo que una consulta da. */
+    private static final Pattern OFRECE_CONSULTAR = Pattern.compile(
+            "\\b(si (quieres|quiere|deseas|desea)|quieres que|desea que|puedo)\\b.{0,40}\\b(consult|busc|revis|averigu)\\w*"
+                    + "|\\brevis\\w* en (tu|su) pantalla");
+    static final String CONSULTA_EN_VEZ_DE_OFRECER = "Control del sistema: ofreces consultar o mandas a la persona a "
+            + "buscar, pero lo que pidio sale de una consulta que tienes disponible. Haz la consulta ahora y respondele "
+            + "con el dato.";
 
     private static Optional<Afirmacion> afirmacion(RespuestaAgente respuesta) {
         if (!(respuesta instanceof RespuestaAgente.Respuesta texto)) {

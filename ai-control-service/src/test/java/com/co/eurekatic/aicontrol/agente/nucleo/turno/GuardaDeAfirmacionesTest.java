@@ -48,6 +48,17 @@ class GuardaDeAfirmacionesTest {
     }
 
     @Test
+    void ofrecerConsultarEnVezDeHacerloSeObjetaPeroNoSeSustituye() {
+        RespuestaAgente ofrece = new RespuestaAgente.Respuesta(
+                "Para ver los detalles, revísela en su pantalla. Si quiere, puedo consultarla y resumirle el instrumento.");
+
+        assertThat(GuardaDeAfirmaciones.objecion(ofrece)).contains(GuardaDeAfirmaciones.CONSULTA_EN_VEZ_DE_OFRECER);
+        assertThat(GuardaDeAfirmaciones.revisar(ofrece)).as("si insiste, es honesto").isSameAs(ofrece);
+        assertThat(GuardaDeAfirmaciones.objecion(new RespuestaAgente.Respuesta("Tiene 15 estudiantes asignados.")))
+                .isEmpty();
+    }
+
+    @Test
     void lasRespuestasNormalesYLasDeUiPasanIntactas() {
         RespuestaAgente normal = new RespuestaAgente.Respuesta("El colegio tiene 4 sedes. Listo para ayudarte.");
         RespuestaAgente ui = new RespuestaAgente.Ui("Listo: rellené el nombre.",
