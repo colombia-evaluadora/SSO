@@ -39,9 +39,9 @@ public class EmisionBoletines {
      * Registra las emisiones del boletin que se esta imprimiendo y agrega a
      * cada fila {@code codigo_verificacion} y {@code url_verificacion}. Sin
      * URL base configurada devuelve las filas como estan: el boletin sale sin
-     * QR. Un fallo del registro corta la generacion (con el mismo gate que el
-     * boletin, si el boletin paso el registro tambien pasa): un boletin con
-     * un QR que no verifica es peor que uno sin QR.
+     * QR. Un fallo del registro NO corta la generacion: queda en el log y el
+     * boletin sale sin QR, igual que sin URL base. El QR es un anadido; no
+     * puede dejar al colegio sin poder imprimir el boletin.
      */
     public List<Map<String, Object>> marcar(String nivel, Map<String, Object> filtros,
                                             List<Map<String, Object>> rows, String bearer) {
@@ -58,8 +58,15 @@ public class EmisionBoletines {
             body.put("FK_TMATRICULAS", matriculas);
         }
 
-        List<Map<String, Object>> registradas = queryService.postRows(
-                null, v.getRegistrarPath(), bearer, body, props.getMaxRows());
+        List<Map<String, Object>> registradas;
+        try {
+            registradas = queryService.postRows(
+                    null, v.getRegistrarPath(), bearer, body, props.getMaxRows());
+        } catch (RuntimeException e) {
+            log.warn("Boletin {}: fallo el registro de emisiones, sale sin QR: {}",
+                    nivel, e.getMessage(), e);
+            return rows;
+        }
         Map<String, String> codigos = new HashMap<>();
         for (Map<String, Object> r : registradas) {
             codigos.put(Objects.toString(r.get("clave"), ""), Objects.toString(r.get("codigo"), null));

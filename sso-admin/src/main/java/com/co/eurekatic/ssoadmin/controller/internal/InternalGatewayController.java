@@ -5,11 +5,13 @@ import com.co.eurekatic.common.entity.Query;
 import com.co.eurekatic.common.repository.MicroserviceRepository;
 import com.co.eurekatic.common.repository.QueryRepository;
 import com.co.eurekatic.ssoadmin.dto.QueryDefinition;
+import org.springframework.http.HttpStatus;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.server.ResponseStatusException;
 
 import java.util.List;
 
@@ -165,6 +167,28 @@ public class InternalGatewayController {
                 ? queryRepo.findAllByPathTemplateIsNotNull()
                 : queryRepo.findAllByMicroservice_IdAndPathTemplateIsNotNull(microserviceId);
         return rows.stream().map(QueryDefinition::fromEntity).toList();
+    }
+
+    /* ====================== public queries for query-service ====================== */
+
+    /**
+     * Definicion de una consulta {@code public_end} para el
+     * {@code /public/service} anonimo de query-service.
+     *
+     * <p>{@code /getQuery} exige un JWT ({@code .authenticated()}), asi que
+     * una llamada sin token nunca llegaba al bypass de {@code publicEnd} y
+     * toda consulta publica anonima respondia 403. Aqui no hay usuario: la
+     * confianza es el {@code X-Internal-Token} y solo se devuelven filas
+     * publicas; una desconocida o no publica responde 403, sin distinguir.
+     */
+    @Transactional(readOnly = true)
+    @GetMapping("/publicQuery")
+    public QueryDefinition publicQuery(@RequestParam("uuid") String uuid) {
+        return queryRepo.findByUuid(uuid)
+                .filter(Query::isPublicEnd)
+                .map(QueryDefinition::fromEntity)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.FORBIDDEN,
+                        "No tiene acceso al query: " + uuid));
     }
 
     /* ====================== whoami for query-service auto-discovery ====================== */

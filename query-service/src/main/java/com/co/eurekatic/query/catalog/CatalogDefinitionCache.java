@@ -57,8 +57,16 @@ public class CatalogDefinitionCache {
                 .build();
     }
 
-    /** Definición de lectura para {@code uuid}; {@code auth} puede ser null (anónimo). */
+    /**
+     * Definición de lectura para {@code uuid}; {@code auth} puede ser null
+     * (anónimo, solo en {@code /public/service}): sso-admin no acepta
+     * {@code /getQuery} sin JWT, así que el anónimo va por el endpoint
+     * interno que solo devuelve consultas públicas.
+     */
     public QueryDefinition query(Authentication auth, String bearer, String uuid) {
+        if (auth == null) {
+            return resolve(queries, auth, uuid, () -> catalog.fetchPublicQuery(uuid));
+        }
         return resolve(queries, auth, uuid, () -> catalog.fetchQuery(bearer, uuid));
     }
 
