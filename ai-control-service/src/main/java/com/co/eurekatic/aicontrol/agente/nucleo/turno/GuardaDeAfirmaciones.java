@@ -3,13 +3,15 @@ package com.co.eurekatic.aicontrol.agente.nucleo.turno;
 import com.co.eurekatic.aicontrol.agente.nucleo.respuesta.RespuestaAgente;
 import com.co.eurekatic.aicontrol.agente.seguridad.NormalizadorTexto;
 
+import java.util.Optional;
 import java.util.regex.Pattern;
 
 /**
  * Un texto final del modelo nunca puede afirmar algo que solo una herramienta hace. En el turno el modelo no
  * ejecuta escrituras ni toca la pantalla: si escribe una confirmacion ("necesito tu confirmacion") sin haber
  * propuesto nada, o dice "listo, rellene..." sin acciones de UI, esta imitando el historial. Ese texto se
- * sustituye por uno honesto. Pura; solo mira respuestas de texto simple.
+ * devuelve al modelo una vez con una objecion ({@link #objecion}) y, si insiste, se sustituye por uno honesto.
+ * Pura; solo mira respuestas de texto simple.
  */
 final class GuardaDeAfirmaciones {
 
@@ -30,16 +32,41 @@ final class GuardaDeAfirmaciones {
     }
 
     static RespuestaAgente revisar(RespuestaAgente respuesta) {
+        return afirmacion(respuesta).map(a -> (RespuestaAgente) new RespuestaAgente.Respuesta(a.sustituto))
+                .orElse(respuesta);
+    }
+
+    /** Lo que se le devuelve al modelo para que rehaga un texto que afirma lo que no hizo. */
+    static Optional<String> objecion(RespuestaAgente respuesta) {
+        return afirmacion(respuesta).map(a -> a.objecion);
+    }
+
+    private static Optional<Afirmacion> afirmacion(RespuestaAgente respuesta) {
         if (!(respuesta instanceof RespuestaAgente.Respuesta texto)) {
-            return respuesta;
+            return Optional.empty();
         }
         String plegado = NormalizadorTexto.plegar(texto.texto());
         if (CONFIRMACION.matcher(plegado).find()) {
-            return new RespuestaAgente.Respuesta(SIN_ACCION);
+            return Optional.of(Afirmacion.ACCION);
         }
-        if (CAMBIO_HECHO.matcher(plegado).find()) {
-            return new RespuestaAgente.Respuesta(SIN_PANTALLA);
+        return CAMBIO_HECHO.matcher(plegado).find() ? Optional.of(Afirmacion.PANTALLA) : Optional.empty();
+    }
+
+    private enum Afirmacion {
+        ACCION(SIN_ACCION, "Control del sistema: tu respuesta dice que preparaste una accion, pero en este turno no "
+                + "llamaste a ninguna herramienta de escritura, asi que no hay nada que confirmar. Si la persona la "
+                + "pidio, llama ahora a la herramienta con los datos; si te falta alguno, pidelo. No repitas el "
+                + "historial."),
+        PANTALLA(SIN_PANTALLA, "Control del sistema: tu respuesta dice que cambiaste la pantalla, pero en este turno "
+                + "no llamaste a accion_ui, asi que nada cambio. Si la persona lo pidio, llama ahora a accion_ui; si "
+                + "no se puede, explicalo sin decir que lo hiciste.");
+
+        private final String sustituto;
+        private final String objecion;
+
+        Afirmacion(String sustituto, String objecion) {
+            this.sustituto = sustituto;
+            this.objecion = objecion;
         }
-        return respuesta;
     }
 }

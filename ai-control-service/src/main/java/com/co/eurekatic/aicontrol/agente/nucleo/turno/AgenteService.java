@@ -128,7 +128,8 @@ public class AgenteService {
                 listo.textoNormalizado(),
                 prompts.mensajes(arranque.historial(), listo.textoNormalizado(), contextoUiJson),
                 listo.callbacks(),
-                contexto));
+                contexto,
+                GuardaDeAfirmaciones::objecion));
         Consumo consumo = new Consumo(resultado.uso(), resultado.modelo(), milisegundosDesde(inicio));
         RespuestaAgente respuesta = switch (resultado) {
             case ResultadoBucle.Final fin -> analitica.presentar(GuardaDeAfirmaciones.revisar(fin.respuesta()), contexto,

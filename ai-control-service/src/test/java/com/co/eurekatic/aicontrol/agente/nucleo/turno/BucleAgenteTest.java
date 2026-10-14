@@ -145,6 +145,32 @@ class BucleAgenteTest {
         assertThat(llamadasAlModelo).isEqualTo(6);
     }
 
+    @Test
+    void unTextoObjetadoVuelveAlModeloUnaSolaVez() {
+        when(llamada.chatResponse()).thenReturn(texto("Listo, rellené el nombre."), texto("Listo, rellené el nombre."));
+        BucleAgente.Entrada base = entrada(new TurnoContexto(List.of()), List.of());
+        BucleAgente.Entrada conGuarda = new BucleAgente.Entrada(base.usuario(), base.conversacionId(), base.mensajeId(),
+                base.textoUsuario(), base.mensajes(), base.callbacks(), base.contexto(), GuardaDeAfirmaciones::objecion);
+
+        ResultadoBucle resultado = bucle.ejecutar(conGuarda);
+
+        // La segunda respuesta ya no se objeta: llega al turno, que la sustituye con la guarda.
+        assertThat(resultado).isInstanceOfSatisfying(ResultadoBucle.Final.class,
+                f -> assertThat(f.respuesta().texto()).isEqualTo("Listo, rellené el nombre."));
+        assertThat(llamadasAlModelo).isEqualTo(2);
+    }
+
+    @Test
+    void sinObjecionNoHayReintento() {
+        when(llamada.chatResponse()).thenReturn(texto("Hay 3 sedes."));
+        BucleAgente.Entrada base = entrada(new TurnoContexto(List.of()), List.of());
+
+        bucle.ejecutar(new BucleAgente.Entrada(base.usuario(), base.conversacionId(), base.mensajeId(),
+                base.textoUsuario(), base.mensajes(), base.callbacks(), base.contexto(), GuardaDeAfirmaciones::objecion));
+
+        assertThat(llamadasAlModelo).isEqualTo(1);
+    }
+
     private BucleAgente.Entrada entrada(TurnoContexto turno, List<ToolCallback> callbacks) {
         List<Message> mensajes = List.of(new UserMessage("hola"));
         return new BucleAgente.Entrada(USUARIO, UUID.randomUUID(), 1L, "hola", mensajes, callbacks, turno);

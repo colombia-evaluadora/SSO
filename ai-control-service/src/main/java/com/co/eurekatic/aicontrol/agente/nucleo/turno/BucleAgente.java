@@ -16,6 +16,7 @@ import org.springframework.ai.chat.client.AdvisorParams;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
+import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.metadata.ChatResponseMetadata;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.model.Generation;
@@ -27,11 +28,13 @@ import org.springframework.ai.tool.ToolCallback;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Component;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
+import java.util.function.Function;
 import java.util.stream.Collectors;
 
 /**
@@ -77,13 +80,21 @@ public class BucleAgente {
      * @param mensajes  prompt inicial: sistema, ventana y mensaje actual
      * @param callbacks herramientas que el modelo ve en el turno
      * @param contexto  herramientas permitidas y respuestas que dejan las de control
+     * @param objecion  ante un texto final, la correccion que se le devuelve al modelo (una vez por turno) para
+     *                  que lo rehaga; vacio si el texto vale
      */
     public record Entrada(UsuarioAgente usuario, UUID conversacionId, long mensajeId, String textoUsuario,
-                          List<Message> mensajes, List<ToolCallback> callbacks, TurnoContexto contexto) {
+                          List<Message> mensajes, List<ToolCallback> callbacks, TurnoContexto contexto,
+                          Function<RespuestaAgente, Optional<String>> objecion) {
 
         public Entrada {
             mensajes = List.copyOf(mensajes);
             callbacks = List.copyOf(callbacks);
+        }
+
+        public Entrada(UsuarioAgente usuario, UUID conversacionId, long mensajeId, String textoUsuario,
+                       List<Message> mensajes, List<ToolCallback> callbacks, TurnoContexto contexto) {
+            this(usuario, conversacionId, mensajeId, textoUsuario, mensajes, callbacks, contexto, r -> Optional.empty());
         }
     }
 
@@ -94,6 +105,7 @@ public class BucleAgente {
         Uso uso = Uso.NINGUNO;
         String modelo = modeloConfigurado;
         long limiteNanos = System.nanoTime() + limites.duracionMaximaTurno().toNanos();
+        boolean objetado = false;
         Set<String> ofrecidas = entrada.callbacks().stream()
                 .map(c -> c.getToolDefinition().name())
                 .collect(Collectors.toUnmodifiableSet());
@@ -108,7 +120,16 @@ public class BucleAgente {
             uso = uso.sumar(Uso.de(respuesta));
             modelo = modeloDe(respuesta);
             if (!respuesta.hasToolCalls()) {
-                return new ResultadoBucle.Final(textoFinal(respuesta), uso, modelo);
+                RespuestaAgente texto = textoFinal(respuesta);
+                Optional<String> objecion = objetado ? Optional.empty() : entrada.objecion().apply(texto);
+                if (objecion.isEmpty()) {
+                    return new ResultadoBucle.Final(texto, uso, modelo);
+                }
+                // Solo dentro del turno: ni el texto objetado ni la objecion llegan a la memoria.
+                log.info("Respuesta objetada, se devuelve al modelo: conversacion={}", entrada.conversacionId());
+                objetado = true;
+                mensajes = conObjecion(mensajes, respuesta, objecion.get());
+                continue;
             }
             List<String> nombres = nombres(respuesta);
             if (!ofrecidas.containsAll(nombres)) {
@@ -146,6 +167,13 @@ public class BucleAgente {
                 .advisors(AdvisorParams.toolCallingAdvisorAutoRegister(false))
                 .call()
                 .chatResponse());
+    }
+
+    private static List<Message> conObjecion(List<Message> mensajes, ChatResponse respuesta, String objecion) {
+        List<Message> con = new ArrayList<>(mensajes);
+        con.add(respuesta.getResult().getOutput());
+        con.add(new UserMessage(objecion));
+        return List.copyOf(con);
     }
 
     private static Map<String, Object> ambito(Entrada entrada) {
