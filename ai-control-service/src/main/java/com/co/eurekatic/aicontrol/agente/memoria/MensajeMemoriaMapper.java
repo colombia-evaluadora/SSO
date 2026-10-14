@@ -122,7 +122,8 @@ public final class MensajeMemoriaMapper {
         return switch (fila.rol()) {
             // Igual que en el turno: el mensaje de la persona vuelve al modelo dentro de su bloque de datos.
             case USER -> new Usuario(DatosDelUsuario.mensaje(fila.contenido()));
-            case ASSISTANT -> new Asistente(NotaDeMemoria.para(fila.tipoRespuesta(), fila.contenido()), List.of());
+            case ASSISTANT -> new Asistente(
+                    NotaDeMemoria.para(fila.tipoRespuesta(), fila.contenido(), fila.accionesUi()), List.of());
             case TOOL, SYSTEM -> throw new IllegalStateException(
                     "La memoria de respaldo solo admite turnos de texto, no " + fila.rol());
         };

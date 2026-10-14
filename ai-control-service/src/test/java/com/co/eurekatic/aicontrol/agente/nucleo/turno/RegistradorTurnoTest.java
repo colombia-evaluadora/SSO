@@ -2,6 +2,7 @@ package com.co.eurekatic.aicontrol.agente.nucleo.turno;
 
 import com.co.eurekatic.aicontrol.agente.memoria.NotaDeMemoria;
 import com.co.eurekatic.aicontrol.agente.nucleo.Faltante;
+import com.co.eurekatic.aicontrol.agente.nucleo.respuesta.AccionUi;
 import com.co.eurekatic.aicontrol.agente.nucleo.respuesta.RespuestaAgente;
 import com.co.eurekatic.aicontrol.agente.persistencia.herramienta.ToolInvocacionStore;
 import com.co.eurekatic.aicontrol.agente.persistencia.mensaje.MensajeStore;
@@ -63,6 +64,32 @@ class RegistradorTurnoTest {
         assertThat(NotaDeMemoria.para("PREGUNTA", NotaDeMemoria.TEXTO_PREGUNTA))
                 .as("una fila antigua de la base solo trae el texto generico")
                 .startsWith("[Pregunta enviada a la persona").doesNotContain(NotaDeMemoria.TEXTO_PREGUNTA);
+    }
+
+    @Test
+    void lasAccionesDeUiSeGuardanEnLaBaseYLaMemoriaRecuerdaCadaCampo() {
+        MensajeStore mensajes = mock(MensajeStore.class);
+        ChatMemory memoria = mock(ChatMemory.class);
+        RespuestaAgente.Ui ui = new RespuestaAgente.Ui("Listo, rellené los datos.", List.of(
+                new AccionUi.Rellenar("funcionario.crear", Map.of("cargo", "COORDINADOR")),
+                new AccionUi.Resaltar("funcionario.crear", "fecha_ingreso")));
+
+        new RegistradorTurno(memoria, mensajes, mock(ToolInvocacionStore.class))
+                .registrar(CONVERSACION, ui, Consumo.NINGUNO, 30L);
+
+        ArgumentCaptor<MensajeStore.NuevoMensaje> guardado = ArgumentCaptor.forClass(MensajeStore.NuevoMensaje.class);
+        verify(mensajes).insertar(eq(CONVERSACION), guardado.capture());
+        String json = guardado.getValue().accionesUiJson();
+        assertThat(json).contains("\"op\":\"RELLENAR\"", "\"cargo\":\"COORDINADOR\"", "\"op\":\"RESALTAR\"");
+        String nota = "[Cambios enviados a la pantalla: rellenar cargo=COORDINADOR; resaltar fecha_ingreso. "
+                + "Texto mostrado: Listo, rellené los datos.]";
+        ArgumentCaptor<List<Message>> turno = ArgumentCaptor.forClass(List.class);
+        verify(memoria).add(eq(CONVERSACION.toString()), turno.capture());
+        assertThat(turno.getValue()).singleElement().satisfies(m -> assertThat(m.getText()).isEqualTo(nota));
+        assertThat(NotaDeMemoria.para("UI", "Listo, rellené los datos.", json))
+                .as("la memoria reconstruida desde la base dice lo mismo").isEqualTo(nota);
+        assertThat(NotaDeMemoria.para("UI", "Listo.", "no es json"))
+                .isEqualTo("[Cambios enviados a la pantalla. Texto mostrado: Listo.]");
     }
 
     @Test

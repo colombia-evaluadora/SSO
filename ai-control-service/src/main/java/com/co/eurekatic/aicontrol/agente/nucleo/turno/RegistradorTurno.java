@@ -2,6 +2,7 @@ package com.co.eurekatic.aicontrol.agente.nucleo.turno;
 
 import com.co.eurekatic.aicontrol.agente.memoria.MensajeMemoriaMapper;
 import com.co.eurekatic.aicontrol.agente.memoria.NotaDeMemoria;
+import com.co.eurekatic.aicontrol.agente.nucleo.respuesta.AccionUi;
 import com.co.eurekatic.aicontrol.agente.nucleo.respuesta.RespuestaAgente;
 import com.co.eurekatic.aicontrol.agente.persistencia.herramienta.ToolInvocacionStore;
 import com.co.eurekatic.aicontrol.agente.persistencia.mensaje.MensajeStore;
@@ -12,6 +13,8 @@ import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.stereotype.Component;
+import tools.jackson.core.type.TypeReference;
+import tools.jackson.databind.json.JsonMapper;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -70,20 +73,35 @@ public class RegistradorTurno {
     public void registrar(UUID conversacionId, RespuestaAgente respuesta, Consumo consumo, long mensajeIdUsuario) {
         Uso uso = consumo.uso();
         boolean conModelo = !consumo.modelo().isBlank();
+        String accionesUi = accionesUiJson(respuesta);
         mensajes.insertar(conversacionId, new NuevoMensaje(
                 RolMensaje.ASSISTANT,
                 respuesta.texto(),
                 respuesta.tipo().name(),
-                null,
+                accionesUi,
                 conModelo ? consumo.modelo() : null,
                 uso.tokensEntrada().orElse(null),
                 uso.tokensSalida().orElse(null),
                 null,
                 conModelo ? (int) consumo.latenciaMs() : null));
         List<Message> turno = new ArrayList<>(llamadasDelTurno(conversacionId, mensajeIdUsuario));
-        turno.add(new AssistantMessage(NotaDeMemoria.para(respuesta.tipo().name(), textoParaMemoria(respuesta))));
+        turno.add(new AssistantMessage(
+                NotaDeMemoria.para(respuesta.tipo().name(), textoParaMemoria(respuesta), accionesUi)));
         memoria.add(conversacionId.toString(), turno);
     }
+
+    /**
+     * Las acciones de UI de la respuesta en JSON, para {@code ai.mensaje.acciones_ui} y la nota de memoria: sin
+     * ellas el modelo solo recuerda que toco la pantalla, no que campos ni con que valores. Null si no hay.
+     */
+    static String accionesUiJson(RespuestaAgente respuesta) {
+        return respuesta instanceof RespuestaAgente.Ui ui && !ui.acciones().isEmpty()
+                ? JSON.writerFor(LISTA_ACCIONES).writeValueAsString(ui.acciones())
+                : null;
+    }
+
+    private static final JsonMapper JSON = JsonMapper.builder().build();
+    private static final TypeReference<List<AccionUi>> LISTA_ACCIONES = new TypeReference<>() {};
 
     private List<Message> llamadasDelTurno(UUID conversacionId, long mensajeIdUsuario) {
         if (mensajeIdUsuario == SIN_MENSAJE) {

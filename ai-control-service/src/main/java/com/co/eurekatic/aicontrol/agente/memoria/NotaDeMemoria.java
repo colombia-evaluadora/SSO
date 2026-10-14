@@ -27,13 +27,22 @@ public final class NotaDeMemoria {
      * @param tipoRespuesta tipo con que se mostro (RESPUESTA, CONFIRMACION, UI...); null en mensajes antiguos
      */
     public static String para(String tipoRespuesta, String texto) {
+        return para(tipoRespuesta, texto, null);
+    }
+
+    /**
+     * @param accionesUiJson las acciones de UI enviadas, como las guarda {@code ai.mensaje.acciones_ui}; null si no
+     *                       hubo o en mensajes antiguos
+     */
+    public static String para(String tipoRespuesta, String texto, String accionesUiJson) {
         if (tipoRespuesta == null) {
             return texto;
         }
         return switch (tipoRespuesta) {
             case "CONFIRMACION" -> "[Accion propuesta, pendiente de Confirmar: " + sinPrefijo(texto)
                     + ". Todavia no se ha ejecutado.]";
-            case "UI" -> "[Cambios enviados a la pantalla. Texto mostrado: " + texto + "]";
+            case "UI" -> "[Cambios enviados a la pantalla" + ResumenAccionesUi.de(accionesUiJson)
+                    + ". Texto mostrado: " + texto + "]";
             case "PREGUNTA" -> texto.startsWith(TEXTO_PREGUNTA)
                     ? "[Pregunta enviada a la persona; su respuesta llega en el mensaje siguiente.]"
                     : "[Pregunta enviada a la persona: " + texto + ". Su respuesta llega en el mensaje siguiente.]";
