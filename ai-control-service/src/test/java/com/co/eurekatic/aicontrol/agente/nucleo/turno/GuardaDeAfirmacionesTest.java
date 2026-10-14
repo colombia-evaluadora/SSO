@@ -40,6 +40,9 @@ class GuardaDeAfirmacionesTest {
         assertThat(GuardaDeAfirmaciones.revisar(new RespuestaAgente.Respuesta(
                 "Hecho: Califica a UN estudiante (Pk del estudiante en la actividad: 2763).")).texto())
                 .as("copia el formato del resultado de una confirmacion").isEqualTo(GuardaDeAfirmaciones.SIN_ACCION);
+        assertThat(List.of("Listo: ya preparé el cambio de la fecha.", "Ya dejé preparada la edición."))
+                .allSatisfy(t -> assertThat(GuardaDeAfirmaciones.revisar(new RespuestaAgente.Respuesta(t)).texto())
+                        .as(t).isEqualTo(GuardaDeAfirmaciones.SIN_ACCION));
         assertThat(NotaDeMemoria.para("RESPUESTA", "Hecho: Registra la asistencia."))
                 .isEqualTo("La persona confirmo y el sistema ejecuto: Registra la asistencia.");
         assertThat(GuardaDeAfirmaciones.objecion(new RespuestaAgente.Respuesta("Para continuar necesito estos datos.")))

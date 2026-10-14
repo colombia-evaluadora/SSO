@@ -35,7 +35,8 @@ final class GuardaDeAfirmaciones {
             "necesito tu confirmacion|(espera|pendiente de|requiere) (de )?tu confirmacion|pulsa confirmar|boton confirmar"
                     + "|prepare con la herramienta"
                     // "Hecho: ..." solo lo escribe el sistema al ejecutar una accion confirmada.
-                    + "|^\\W*hecho:|la persona confirmo y el sistema ejecuto");
+                    + "|^\\W*hecho:|la persona confirmo y el sistema ejecuto"
+                    + "|\\bya (prepare|deje preparad|tengo preparad)|^\\W*listo\\b.{0,40}\\bprepare\\b");
     /**
      * Un cambio en la base contado como hecho ("se actualizo la fecha"). Tambien lo dice un dato historico ("se
      * creo el 1 de octubre"), asi que solo se objeta: si el modelo lo mantiene tras revisarlo, queda.
