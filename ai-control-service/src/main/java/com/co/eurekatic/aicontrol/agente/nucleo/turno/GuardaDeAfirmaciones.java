@@ -43,7 +43,12 @@ final class GuardaDeAfirmaciones {
     private static final Pattern CAMBIO_IMPERSONAL = Pattern.compile(
             "\\bse (actualizo|cambio|modifico|creo|guardo|registro|asigno|califico|elimino|vinculo)\\b"
                     + "|\\b(quedo|ha quedado|quedaron|han quedado) (actualizad|cambiad|registrad|guardad|asignad|calificad|cread)");
-    static final String CAMBIO_SIN_ESCRITURA = "Control del sistema: tu respuesta cuenta un cambio en la base como "
+    /** El texto que pone pedir_datos_faltantes, escrito por el modelo sin llamarla: la persona no ve que falta. */
+    private static final Pattern PREGUNTA_IMITADA = Pattern.compile("^\\W*para continuar necesito estos datos\\W*$");
+    static final String PREGUNTA_SIN_HERRAMIENTA = "Control del sistema: escribiste el aviso de datos faltantes sin "
+            + "decir cuales. Si ya tienes los datos, llama a la herramienta de escritura; si falta alguno que ninguna "
+            + "consulta da, llama a pedir_datos_faltantes con cada pregunta y sus opciones.";
+    static final String CAMBIO_SIN_ESCRITURA ="Control del sistema: tu respuesta cuenta un cambio en la base como "
             + "hecho, pero en este turno no se confirmo ninguna escritura. Si la persona pidio el cambio, llama a la "
             + "herramienta de escritura y el sistema le pedira confirmar; si es un dato leido, dilo como tal.";
     private static final Pattern CAMBIO_HECHO = Pattern.compile(
@@ -71,6 +76,9 @@ final class GuardaDeAfirmaciones {
             return afirmada;
         }
         String plegado = NormalizadorTexto.plegar(texto.texto());
+        if (PREGUNTA_IMITADA.matcher(plegado).find()) {
+            return Optional.of(PREGUNTA_SIN_HERRAMIENTA);
+        }
         if (CAMBIO_IMPERSONAL.matcher(plegado).find()) {
             return Optional.of(CAMBIO_SIN_ESCRITURA);
         }

@@ -1,5 +1,7 @@
 package com.co.eurekatic.aicontrol.agente.memoria;
 
+import com.co.eurekatic.aicontrol.agente.catalogo.invocacion.InvocadorHerramientas;
+
 /**
  * Como vuelve al modelo una respuesta anterior. Las confirmaciones y las acciones de UI las produjo el sistema
  * (una herramienta), no el modelo; si vuelven como texto literal, el modelo las imita en el turno siguiente y
@@ -30,12 +32,25 @@ public final class NotaDeMemoria {
             // y da por hecha una accion que no propuso.
             default -> texto.startsWith(PREFIJO_HECHO)
                     ? "La persona confirmo y el sistema ejecuto: " + texto.substring(PREFIJO_HECHO.length())
-                    : texto;
+                    : rechazoAlConfirmar(texto);
         };
     }
 
     /** Comienzo del texto de una accion confirmada y ejecutada (lo escribe el servicio de acciones). */
     public static final String PREFIJO_HECHO = "Hecho: ";
+
+    /**
+     * El rechazo del servicio al confirmar ("Datos no validos ...: indique el peso") vuelve con lo que hay que hacer:
+     * si no, el modelo recibe el dato que faltaba y no rehace la accion.
+     */
+    private static String rechazoAlConfirmar(String texto) {
+        boolean rechazo = InvocadorHerramientas.PREFIJOS_RECHAZO.stream().anyMatch(texto::startsWith);
+        return rechazo
+                ? "La persona confirmo la accion anterior pero el servicio la rechazo: " + texto + " Cuando la persona "
+                        + "de el dato que falta, vuelve a llamar a la misma herramienta de escritura con todos los datos "
+                        + "de esa accion mas el nuevo."
+                : texto;
+    }
 
     private static String sinPrefijo(String texto) {
         return texto.startsWith(PREFIJO_CONFIRMACION) ? texto.substring(PREFIJO_CONFIRMACION.length()) : texto;

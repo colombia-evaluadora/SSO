@@ -42,6 +42,11 @@ class GuardaDeAfirmacionesTest {
                 .as("copia el formato del resultado de una confirmacion").isEqualTo(GuardaDeAfirmaciones.SIN_ACCION);
         assertThat(NotaDeMemoria.para("RESPUESTA", "Hecho: Registra la asistencia."))
                 .isEqualTo("La persona confirmo y el sistema ejecuto: Registra la asistencia.");
+        assertThat(GuardaDeAfirmaciones.objecion(new RespuestaAgente.Respuesta("Para continuar necesito estos datos.")))
+                .as("el aviso de datos faltantes sin la herramienta").contains(GuardaDeAfirmaciones.PREGUNTA_SIN_HERRAMIENTA);
+        assertThat(NotaDeMemoria.para("RESPUESTA", "Datos no validos para el servicio academico: indique el peso (%)"))
+                .startsWith("La persona confirmo la accion anterior pero el servicio la rechazo")
+                .contains("vuelve a llamar a la misma herramienta");
         RespuestaAgente impersonal = new RespuestaAgente.Respuesta(
                 "La fecha de cierre del Taller se actualizó al 30 de octubre de 2026.");
         assertThat(GuardaDeAfirmaciones.objecion(impersonal)).as("un cambio contado como hecho sin escritura")
