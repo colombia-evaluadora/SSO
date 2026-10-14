@@ -30,8 +30,9 @@ public class PedirDatosFaltantesHerramienta implements ProveedorHerramientasCont
     static final String ERROR = "Indica al menos un dato faltante, con su campo y su pregunta.";
     static final String TEXTO = "Para continuar necesito estos datos.";
     static final String CONSULTA_ANTES = "Todavia no consultaste nada en este turno y la persona no ve esta pregunta. "
-            + "Busca primero lo que se pueda con las consultas que resuelven los datos de la accion; despues pregunta "
-            + "solo lo que siga faltando o sea ambiguo, con sus opciones. Consultas disponibles: ";
+            + "Los resultados de turnos anteriores no los tienes: busca primero lo que se pueda con las consultas que "
+            + "resuelven los datos de la accion; despues pregunta solo lo que siga faltando o sea ambiguo, con opciones "
+            + "leidas en este turno. Consultas disponibles: ";
 
     private static final String DESCRIPCION = """
             Ultimo recurso: usala solo despues de consultar. Si a la accion le falta un dato que sale de una consulta
@@ -64,13 +65,25 @@ public class PedirDatosFaltantesHerramienta implements ProveedorHerramientasCont
         if (pregunta.isEmpty()) {
             return ERROR;
         }
-        List<String> consultas = consultasQueResuelven(turno);
-        if (turno.lecturas() == 0 && !consultas.isEmpty() && turno.devolverPreguntaUnaVez()) {
-            // Preguntar sin haber mirado nada es la forma en que el modelo se rinde: se le devuelve una vez.
-            return CONSULTA_ANTES + String.join(", ", consultas) + ".";
+        Optional<String> sinConsultar = preguntaSinConsultar(turno);
+        if (sinConsultar.isPresent()) {
+            return sinConsultar.get();
         }
         turno.responderDirecto(pregunta.get());
         return ACUSE;
+    }
+
+    /**
+     * Preguntar sin haber mirado nada es la forma en que el modelo se rinde: la correccion que se le devuelve, una
+     * vez por turno, si hay consultas que resuelven los datos de la accion. Vale tambien para la pregunta escrita
+     * como texto: los resultados de turnos anteriores no los tiene, y si nombra opciones sin leer, las inventa.
+     */
+    public static Optional<String> preguntaSinConsultar(TurnoContexto turno) {
+        List<String> consultas = consultasQueResuelven(turno);
+        if (turno.lecturas() == 0 && !consultas.isEmpty() && turno.devolverPreguntaUnaVez()) {
+            return Optional.of(CONSULTA_ANTES + String.join(", ", consultas) + ".");
+        }
+        return Optional.empty();
     }
 
     /**

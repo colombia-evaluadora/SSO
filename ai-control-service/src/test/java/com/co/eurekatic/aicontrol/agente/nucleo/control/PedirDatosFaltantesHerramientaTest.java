@@ -61,6 +61,23 @@ class PedirDatosFaltantesHerramientaTest {
     }
 
     @Test
+    void laPreguntaEscritaComoTextoComparteLaUnicaDevolucionDelTurno() {
+        HerramientaDef grupos = new HerramientaDef(8L, "docentes_grupos_listar", TipoHerramienta.LECTURA, "Grupos",
+                List.of(), false, List.of(), 1, Optional.empty(), Optional.empty(), Set.of());
+        HerramientaDef crear = new HerramientaDef(9L, "crear_actividad_planeador", TipoHerramienta.ESCRITURA, "Crea",
+                List.of(new ParametroDef("BODY.FK_TGRUPO", TipoParametro.texto(), "Grupo",
+                        Optional.of("docentes_grupos_listar"), true, false)),
+                true, List.of(), 1, Optional.empty(), Optional.empty(), Set.of());
+        TurnoContexto turno = new TurnoContexto(List.of(grupos, crear));
+
+        assertThat(PedirDatosFaltantesHerramienta.preguntaSinConsultar(turno))
+                .hasValueSatisfying(o -> assertThat(o).contains("turnos anteriores", "docentes_grupos_listar"));
+        assertThat(PedirDatosFaltantesHerramienta.preguntaSinConsultar(turno)).as("una vez por turno").isEmpty();
+        assertThat(PedirDatosFaltantesHerramienta.preguntaSinConsultar(new TurnoContexto(List.of(grupos))))
+                .as("sin escrituras no hay nada que resolver").isEmpty();
+    }
+
+    @Test
     void conAlgunaConsultaHechaPreguntaALaPrimera() {
         HerramientaDef grupos = new HerramientaDef(8L, "docentes_grupos_listar", TipoHerramienta.LECTURA, "Grupos",
                 List.of(), false, List.of(), 1, Optional.empty(), Optional.empty(), Set.of());

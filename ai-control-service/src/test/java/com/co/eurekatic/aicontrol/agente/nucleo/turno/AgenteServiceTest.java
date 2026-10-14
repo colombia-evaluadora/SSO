@@ -6,6 +6,7 @@ import com.co.eurekatic.aicontrol.agente.catalogo.invocacion.ArgumentosCanonicos
 import com.co.eurekatic.aicontrol.agente.comun.PropiedadesAgenteFixture;
 import com.co.eurekatic.aicontrol.agente.comun.UsuarioAgente;
 import com.co.eurekatic.aicontrol.agente.nucleo.AccionPropuesta;
+import com.co.eurekatic.aicontrol.agente.nucleo.TurnoContexto;
 import com.co.eurekatic.aicontrol.agente.nucleo.acciones.AccionesService;
 import com.co.eurekatic.aicontrol.agente.nucleo.intencion.Intencion;
 import com.co.eurekatic.aicontrol.agente.nucleo.intencion.TipoIntencion;
@@ -207,6 +208,15 @@ class AgenteServiceTest {
         assertThat(AgenteService.conEquivalencias("Reasigna a Luis Castro", tabla))
                 .startsWith("Reasigna a Luis Castro\n").containsIgnoringCase("\"Luis Castro\" es Persona_3");
         assertThat(AgenteService.conEquivalencias("Lista mis grupos", tabla)).isEqualTo("Lista mis grupos");
+    }
+
+    @Test
+    void soloUnaPreguntaEnTextoPasaPorLaRevisionDeConsultarAntes() {
+        TurnoContexto sinNada = new TurnoContexto(List.of());
+
+        assertThat(AgenteService.preguntaSinConsultar(new RespuestaAgente.Respuesta("Tienes 2 grupos."), sinNada)).isEmpty();
+        assertThat(AgenteService.preguntaSinConsultar(new RespuestaAgente.Respuesta("¿Cuál grupo?"), sinNada))
+                .as("sin consultas que resuelvan, no hay que objetar").isEmpty();
     }
 
     private static Preparacion.Listo listo(TipoIntencion tipo, List<HerramientaDef> herramientas) {

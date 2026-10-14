@@ -5,6 +5,7 @@ import com.co.eurekatic.aicontrol.agente.memoria.NotaDeMemoria;
 import com.co.eurekatic.aicontrol.agente.nucleo.AccionPropuesta;
 import com.co.eurekatic.aicontrol.agente.nucleo.TurnoContexto;
 import com.co.eurekatic.aicontrol.agente.nucleo.acciones.AccionesService;
+import com.co.eurekatic.aicontrol.agente.nucleo.control.PedirDatosFaltantesHerramienta;
 import com.co.eurekatic.aicontrol.agente.nucleo.intencion.Intencion;
 import com.co.eurekatic.aicontrol.agente.nucleo.intencion.TipoIntencion;
 import com.co.eurekatic.aicontrol.agente.nucleo.respuesta.RespuestaAgente;
@@ -136,7 +137,8 @@ public class AgenteService {
                         conEquivalencias(listo.textoNormalizado(), seudonimos), contextoUiJson),
                 listo.callbacks(),
                 contexto,
-                GuardaDeAfirmaciones::objecion));
+                texto -> GuardaDeAfirmaciones.objecion(texto)
+                        .or(() -> preguntaSinConsultar(texto, contexto))));
         Consumo consumo = new Consumo(resultado.uso(), resultado.modelo(), milisegundosDesde(inicio));
         RespuestaAgente respuesta = switch (resultado) {
             case ResultadoBucle.Final fin -> analitica.presentar(GuardaDeAfirmaciones.revisar(fin.respuesta()), contexto,
@@ -172,6 +174,16 @@ public class AgenteService {
                 .map(e -> "\"" + e.getValue() + "\" es " + e.getKey())
                 .collect(Collectors.joining("; "));
         return pares.isEmpty() ? texto : texto + "\n(Nombres de este mensaje: " + pares + ".)";
+    }
+
+    /**
+     * Una pregunta escrita como texto, sin consultar nada en el turno: igual que por pedir_datos_faltantes, se
+     * devuelve una vez. Sin esto el modelo pide "el id del grupo" o nombra grupos que no leyo.
+     */
+    static Optional<String> preguntaSinConsultar(RespuestaAgente respuesta, TurnoContexto contexto) {
+        return respuesta instanceof RespuestaAgente.Respuesta texto && texto.texto().contains("?")
+                ? PedirDatosFaltantesHerramienta.preguntaSinConsultar(contexto)
+                : Optional.empty();
     }
 
     /** Accion sin ninguna herramienta de escritura disponible: no hay nada que proponer. */
