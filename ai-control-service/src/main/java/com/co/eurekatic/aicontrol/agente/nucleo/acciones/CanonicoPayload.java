@@ -5,6 +5,7 @@ import tools.jackson.core.type.TypeReference;
 import tools.jackson.databind.json.JsonMapper;
 
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
 
@@ -22,7 +23,24 @@ public final class CanonicoPayload {
 
     /** Payload canonico de unos argumentos validados. */
     public static String serializar(ArgumentosCanonicos argumentos) {
-        return JSON.writeValueAsString(new TreeMap<>(argumentos.planos()));
+        return JSON.writeValueAsString(ordenado(argumentos.planos()));
+    }
+
+    /**
+     * Claves ordenadas en todos los niveles: Postgres reordena tambien las de los objetos anidados (la definicion
+     * de un instrumento, una calificacion de rubrica), y con solo el primer nivel la huella no coincidia al
+     * confirmar. Las listas conservan su orden: es parte del dato.
+     */
+    static Object ordenado(Object valor) {
+        return switch (valor) {
+            case Map<?, ?> mapa -> {
+                TreeMap<String, Object> ordenado = new TreeMap<>();
+                mapa.forEach((clave, v) -> ordenado.put(String.valueOf(clave), ordenado(v)));
+                yield ordenado;
+            }
+            case List<?> lista -> lista.stream().map(CanonicoPayload::ordenado).toList();
+            case null, default -> valor;
+        };
     }
 
     /** Forma canonica de un payload tal como lo devuelve la base. */
