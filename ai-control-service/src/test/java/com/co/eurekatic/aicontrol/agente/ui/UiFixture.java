@@ -46,7 +46,8 @@ public final class UiFixture {
             new CampoUi("nombres", "Nombres", TipoCampo.TEXTO, true, List.of(), false),
             new CampoUi("cargo", "Cargo", TipoCampo.SELECCION, true,
                     List.of(new CampoUi.Opcion("DOCENTE", "Docente"), new CampoUi.Opcion("RECTOR", "Rector")), false),
-            new CampoUi("fechaIngreso", "Fecha de ingreso", TipoCampo.FECHA, false, List.of(), false)));
+            new CampoUi("fechaIngreso", "Fecha de ingreso", TipoCampo.FECHA, false, List.of(), false),
+            new CampoUi("perfil", "Roles y permisos", TipoCampo.TEXTO, false, List.of(), false)));
 
     public static final FormularioUi FORM_ACTIVIDAD = new FormularioUi("planeador.actividad", "42", List.of(
             new CampoUi("titulo", "Título", TipoCampo.TEXTO, true, List.of(), true),

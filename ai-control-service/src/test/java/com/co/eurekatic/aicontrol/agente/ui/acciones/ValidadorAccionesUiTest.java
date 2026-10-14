@@ -53,6 +53,20 @@ class ValidadorAccionesUiTest {
     }
 
     @Test
+    void unCampoDeRolesOPermisosNoSeRellenaNiSeLimpiaPeroSiSeResalta() {
+        ValidadorAccionesUi.Resultado r = validar(List.of(
+                new AccionUi.Rellenar("funcionario.crear", Map.of("nombres", "Ana", "perfil", "COORDINADOR")),
+                new AccionUi.LimpiarCampo("funcionario.crear", "perfil"),
+                new AccionUi.Resaltar("funcionario.crear", "perfil")), Map.of());
+
+        assertThat(r.aceptadas()).hasSize(2)
+                .anySatisfy(a -> assertThat(a).isInstanceOfSatisfying(AccionUi.Rellenar.class,
+                        rellenar -> assertThat(rellenar.valores()).containsOnlyKeys("nombres")))
+                .anySatisfy(a -> assertThat(a).isInstanceOf(AccionUi.Resaltar.class));
+        assertThat(r.rechazos()).hasSize(2).allSatisfy(m -> assertThat(m).contains("roles, permisos"));
+    }
+
+    @Test
     void unFormularioNoRegistradoONoAbiertoNoSeToca() {
         ValidadorAccionesUi.Resultado noRegistrado = validar(
                 List.of(new AccionUi.Rellenar("matricula.solicitud", Map.of("x", "1"))), Map.of());

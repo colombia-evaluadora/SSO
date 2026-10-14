@@ -31,6 +31,10 @@ public final class ValidadorAccionesUi {
     private static final Pattern CLAVE = Pattern.compile("[A-Za-z][A-Za-z0-9_.]{0,59}");
     private static final Pattern PESTANA = Pattern.compile("[\\p{L}\\p{N} _.-]{1,60}");
 
+    /** Campos que dan o quitan acceso: fuera del techo del agente aunque el formulario los traiga. */
+    private static final Pattern CAMPO_DE_ACCESO = Pattern.compile(
+            "(?iu)\\brol(es)?\\b|permis|privileg|contrase|password|credencial");
+
     private ValidadorAccionesUi() {
     }
 
@@ -65,7 +69,8 @@ public final class ValidadorAccionesUi {
             Veredicto veredicto = switch (propuesta) {
                 case AccionUi.Navegar n -> navegar(n, entorno);
                 case AccionUi.Rellenar r -> rellenar(r, entorno);
-                case AccionUi.LimpiarCampo l -> campoDeFormulario(l.formulario(), l.campo(), entorno).map(Veredicto::rechazo)
+                case AccionUi.LimpiarCampo l -> campoDeFormulario(l.formulario(), l.campo(), entorno)
+                        .or(() -> deAcceso(entorno, l.formulario(), l.campo())).map(Veredicto::rechazo)
                         .orElse(new Veredicto(Optional.of(l), List.of()));
                 case AccionUi.Resaltar r -> campoDeFormulario(r.formulario(), r.campo(), entorno).map(Veredicto::rechazo)
                         .orElse(new Veredicto(Optional.of(r), List.of()));
@@ -104,6 +109,7 @@ public final class ValidadorAccionesUi {
         Map<String, Object> validos = new LinkedHashMap<>();
         List<String> motivos = new ArrayList<>();
         accion.valores().forEach((campo, valor) -> motivoCampo(abierto, campo, configuracion)
+                .or(() -> deAcceso(entorno, accion.formulario(), campo))
                 .or(() -> admite(abierto.campo(campo).orElseThrow(), valor))
                 .ifPresentOrElse(motivos::add, () -> validos.put(campo, valor)));
         if (validos.isEmpty()) {
@@ -144,6 +150,18 @@ public final class ValidadorAccionesUi {
             return Optional.of("El campo " + campo + " no aplica en este registro.");
         }
         return Optional.empty();
+    }
+
+    /** Un campo de roles, permisos o credenciales no se rellena ni se limpia: lo decide la persona. */
+    private static Optional<String> deAcceso(Entorno entorno, String formulario, String campo) {
+        String etiqueta = entorno.contexto().formulario(formulario).flatMap(f -> f.campo(campo))
+                .map(CampoUi::etiqueta).orElse("");
+        boolean deAcceso = CAMPO_DE_ACCESO.matcher(campo.replace('_', ' ')).find()
+                || CAMPO_DE_ACCESO.matcher(etiqueta).find();
+        return deAcceso
+                ? Optional.of("El campo " + campo + " asigna roles, permisos o credenciales: el asistente no lo toca. "
+                        + "Dile a la persona que lo elija ella y no lo vuelvas a intentar.")
+                : Optional.empty();
     }
 
     private static Optional<String> admite(CampoUi campo, Object valor) {
