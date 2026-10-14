@@ -68,18 +68,23 @@ public class InvocadorHerramientas {
 
     private Ejecucion ejecutar(HerramientaDef herramienta, Map<String, Object> argumentos, ContextoInvocacion contexto) {
         return switch (validador.validar(herramienta, argumentos)) {
-            case ResultadoValidacion.Invalido invalido ->
-                    Ejecucion.rechazada(new ResultadoHerramienta.ErrorParaModelo(String.join(" ", invalido.errores())));
+            case ResultadoValidacion.Invalido invalido -> rechazar(herramienta, invalido.errores());
             case ResultadoValidacion.Valido valido -> {
                 List<String> faltanIds = verificadorIds.verificar(
                         herramienta, valido.argumentos(), contexto.conversationId(), contexto.textoUsuario());
                 if (!faltanIds.isEmpty()) {
-                    yield Ejecucion.rechazada(new ResultadoHerramienta.ErrorParaModelo(String.join(" ", faltanIds)));
+                    yield rechazar(herramienta, faltanIds);
                 }
                 yield despachar(herramienta, completador.completar(herramienta, valido.argumentos(), contexto.userId()),
                         contexto);
             }
         };
+    }
+
+    /** Los motivos nombran parametros y formatos, nunca valores: se pueden dejar en el log para diagnosticar. */
+    private static Ejecucion rechazar(HerramientaDef herramienta, List<String> motivos) {
+        log.info("Argumentos rechazados: herramienta={} motivos={}", herramienta.codigo(), motivos);
+        return Ejecucion.rechazada(new ResultadoHerramienta.ErrorParaModelo(String.join(" ", motivos)));
     }
 
     private Ejecucion despachar(HerramientaDef herramienta, ArgumentosCanonicos argumentos, ContextoInvocacion contexto) {
