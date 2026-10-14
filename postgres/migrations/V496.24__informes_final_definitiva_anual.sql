@@ -65,6 +65,7 @@ DECLARE
     v_W         NUMERIC := 0;
     v_E         NUMERIC := 0;
     v_pedido_con_nota BOOLEAN := FALSE;
+    v_error     TEXT;
 BEGIN
     SELECT gd.PK_TGRADO, gd.FK_TPERIODO_ACADEMICO
       INTO v_fk_grado, v_fk_peraca
@@ -103,8 +104,14 @@ BEGIN
            AND sn.ACTIVE = TRUE;
 
         IF v_nota IS NULL THEN
-            v_nota := academico_test.fn_asignatura_definitiva_proyectada_periodo(
-                          p_fk_tmatricula, p_fk_tasignatura, r.pk);
+            -- Lectura: un periodo mal configurado deja el requerido en NULL
+            -- (desconocido) en vez de abortar el informe del grupo.
+            SELECT d.nota, d.error_configuracion INTO v_nota, v_error
+              FROM academico_test.fn_asignatura_definitiva_proyectada_periodo_detalle(
+                       p_fk_tmatricula, p_fk_tasignatura, r.pk, FALSE) d;
+            IF v_error IS NOT NULL THEN
+                RETURN NULL;
+            END IF;
         END IF;
 
         v_W := v_W + v_peso;
@@ -197,22 +204,32 @@ CREATE OR REPLACE FUNCTION academico_test.fn_asignatura_definitiva_anual_interno
     p_fk_tasignatura BIGINT
 )
 RETURNS NUMERIC
-LANGUAGE sql
+LANGUAGE plpgsql
 STABLE
 AS $function$
-    SELECT COALESCE(
-               (SELECT d.DEFINITIVA
-                  FROM academico_test.TASIGNATURA_DEFINITIVA d
-                 WHERE d.FK_TMATRICULA  = p_fk_tmatricula
-                   AND d.FK_TASIGNATURA = p_fk_tasignatura
-                   AND d.ACTIVE = TRUE
-                 LIMIT 1),
-               academico_test.fn_asignatura_definitiva_anual_calcular_interno(
-                   p_fk_tmatricula, p_fk_tasignatura));
+DECLARE
+    v_nota NUMERIC;
+BEGIN
+    SELECT d.DEFINITIVA INTO v_nota
+      FROM academico_test.TASIGNATURA_DEFINITIVA d
+     WHERE d.FK_TMATRICULA  = p_fk_tmatricula
+       AND d.FK_TASIGNATURA = p_fk_tasignatura
+       AND d.ACTIVE = TRUE
+     LIMIT 1;
+    IF v_nota IS NOT NULL THEN
+        RETURN v_nota;
+    END IF;
+    RETURN academico_test.fn_asignatura_definitiva_anual_calcular_interno(
+               p_fk_tmatricula, p_fk_tasignatura);
+EXCEPTION WHEN SQLSTATE '22023' THEN
+    -- Un periodo mal configurado (peso faltante) deja la nota del año sin
+    -- definir en la fila Final; el guardado del Final si lo rechaza.
+    RETURN NULL;
+END;
 $function$;
 
 COMMENT ON FUNCTION academico_test.fn_asignatura_definitiva_anual_interno(BIGINT, BIGINT)
-    IS 'INTERNO: nota del año que muestra la fila Final de informes: la guardada en TASIGNATURA_DEFINITIVA si existe y, si no, la calculada al vuelo (fn_asignatura_definitiva_anual_calcular_interno). Una lectura nunca escribe ni recalcula lo guardado. Sin gate. La usa fn_informe_grupo_listar.';
+    IS 'INTERNO: nota del año que muestra la fila Final de informes: la guardada en TASIGNATURA_DEFINITIVA si existe y, si no, la calculada al vuelo (fn_asignatura_definitiva_anual_calcular_interno). Una lectura nunca escribe ni recalcula lo guardado; un error de configuracion (22023) de algun periodo la deja en NULL en vez de abortar el listado. Sin gate. La usa fn_informe_grupo_listar.';
 
 CREATE OR REPLACE FUNCTION academico_test.fn_informe_final_guardar_interno(
     p_pk_usuario_auditoria BIGINT,

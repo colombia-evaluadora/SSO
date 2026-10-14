@@ -215,7 +215,7 @@
 				</element>
 				<element kind="staticText" x="280" y="4" width="79" height="12" fontName="DejaVu Sans" fontSize="7" forecolor="#16305C" hTextAlign="Left" vTextAlign="Middle" bold="true">
 					<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "acento")]]></propertyExpression>
-					<text><![CDATA[Areas aprobadas:]]></text>
+					<text><![CDATA[Asig. aprobadas:]]></text>
 				</element>
 				<element kind="textField" x="280" y="16" width="79" height="14" fontName="DejaVu Sans" fontSize="9.5" forecolor="#16305C" hTextAlign="Left" vTextAlign="Top" bold="true" blankWhenNull="true" textAdjust="ScaleFont">
 					<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "texto")]]></propertyExpression>
@@ -230,7 +230,7 @@
 				</element>
 				<element kind="staticText" x="393" y="4" width="79" height="12" fontName="DejaVu Sans" fontSize="7" forecolor="#16305C" hTextAlign="Left" vTextAlign="Middle" bold="true">
 					<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "acento")]]></propertyExpression>
-					<text><![CDATA[Areas reprobadas:]]></text>
+					<text><![CDATA[Asig. reprobadas:]]></text>
 				</element>
 				<element kind="textField" x="393" y="16" width="79" height="14" fontName="DejaVu Sans" fontSize="9.5" forecolor="#16305C" hTextAlign="Left" vTextAlign="Top" bold="true" blankWhenNull="true" textAdjust="ScaleFont">
 					<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "texto")]]></propertyExpression>

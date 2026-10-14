@@ -1,0 +1,531 @@
+{
+  "info": {
+    "name": "PIGSE - gestion documental: guardado del documento completo",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "description": "V555.2-V555.5: el establecimiento guarda un PEI/PEC/PMI/PFI completo, no anexo por anexo. Paso 1: POST /files/pigse/documentos/archivos sube UN archivo por request (multipart; no lo enlaza) y devuelve archivoId. Paso 2: PUT /pigse/documentos/:TIPO/anexos enlaza todo en una transaccion; 23514 (409) si al terminar falta un anexo obligatorio, y nada queda escrito. Roles: PIGSE-ADMINISTRADOR, PIGSE-RECTOR, PIGSE-SECRETARIO. Usuario de un EE regular (PEI) y fecha limite vigente. Adjuntar un PDF en cada ARCHIVO antes de correr."
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:8080"
+    },
+    {
+      "key": "email",
+      "value": ""
+    },
+    {
+      "key": "password",
+      "value": ""
+    },
+    {
+      "key": "token",
+      "value": ""
+    },
+    {
+      "key": "tipo",
+      "value": "PEI"
+    },
+    {
+      "key": "archivoPlan",
+      "value": ""
+    },
+    {
+      "key": "archivoSiee",
+      "value": ""
+    },
+    {
+      "key": "archivoManual",
+      "value": ""
+    },
+    {
+      "key": "archivoProyectos",
+      "value": ""
+    }
+  ],
+  "item": [
+    {
+      "name": "Login",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/auth/login",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "auth",
+            "login"
+          ]
+        },
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"email\": \"{{email}}\",\n  \"password\": \"{{password}}\"\n}"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"200\", () => pm.response.to.have.status(200));",
+              "pm.collectionVariables.set(\"token\", pm.response.json().token);"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Subir Plan de estudios",
+      "request": {
+        "auth": {
+          "type": "bearer",
+          "bearer": [
+            {
+              "key": "token",
+              "value": "{{token}}",
+              "type": "string"
+            }
+          ]
+        },
+        "method": "POST",
+        "url": {
+          "raw": "{{baseUrl}}/api/files/pigse/documentos/archivos",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "files",
+            "pigse",
+            "documentos",
+            "archivos"
+          ]
+        },
+        "body": {
+          "mode": "formdata",
+          "formdata": [
+            {
+              "key": "TIPO",
+              "value": "{{tipo}}",
+              "type": "text"
+            },
+            {
+              "key": "CATEGORIA",
+              "value": "PLAN_ESTUDIOS",
+              "type": "text"
+            },
+            {
+              "key": "ARCHIVO",
+              "type": "file",
+              "src": ""
+            }
+          ]
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"200\", () => pm.response.to.have.status(200));",
+              "pm.collectionVariables.set(\"archivoPlan\", pm.response.json().rows[0].archivoId);"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Subir SIEE",
+      "request": {
+        "auth": {
+          "type": "bearer",
+          "bearer": [
+            {
+              "key": "token",
+              "value": "{{token}}",
+              "type": "string"
+            }
+          ]
+        },
+        "method": "POST",
+        "url": {
+          "raw": "{{baseUrl}}/api/files/pigse/documentos/archivos",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "files",
+            "pigse",
+            "documentos",
+            "archivos"
+          ]
+        },
+        "body": {
+          "mode": "formdata",
+          "formdata": [
+            {
+              "key": "TIPO",
+              "value": "{{tipo}}",
+              "type": "text"
+            },
+            {
+              "key": "CATEGORIA",
+              "value": "SIEE",
+              "type": "text"
+            },
+            {
+              "key": "ARCHIVO",
+              "type": "file",
+              "src": ""
+            }
+          ]
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"200\", () => pm.response.to.have.status(200));",
+              "pm.collectionVariables.set(\"archivoSiee\", pm.response.json().rows[0].archivoId);"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Subir Manual de convivencia",
+      "request": {
+        "auth": {
+          "type": "bearer",
+          "bearer": [
+            {
+              "key": "token",
+              "value": "{{token}}",
+              "type": "string"
+            }
+          ]
+        },
+        "method": "POST",
+        "url": {
+          "raw": "{{baseUrl}}/api/files/pigse/documentos/archivos",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "files",
+            "pigse",
+            "documentos",
+            "archivos"
+          ]
+        },
+        "body": {
+          "mode": "formdata",
+          "formdata": [
+            {
+              "key": "TIPO",
+              "value": "{{tipo}}",
+              "type": "text"
+            },
+            {
+              "key": "CATEGORIA",
+              "value": "MANUAL_CONVIVENCIA",
+              "type": "text"
+            },
+            {
+              "key": "ARCHIVO",
+              "type": "file",
+              "src": ""
+            }
+          ]
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"200\", () => pm.response.to.have.status(200));",
+              "pm.collectionVariables.set(\"archivoManual\", pm.response.json().rows[0].archivoId);"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Subir Proyectos transversales",
+      "request": {
+        "auth": {
+          "type": "bearer",
+          "bearer": [
+            {
+              "key": "token",
+              "value": "{{token}}",
+              "type": "string"
+            }
+          ]
+        },
+        "method": "POST",
+        "url": {
+          "raw": "{{baseUrl}}/api/files/pigse/documentos/archivos",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "files",
+            "pigse",
+            "documentos",
+            "archivos"
+          ]
+        },
+        "body": {
+          "mode": "formdata",
+          "formdata": [
+            {
+              "key": "TIPO",
+              "value": "{{tipo}}",
+              "type": "text"
+            },
+            {
+              "key": "CATEGORIA",
+              "value": "PROYECTOS_TRANSVERSALES",
+              "type": "text"
+            },
+            {
+              "key": "ARCHIVO",
+              "type": "file",
+              "src": ""
+            }
+          ]
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"200\", () => pm.response.to.have.status(200));",
+              "pm.collectionVariables.set(\"archivoProyectos\", pm.response.json().rows[0].archivoId);"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Guardar incompleto (rechaza 409, falta Manual y Proyectos)",
+      "request": {
+        "auth": {
+          "type": "bearer",
+          "bearer": [
+            {
+              "key": "token",
+              "value": "{{token}}",
+              "type": "string"
+            }
+          ]
+        },
+        "method": "PUT",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/pigse/documentos/{{tipo}}/anexos",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "pigse",
+            "documentos",
+            "{{tipo}}",
+            "anexos"
+          ]
+        },
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"ANEXOS\": [\n    {\n      \"categoria\": \"PLAN_ESTUDIOS\",\n      \"archivoId\": \"{{archivoPlan}}\"\n    },\n    {\n      \"categoria\": \"SIEE\",\n      \"archivoId\": \"{{archivoSiee}}\"\n    }\n  ],\n  \"QUITAR\": []\n}"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"409\", () => pm.response.to.have.status(409));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Guardar completo (200)",
+      "request": {
+        "auth": {
+          "type": "bearer",
+          "bearer": [
+            {
+              "key": "token",
+              "value": "{{token}}",
+              "type": "string"
+            }
+          ]
+        },
+        "method": "PUT",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/pigse/documentos/{{tipo}}/anexos",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "pigse",
+            "documentos",
+            "{{tipo}}",
+            "anexos"
+          ]
+        },
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"ANEXOS\": [\n    {\n      \"categoria\": \"PLAN_ESTUDIOS\",\n      \"archivoId\": \"{{archivoPlan}}\"\n    },\n    {\n      \"categoria\": \"SIEE\",\n      \"archivoId\": \"{{archivoSiee}}\"\n    },\n    {\n      \"categoria\": \"MANUAL_CONVIVENCIA\",\n      \"archivoId\": \"{{archivoManual}}\"\n    },\n    {\n      \"categoria\": \"PROYECTOS_TRANSVERSALES\",\n      \"archivoId\": \"{{archivoProyectos}}\"\n    }\n  ],\n  \"QUITAR\": []\n}"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"200\", () => pm.response.to.have.status(200));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Quitar el unico Plan de estudios (rechaza 409)",
+      "request": {
+        "auth": {
+          "type": "bearer",
+          "bearer": [
+            {
+              "key": "token",
+              "value": "{{token}}",
+              "type": "string"
+            }
+          ]
+        },
+        "method": "PUT",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/pigse/documentos/{{tipo}}/anexos",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "pigse",
+            "documentos",
+            "{{tipo}}",
+            "anexos"
+          ]
+        },
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"ANEXOS\": [],\n  \"QUITAR\": [\n    \"{{archivoPlan}}\"\n  ]\n}"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"409\", () => pm.response.to.have.status(409));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Eliminar un anexo obligatorio suelto (rechaza 409)",
+      "request": {
+        "auth": {
+          "type": "bearer",
+          "bearer": [
+            {
+              "key": "token",
+              "value": "{{token}}",
+              "type": "string"
+            }
+          ]
+        },
+        "method": "PATCH",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/pigse/documentos/{{tipo}}/categorias/SIEE",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "pigse",
+            "documentos",
+            "{{tipo}}",
+            "categorias",
+            "SIEE"
+          ]
+        },
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"ARCHIVOID\": null\n}"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"409\", () => pm.response.to.have.status(409));"
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -48,6 +48,8 @@ class ObservacionEndpointTest {
     private static final KeyPair KEYS;
     private static final Map<String, String> RECIBIDO = new ConcurrentHashMap<>();
     private static volatile String estadoGuardado;
+    private static volatile int statusGuardar = 200;
+    private static volatile String cuerpoGuardar;
 
     static {
         try {
@@ -86,7 +88,7 @@ class ObservacionEndpointTest {
             });
             SERVER.createContext("/informes/observacion/guardar", ex -> {
                 RECIBIDO.put("guardar", leer(ex));
-                responder(ex, "{\"rows\":[{\"pk_testudiante_periodo_observacion\":1}]}");
+                responder(ex, statusGuardar, cuerpoGuardar);
             });
             SERVER.start();
         } catch (Exception e) {
@@ -121,6 +123,8 @@ class ObservacionEndpointTest {
         mvc = MockMvcBuilders.webAppContextSetup(context).apply(springSecurity()).build();
         RECIBIDO.clear();
         estadoGuardado = null;
+        statusGuardar = 200;
+        cuerpoGuardar = "{\"rows\":[{\"pk_testudiante_periodo_observacion\":1}]}";
         String priv = Base64.getEncoder().encodeToString(KEYS.getPrivate().getEncoded());
         String pub = Base64.getEncoder().encodeToString(KEYS.getPublic().getEncoded());
         token = new JwtTokenService(JwtProperties.rsaOnly(priv, pub, "sso-postgres", 600, 600,
@@ -134,7 +138,7 @@ class ObservacionEndpointTest {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"FK_TMATRICULA\":990001,\"FK_TPERIODO_EVALUACION\":970001}"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.estado").value("APROBADA"))
+                .andExpect(jsonPath("$.estado").value("BORRADOR"))
                 .andExpect(jsonPath("$.origen").value(2))
                 .andExpect(jsonPath("$.tokensEntrada").value(120))
                 .andExpect(jsonPath("$.observacion").value(org.hamcrest.Matchers.startsWith("Sofía vivio")));
@@ -150,6 +154,7 @@ class ObservacionEndpointTest {
         JsonNode guardar = JSON.readTree(RECIBIDO.get("guardar"));
         assertThat(guardar.path("FK_TMATRICULA").asLong()).isEqualTo(990001);
         assertThat(guardar.path("OBSERVACIONES_ORIGEN").asInt()).isEqualTo(2);
+        assertThat(guardar.path("ES_BORRADOR").asString()).isEqualTo("S");
         assertThat(guardar.path("OBSERVACION").asString())
                 .isEqualTo(guardar.path("OBSERVACION_IA").asString())
                 .contains("Dimensión Comunicativa: Narra cuentos con secuencia.")
@@ -168,6 +173,31 @@ class ObservacionEndpointTest {
     }
 
     @Test
+    void regeneraSobreUnBorradorSinPedirSobrescribir() throws Exception {
+        estadoGuardado = "BORRADOR";
+        mvc.perform(post("/ai/observaciones/periodo")
+                        .header("Authorization", "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"FK_TMATRICULA\":990001,\"FK_TPERIODO_EVALUACION\":970001}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.estado").value("BORRADOR"));
+        assertThat(RECIBIDO).containsKey("guardar");
+    }
+
+    @Test
+    void periodoCerradoSePropagaComo4xxConElMensajeDeLaBase() throws Exception {
+        statusGuardar = 400;
+        cuerpoGuardar = "{\"message\":\"El periodo de evaluacion esta cerrado\"}";
+        mvc.perform(post("/ai/observaciones/periodo")
+                        .header("Authorization", "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"FK_TMATRICULA\":990001,\"FK_TPERIODO_EVALUACION\":970001}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(r -> assertThat(r.getResponse().getErrorMessage())
+                        .isEqualTo("El periodo de evaluacion esta cerrado"));
+    }
+
+    @Test
     void sinTokenResponde401() throws Exception {
         mvc.perform(post("/ai/observaciones/periodo")
                         .contentType(MediaType.APPLICATION_JSON)
@@ -181,9 +211,13 @@ class ObservacionEndpointTest {
     }
 
     private static void responder(HttpExchange ex, String body) throws IOException {
+        responder(ex, 200, body);
+    }
+
+    private static void responder(HttpExchange ex, int status, String body) throws IOException {
         byte[] b = body.getBytes(StandardCharsets.UTF_8);
         ex.getResponseHeaders().add("Content-Type", "application/json");
-        ex.sendResponseHeaders(200, b.length);
+        ex.sendResponseHeaders(status, b.length);
         ex.getResponseBody().write(b);
         ex.close();
     }

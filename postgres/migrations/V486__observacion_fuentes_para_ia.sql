@@ -116,6 +116,9 @@ BEGIN
         p_pk_usuario_solicitante, 'INFORMES', 'VER',
         v_fk_ee, v_fk_sede, v_fk_jornada
     );
+    -- Sin esto la IA redacta un texto que el guardado luego rechaza.
+    PERFORM academico_test.fn_informe_validar_periodo_abierto(
+        p_fk_tperiodo_evaluacion, academico_test.fn_es_super_admin(p_pk_usuario_solicitante));
 
     SELECT lv.VALOR::TEXT, ob.OBSERVACIONES_ORIGEN
       INTO v_estado, v_origen
@@ -140,7 +143,7 @@ END;
 $function$;
 
 COMMENT ON FUNCTION academico_test.fn_estudiante_periodo_observacion_fuentes(BIGINT, BIGINT, BIGINT)
-    IS 'POST /informes/observacion/fuentes. Materia prima del resumen de periodo para ai-control-service: una fila por observacion (fecha, actividad, asignatura, texto) mas el primer nombre del estudiante y el estado/origen del resumen ya guardado (NULL si no hay). El nombre NO se envia al modelo; lo reinserta el servicio. Errores iguales a fn_estudiante_periodo_observacion_generar: P0002 matricula/periodo, 22023 periodo de otro ano o sin observaciones. Gate INFORMES/VER.';
+    IS 'POST /informes/observacion/fuentes. Materia prima del resumen de periodo para ai-control-service: una fila por observacion (fecha, actividad, asignatura, texto) mas el primer nombre del estudiante y el estado/origen del resumen ya guardado (NULL si no hay). El nombre NO se envia al modelo; lo reinserta el servicio. ESTADO_GUARDADO puede ser BORRADOR (guardado por la IA sin revisar). Errores: P0002 matricula/periodo, 22023 periodo de otro ano o sin observaciones, 23514 periodo cerrado (salvo super admin). Gate INFORMES/VER.';
 
 
 -- ---------------------------------------------------------------------------
