@@ -232,7 +232,7 @@ SELECT DISTINCT ON (v.codigo)
      '{"QUERY.PERIODO":{"descripcion":"Periodo academico (pk)","resuelve_con":"periodos_listar","inferible":true},"QUERY.GRUPO":{"descripcion":"Grupo (pk)","resuelve_con":"docentes_grupos_listar","inferible":true},"QUERY.ESTADO":{"descripcion":"Estado","resuelve_con":null,"inferible":true}}', FALSE),
     -- ===== ANALITICA nivel 1 =====
     ('planeador_estadisticas', 'ANALITICA', 'GET', '/planeador/actividades/stats', 'PLANEADOR',
-     'Cuenta actividades del docente por estado, en un rango de fechas, grupo, asignatura o unidad. Consulta curada, no SQL.',
+     'Cuenta actividades del docente por estado. Todos los filtros son opcionales: si la persona no da fechas, grupo ni asignatura, llamala sin ellos en vez de preguntar. Consulta curada, no SQL.',
      '{"QUERY.FECHA_DESDE":{"descripcion":"Desde AAAA-MM-DD","resuelve_con":null,"inferible":true},"QUERY.FECHA_HASTA":{"descripcion":"Hasta AAAA-MM-DD","resuelve_con":null,"inferible":true},"QUERY.GRUPO":{"descripcion":"Grupo (pk)","resuelve_con":"docentes_grupos_listar","inferible":true},"QUERY.ASIGNATURA":{"descripcion":"Asignatura (pk)","resuelve_con":"docentes_grado_asignatura_listar","inferible":true},"QUERY.UNIDAD":{"descripcion":"Unidad (pk)","resuelve_con":"unidades_listar","inferible":true},"QUERY.GRADO_ASIGNATURA_PARES":{"descripcion":"Pares grado-asignatura","resuelve_con":"docentes_grado_asignatura_listar","inferible":true},"QUERY.DIAS_GRACIA":{"descripcion":"Dias de gracia","resuelve_con":null,"inferible":true}}', FALSE)
   ) AS v (codigo, tipo, http_method, path_template, menu_codigo, descripcion, parametros, confirma)
   JOIN public.microservice ms ON ms.serviceid = 'eval-col'
