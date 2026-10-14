@@ -37,6 +37,11 @@ class GuardaDeAfirmacionesTest {
                 .as("llamada escrita como JSON").isEqualTo(GuardaDeAfirmaciones.SIN_HERRAMIENTA);
         assertThat(GuardaDeAfirmaciones.objecion(new RespuestaAgente.Respuesta("<invoke name=\"x\">")))
                 .hasValueSatisfying(o -> assertThat(o).contains("interfaz de herramientas"));
+        assertThat(GuardaDeAfirmaciones.revisar(new RespuestaAgente.Respuesta(
+                "Hecho: Califica a UN estudiante (Pk del estudiante en la actividad: 2763).")).texto())
+                .as("copia el formato del resultado de una confirmacion").isEqualTo(GuardaDeAfirmaciones.SIN_ACCION);
+        assertThat(NotaDeMemoria.para("RESPUESTA", "Hecho: Registra la asistencia."))
+                .isEqualTo("La persona confirmo y el sistema ejecuto: Registra la asistencia.");
         RespuestaAgente impersonal = new RespuestaAgente.Respuesta(
                 "La fecha de cierre del Taller se actualizó al 30 de octubre de 2026.");
         assertThat(GuardaDeAfirmaciones.objecion(impersonal)).as("un cambio contado como hecho sin escritura")

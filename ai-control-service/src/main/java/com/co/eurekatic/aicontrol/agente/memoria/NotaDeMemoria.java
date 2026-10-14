@@ -26,9 +26,16 @@ public final class NotaDeMemoria {
             case "CONFIRMACION" -> "Prepare con la herramienta la accion «" + sinPrefijo(texto)
                     + "», que espera el boton Confirmar de la persona; todavia no se ha ejecutado.";
             case "UI" -> "Envie acciones a la pantalla con la herramienta y le dije a la persona: " + texto;
-            default -> texto;
+            // El resultado de confirmar lo escribe el sistema: si vuelve literal ("Hecho: ..."), el modelo lo copia
+            // y da por hecha una accion que no propuso.
+            default -> texto.startsWith(PREFIJO_HECHO)
+                    ? "La persona confirmo y el sistema ejecuto: " + texto.substring(PREFIJO_HECHO.length())
+                    : texto;
         };
     }
+
+    /** Comienzo del texto de una accion confirmada y ejecutada (lo escribe el servicio de acciones). */
+    public static final String PREFIJO_HECHO = "Hecho: ";
 
     private static String sinPrefijo(String texto) {
         return texto.startsWith(PREFIJO_CONFIRMACION) ? texto.substring(PREFIJO_CONFIRMACION.length()) : texto;

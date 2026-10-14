@@ -11,6 +11,7 @@ import com.co.eurekatic.aicontrol.agente.catalogo.invocacion.RegistroIds;
 import com.co.eurekatic.aicontrol.agente.comun.ErrorAgente;
 import com.co.eurekatic.aicontrol.agente.comun.Huellas;
 import com.co.eurekatic.aicontrol.agente.comun.UsuarioAgente;
+import com.co.eurekatic.aicontrol.agente.memoria.NotaDeMemoria;
 import com.co.eurekatic.aicontrol.agente.nucleo.AccionPropuesta;
 import com.co.eurekatic.aicontrol.agente.nucleo.respuesta.RespuestaAgente;
 import com.co.eurekatic.aicontrol.agente.nucleo.turno.Consumo;
@@ -50,7 +51,7 @@ public class AccionesService {
     private static final Logger log = LoggerFactory.getLogger(AccionesService.class);
     private static final String MENSAJE_CANCELADA = "Acción cancelada. No se ha hecho ningún cambio.";
     private static final String MENSAJE_NO_DISPONIBLE = "Esa acción ya no está disponible. No se ha hecho ningún cambio.";
-    private static final String MENSAJE_HECHO = "Hecho: %s.";
+    private static final String MENSAJE_HECHO = NotaDeMemoria.PREFIJO_HECHO + "%s.";
     private static final String PREFIJO_AVISO = " Atención: ";
     private static final String MENSAJE_SERVIDOR =
             "No se pudo completar la acción por un problema del servicio académico. Revisa antes de volver a intentarlo.";
