@@ -115,6 +115,9 @@ BEGIN
         PERFORM academico_test.fn_planeador_assert_alcance(
             p_pk_usuario_solicitante, 'VER', NULL, NULL, NULL, v_recuperar);
     END IF;
+    PERFORM academico_test.fn_actividad_validar_periodo_abierto(
+        p_fk_tgrupo, p_fk_tunidad, p_fecha_inicio, p_fecha_cierre, 'crear',
+        academico_test.fn_es_super_admin(p_pk_usuario_solicitante));
 
     PERFORM academico_test.fn_audit_declarar(p_pk_usuario_solicitante,
         format('Creación de %s', academico_test.fn_actividad_etiqueta_de(p_titulo, p_fk_tgrupo, p_fk_tasignatura, p_fk_tunidad)), NULL,
@@ -192,6 +195,19 @@ BEGIN
         p_pk_usuario_solicitante, COALESCE(p_fk_tgrupo, a.FK_TGRUPO), COALESCE(p_fk_tasignatura, a.FK_TASIGNATURA),
         CASE WHEN p_desvincular_unidad THEN NULL ELSE COALESCE(p_fk_tunidad, a.FK_TUNIDAD) END)
        FROM academico_test.TACTIVIDAD a WHERE a.PK_TACTIVIDAD = p_pk_tactividad;
+    -- Solo si cambia la ventana o el ancla: editar lo demás de una actividad
+    -- que ya está en un periodo cerrado sigue permitido (la nota va por Regla 75).
+    PERFORM academico_test.fn_actividad_validar_periodo_abierto(
+        v.grupo, v.unidad, v.inicio, v.cierre, 'mover',
+        academico_test.fn_es_super_admin(p_pk_usuario_solicitante))
+       FROM (SELECT COALESCE(p_fk_tgrupo, a.FK_TGRUPO) AS grupo,
+                    CASE WHEN p_desvincular_unidad THEN NULL ELSE COALESCE(p_fk_tunidad, a.FK_TUNIDAD) END AS unidad,
+                    COALESCE(p_fecha_inicio, a.FECHA_INICIO) AS inicio,
+                    COALESCE(p_fecha_cierre, a.FECHA_CIERRE) AS cierre,
+                    a.FK_TGRUPO, a.FK_TUNIDAD, a.FECHA_INICIO, a.FECHA_CIERRE
+               FROM academico_test.TACTIVIDAD a WHERE a.PK_TACTIVIDAD = p_pk_tactividad) v
+      WHERE (v.grupo, v.unidad, v.inicio, v.cierre)
+            IS DISTINCT FROM (v.FK_TGRUPO, v.FK_TUNIDAD, v.FECHA_INICIO, v.FECHA_CIERRE);
     IF v_recuperar IS NOT NULL THEN
         PERFORM academico_test.fn_actividad_validar_existente(v_recuperar);
         PERFORM academico_test.fn_planeador_assert_alcance(
@@ -550,9 +566,9 @@ END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_actividad_crear(BIGINT, VARCHAR, BIGINT, BIGINT, BIGINT, VARCHAR, BIGINT, BIGINT, NUMERIC, DATE, DATE, NUMERIC, VARCHAR, BIGINT, VARCHAR, academico_test.bool_sn, BIGINT, VARCHAR, BIGINT, BIGINT, BIGINT, NUMERIC, NUMERIC, academico_test.bool_sn, academico_test.bool_sn, academico_test.bool_sn, academico_test.bool_sn, VARCHAR, JSONB, JSONB, BIGINT[], BOOLEAN, JSONB, BIGINT[], BIGINT[], BOOLEAN)
-    IS 'POST /planeador/actividades. Wrapper: gate CREAR con alcance (la actividad sin grupo ni unidad pasa con solo capability), VER sobre la actividad a recuperar, etiqueta de auditoría y delega en fn_actividad_crear_interno. p_exigir_minimos lo apaga la importación.';
+    IS 'POST /planeador/actividades. Wrapper: gate CREAR con alcance (la actividad sin grupo ni unidad pasa con solo capability), VER sobre la actividad a recuperar, periodo de evaluación abierto (23514, salvo super admin), etiqueta de auditoría y delega en fn_actividad_crear_interno. p_exigir_minimos lo apaga la importación.';
 COMMENT ON FUNCTION academico_test.fn_actividad_actualizar(BIGINT, BIGINT, VARCHAR, VARCHAR, BIGINT, BIGINT, BIGINT, NUMERIC, BOOLEAN, BIGINT, DATE, DATE, NUMERIC, VARCHAR, BIGINT, VARCHAR, academico_test.bool_sn, BIGINT, VARCHAR, BIGINT, BIGINT, BIGINT, NUMERIC, NUMERIC, academico_test.bool_sn, academico_test.bool_sn, academico_test.bool_sn, academico_test.bool_sn, VARCHAR, JSONB, JSONB, BIGINT[], BOOLEAN, JSONB, BOOLEAN, BIGINT[], BIGINT[])
-    IS 'PUT /planeador/actividades/:ID. Wrapper: existencia, estado, alcance EDITAR en origen y destino, propiedad (Regla 25), bloqueo por resultados (Regla 37), etiqueta de auditoría; delega en fn_actividad_actualizar_interno.';
+    IS 'PUT /planeador/actividades/:ID. Wrapper: existencia, estado, alcance EDITAR en origen y destino, propiedad (Regla 25), bloqueo por resultados (Regla 37), periodo de evaluación abierto si cambia la ventana o el ancla (23514, salvo super admin), etiqueta de auditoría; delega en fn_actividad_actualizar_interno.';
 COMMENT ON FUNCTION academico_test.fn_actividad_eliminar(BIGINT, BIGINT)
     IS 'PATCH /planeador/actividades/:ID (borrado lógico). Wrapper: existencia, estado, alcance ELIMINAR, propiedad (Regla 25), dependencias que lo impiden (Regla 38, 23503), etiqueta de auditoría; delega en fn_actividad_eliminar_interno. Devuelve pk_tactividad y, si la unidad pondera, el % que quedó libre y el aviso (Regla 38a).';
 COMMENT ON FUNCTION academico_test.fn_actividad_evidencia_relacionar(BIGINT, BIGINT, BIGINT)
