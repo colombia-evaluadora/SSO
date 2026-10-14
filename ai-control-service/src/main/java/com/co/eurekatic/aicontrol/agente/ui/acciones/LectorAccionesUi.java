@@ -29,27 +29,35 @@ public final class LectorAccionesUi {
     }
 
     public static Lectura leer(Object crudo) {
+        return leer(crudo, Optional.empty());
+    }
+
+    /**
+     * @param formularioUnico el formulario abierto si es el unico: una accion sobre un formulario que no lo
+     *                        nombra se entiende sobre el. Con varios abiertos, tiene que nombrarlo.
+     */
+    public static Lectura leer(Object crudo, Optional<String> formularioUnico) {
         List<AccionUi> acciones = new ArrayList<>();
         List<String> errores = new ArrayList<>();
         if (!(crudo instanceof List<?> lista) || lista.isEmpty()) {
             return new Lectura(List.of(), List.of("Indica al menos una accion en 'acciones'."));
         }
-        lista.stream().limit(MAX_ACCIONES).forEach(elemento -> accion(elemento).ifPresentOrElse(acciones::add,
-                () -> errores.add("Accion con forma no valida: " + describir(elemento) + ".")));
+        lista.stream().limit(MAX_ACCIONES).forEach(elemento -> accion(elemento, formularioUnico)
+                .ifPresentOrElse(acciones::add,
+                        () -> errores.add("Accion con forma no valida: " + describir(elemento) + ".")));
         return new Lectura(acciones, errores);
     }
 
-    private static Optional<AccionUi> accion(Object crudo) {
+    private static Optional<AccionUi> accion(Object crudo, Optional<String> formularioUnico) {
         if (!(crudo instanceof Map<?, ?> m) || !(m.get("op") instanceof String op)) {
             return Optional.empty();
         }
+        Optional<String> formulario = texto(m, "formulario").or(() -> formularioUnico);
         return switch (op) {
             case "NAVEGAR" -> texto(m, "pantalla").map(p -> new AccionUi.Navegar(p, "", textos(m.get("params"))));
-            case "RELLENAR" -> texto(m, "formulario").map(f -> new AccionUi.Rellenar(f, valores(m.get("valores"))));
-            case "LIMPIAR_CAMPO" -> texto(m, "formulario")
-                    .flatMap(f -> texto(m, "campo").map(c -> new AccionUi.LimpiarCampo(f, c)));
-            case "RESALTAR" -> texto(m, "formulario")
-                    .flatMap(f -> texto(m, "campo").map(c -> new AccionUi.Resaltar(f, c)));
+            case "RELLENAR" -> formulario.map(f -> new AccionUi.Rellenar(f, valores(m.get("valores"))));
+            case "LIMPIAR_CAMPO" -> formulario.flatMap(f -> texto(m, "campo").map(c -> new AccionUi.LimpiarCampo(f, c)));
+            case "RESALTAR" -> formulario.flatMap(f -> texto(m, "campo").map(c -> new AccionUi.Resaltar(f, c)));
             case "ABRIR_PESTANA" -> texto(m, "pestana").map(AccionUi.AbrirPestana::new);
             case "APLICAR_FILTROS" -> Optional.of(new AccionUi.AplicarFiltros(valores(m.get("filtros"))));
             default -> Optional.empty();
@@ -79,7 +87,12 @@ public final class LectorAccionesUi {
         return limpio;
     }
 
+    /** La op y las claves que llegaron (nunca los valores), para que el modelo vea que falto. */
     private static String describir(Object crudo) {
-        return crudo instanceof Map<?, ?> m && m.get("op") instanceof String op ? op : "sin op";
+        if (!(crudo instanceof Map<?, ?> m)) {
+            return "no es un objeto";
+        }
+        String op = m.get("op") instanceof String s ? s : "sin op";
+        return op + " con claves " + m.keySet();
     }
 }

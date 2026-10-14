@@ -5,6 +5,7 @@ import org.junit.jupiter.api.Test;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -24,6 +25,19 @@ class LectorYConfiguracionTest {
                 new AccionUi.Rellenar("f", Map.of("a", "1")),
                 new AccionUi.Resaltar("f", "b"));
         assertThat(lectura.errores()).hasSize(2).anySatisfy(e -> assertThat(e).contains("ENVIAR"));
+    }
+
+    @Test
+    void conUnSoloFormularioAbiertoLasAccionesQueNoLoNombranSonSobreEl() {
+        LectorAccionesUi.Lectura lectura = LectorAccionesUi.leer(List.of(
+                Map.of("op", "RESALTAR", "campo", "cargo"),
+                Map.of("op", "RELLENAR", "valores", Map.of("nombres", "Ana"))), Optional.of("funcionario.crear"));
+
+        assertThat(lectura.acciones()).containsExactly(
+                new AccionUi.Resaltar("funcionario.crear", "cargo"),
+                new AccionUi.Rellenar("funcionario.crear", Map.of("nombres", "Ana")));
+        assertThat(LectorAccionesUi.leer(List.of(Map.of("op", "RESALTAR", "campo", "cargo"))).errores())
+                .as("sin formulario unico").singleElement().asString().contains("RESALTAR con claves").contains("campo");
     }
 
     @Test

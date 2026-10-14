@@ -94,7 +94,7 @@ public class AccionUiHerramienta implements ProveedorHerramientasControl {
         TurnoContexto turno = TurnoContexto.de(contexto);
         ContextoInvocacion invocacion = ContextoInvocacion.de(contexto);
         Map<String, Object> args = argumentos == null ? Map.of() : argumentos;
-        LectorAccionesUi.Lectura lectura = LectorAccionesUi.leer(args.get("acciones"));
+        LectorAccionesUi.Lectura lectura = LectorAccionesUi.leer(args.get("acciones"), formularioUnico(turno));
         RegistroUi vigente = registro.registro();
         ValidadorAccionesUi.Resultado resultado = ValidadorAccionesUi.validar(lectura.acciones(),
                 new ValidadorAccionesUi.Entorno(turno.contextoUi(), pantallas(vigente, turno),
@@ -110,6 +110,11 @@ public class AccionUiHerramienta implements ProveedorHerramientasControl {
         }
         turno.responderDirecto(new RespuestaAgente.Ui(texto(args), resultado.aceptadas()));
         return rechazos.isEmpty() ? ACUSE : ACUSE + " Descartadas: " + String.join(" ", rechazos);
+    }
+
+    private static Optional<String> formularioUnico(TurnoContexto turno) {
+        List<String> abiertos = turno.contextoUi().formularios().stream().map(f -> f.codigo()).toList();
+        return abiertos.size() == 1 ? Optional.of(abiertos.getFirst()) : Optional.empty();
     }
 
     private static Map<String, Pantalla> pantallas(RegistroUi vigente, TurnoContexto turno) {
