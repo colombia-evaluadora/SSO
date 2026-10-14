@@ -66,8 +66,23 @@ public final class Redaccion {
         return descripcion.substring(0, corte).strip();
     }
 
-    private static String etiqueta(ParametroDef parametro) {
-        return parametro.descripcion().isBlank() ? parametro.clave() : parametro.descripcion();
+    /**
+     * El nombre del campo para la persona, no la instruccion para el modelo: "Docente responsable; omitelo si
+     * es la propia persona..." se lee "Docente responsable".
+     */
+    static String etiqueta(ParametroDef parametro) {
+        String descripcion = parametro.descripcion();
+        if (descripcion.isBlank()) {
+            return parametro.clave();
+        }
+        int corte = descripcion.length();
+        for (String separador : new String[] {";", ". ", " ("}) {
+            int i = descripcion.indexOf(separador);
+            if (i > 0 && i < corte) {
+                corte = i;
+            }
+        }
+        return descripcion.substring(0, corte).strip();
     }
 
     private static String texto(Object valor) {
