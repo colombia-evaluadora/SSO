@@ -81,6 +81,13 @@ class PersistenciaAgenteBaseTest {
                 .query(Long.class).single();
         new ToolInvocacionRepository(jdbc).insertar(new ToolInvocacionStore.NuevaInvocacion(usuario, herramienta,
                 "h", "[\"PARAM.ID\"]", EstadoInvocacion.PENDIENTE, null, "pendiente", 12));
+        assertThat(new ToolInvocacionRepository(jdbc).listarPorConversacion(conversacion.id()))
+                .as("la memoria se reconstruye con ellas").singleElement()
+                .satisfies(i -> {
+                    assertThat(i.mensajeId()).isEqualTo(usuario);
+                    assertThat(i.nombre()).isEqualTo("h");
+                    assertThat(i.resultadoResumen()).isEqualTo("pendiente");
+                });
         new ConsultaAnaliticaRepository(jdbc).insertar(new ConsultaAnaliticaStore.NuevaConsulta(usuario, 1, null,
                 null, List.of("planeador_estadisticas"), 3, null, EstadoConsulta.OK, null));
         new EventoSeguridadRepository(jdbc).insertar(new EventoSeguridadStore.NuevoEvento(conversacion.id(), USUARIO,

@@ -122,13 +122,15 @@ public class AgenteService {
             RespuestaAgente sinEscrituras = listo.intencion().riesgo().permiteEscritura()
                     ? new RespuestaAgente.SinPermiso(MENSAJE_SIN_PERMISO)
                     : new RespuestaAgente.Respuesta(MENSAJE_DATOS_CONCRETOS);
-            return cerrar(conversacionId, usuario, sinEscrituras, Consumo.NINGUNO, seudonimos, traza);
+            return cerrar(conversacionId, usuario, sinEscrituras, Consumo.NINGUNO, seudonimos, traza,
+                    arranque.mensajeId());
         }
         traza.pasar(EstadoTurno.PERMISO_OK);
         traza.pasar(EstadoTurno.RECOLECTANDO);
         Optional<RespuestaAgente.Ui> pantalla = atajos.pantalla(listo.intencion(), listo.textoNormalizado(), listo.menus());
         if (pantalla.isPresent()) {
-            return cerrar(conversacionId, usuario, pantalla.get(), Consumo.NINGUNO, seudonimos, traza);
+            return cerrar(conversacionId, usuario, pantalla.get(), Consumo.NINGUNO, seudonimos, traza,
+                    arranque.mensajeId());
         }
         TurnoContexto contexto = new TurnoContexto(listo.herramientas(), LectorContextoUi.leer(contextoUiJson),
                 listo.menus(), seudonimos);
@@ -154,7 +156,7 @@ public class AgenteService {
                     arranque.mensajeId());
             case ResultadoBucle.Propuesta propuesta -> confirmacion(conversacionId, usuario, propuesta);
         };
-        return cerrar(conversacionId, usuario, respuesta, consumo, seudonimos, traza);
+        return cerrar(conversacionId, usuario, respuesta, consumo, seudonimos, traza, arranque.mensajeId());
     }
 
     /**
@@ -170,7 +172,7 @@ public class AgenteService {
         traza.pasar(EstadoTurno.RECOLECTANDO);
         return cerrar(conversacionId, usuario,
                 new RespuestaAgente.Confirmacion(TEXTO_USA_BOTON.formatted(pendiente.resumen()), pendiente),
-                Consumo.NINGUNO, seudonimos, traza);
+                Consumo.NINGUNO, seudonimos, traza, RegistradorTurno.SIN_MENSAJE);
     }
 
     /**
@@ -218,14 +220,15 @@ public class AgenteService {
 
     /**
      * Pasa la respuesta por la salida segura, la guarda con seudonimos (memoria e historial vuelven al
-     * modelo) y la devuelve a la persona con los nombres reales.
+     * modelo), con las llamadas a herramientas del turno delante, y la devuelve a la persona con los nombres reales.
      */
     private RespuestaAgente cerrar(UUID conversacionId, UsuarioAgente usuario, RespuestaAgente respuesta,
-                                   Consumo consumo, TablaSeudonimos seudonimos, TrazaTurno traza) {
+                                   Consumo consumo, TablaSeudonimos seudonimos, TrazaTurno traza,
+                                   long mensajeIdUsuario) {
         RespuestaAgente revisada = SeudonimosRespuesta.ocultar(
                 salida.revisar(respuesta, conversacionId, usuario.userId()), seudonimos);
         traza.pasar(EstadoTurno.de(revisada.tipo()));
-        registrador.registrar(conversacionId, revisada, consumo);
+        registrador.registrar(conversacionId, revisada, consumo, mensajeIdUsuario);
         almacenSeudonimos.guardar(conversacionId, seudonimos);
         traza.cerrar();
         return SeudonimosRespuesta.revelar(revisada, seudonimos);

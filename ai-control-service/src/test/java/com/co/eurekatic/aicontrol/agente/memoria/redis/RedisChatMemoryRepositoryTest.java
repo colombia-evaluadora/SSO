@@ -7,6 +7,7 @@ import com.co.eurekatic.aicontrol.agente.memoria.MensajeMemoria.LlamadaHerramien
 import com.co.eurekatic.aicontrol.agente.memoria.MensajeMemoria.RespuestaHerramienta;
 import com.co.eurekatic.aicontrol.agente.memoria.MensajeMemoria.ResultadoHerramienta;
 import com.co.eurekatic.aicontrol.agente.memoria.MensajeMemoria.Usuario;
+import com.co.eurekatic.aicontrol.agente.persistencia.herramienta.ToolInvocacionStore;
 import com.co.eurekatic.aicontrol.agente.persistencia.mensaje.MensajeStore;
 import com.co.eurekatic.aicontrol.agente.persistencia.mensaje.RolMensaje;
 import org.junit.jupiter.api.BeforeEach;
@@ -50,6 +51,7 @@ class RedisChatMemoryRepositoryTest {
     private StringRedisTemplate redis;
     private ValueOperations<String, String> valores;
     private MensajeStore mensajes;
+    private ToolInvocacionStore invocaciones;
     private RedisChatMemoryRepository repo;
 
     @SuppressWarnings("unchecked")
@@ -58,8 +60,9 @@ class RedisChatMemoryRepositoryTest {
         redis = mock(StringRedisTemplate.class);
         valores = mock(ValueOperations.class);
         mensajes = mock(MensajeStore.class);
+        invocaciones = mock(ToolInvocacionStore.class);
         when(redis.opsForValue()).thenReturn(valores);
-        repo = new RedisChatMemoryRepository(redis, JSON, propiedades(), mensajes);
+        repo = new RedisChatMemoryRepository(redis, JSON, propiedades(), mensajes, invocaciones);
     }
 
     @Test
@@ -112,6 +115,34 @@ class RedisChatMemoryRepositoryTest {
         // El mensaje de la persona vuelve envuelto como dato, igual que en el turno original.
         assertThat(r).extracting(Message::getText).containsExactly(DatosDelUsuario.mensaje("hola"), "buenas");
         assertThat(r.get(1)).isInstanceOf(AssistantMessage.class);
+    }
+
+    @Test
+    void laReconstruccionPoneTrasCadaMensajeDelUsuarioSusLlamadasAHerramientas() {
+        UUID id = UUID.fromString(ID);
+        when(valores.get(CLAVE)).thenReturn(null);
+        when(mensajes.listarFinales(id)).thenReturn(List.of(
+                new MensajeStore.Mensaje(1L, id, 1, RolMensaje.USER, "cuantos estudiantes", null, null, null),
+                new MensajeStore.Mensaje(2L, id, 2, RolMensaje.ASSISTANT, "Son 15.", "RESPUESTA", null, null)));
+        when(invocaciones.listarPorConversacion(id)).thenReturn(List.of(new ToolInvocacionStore.Invocacion(
+                40L, 1L, "actividad_detalle", "{\"claves\": [\"id\"], \"descartadas\": 0}", "OK: 1 filas")));
+
+        List<Message> r = repo.findByConversationId(ID);
+
+        assertThat(r).hasSize(4);
+        assertThat(r.get(1)).isInstanceOfSatisfying(AssistantMessage.class, a -> {
+            assertThat(a.getToolCalls()).singleElement().satisfies(c -> {
+                assertThat(c.name()).isEqualTo("actividad_detalle");
+                assertThat(c.id()).isEqualTo("inv-40");
+                assertThat(c.arguments()).as("sin argumentos: la base no guarda sus valores").isEqualTo("{}");
+            });
+        });
+        assertThat(r.get(2)).isInstanceOfSatisfying(ToolResponseMessage.class, t ->
+                assertThat(t.getResponses()).singleElement().satisfies(x -> {
+                    assertThat(x.id()).isEqualTo("inv-40");
+                    assertThat(x.responseData()).contains("sin sus datos", "OK: 1 filas", "argumentos: id");
+                }));
+        assertThat(r.get(3).getText()).isEqualTo("Son 15.");
     }
 
     @Test

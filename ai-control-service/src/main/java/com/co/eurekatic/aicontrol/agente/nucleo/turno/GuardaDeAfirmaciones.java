@@ -4,6 +4,7 @@ import com.co.eurekatic.aicontrol.agente.nucleo.respuesta.RespuestaAgente;
 import com.co.eurekatic.aicontrol.agente.seguridad.NormalizadorTexto;
 
 import java.util.Optional;
+import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
@@ -108,6 +109,10 @@ final class GuardaDeAfirmaciones {
             "\\b(pedi|llame|consulte|use|invoque|ejecute)( a)?( la| las)? herramientas?\\b"
                     + "|\\b(la herramienta|la primera|la segunda|la consulta)( \\w+)? devolvio\\b");
 
+    /** Los registros con que la memoria recuerda lo que hizo el sistema ({@code NotaDeMemoria}); el modelo no los escribe. */
+    private static final Pattern REGISTRO_DEL_SISTEMA = Pattern.compile(
+            "\\[\\s*(accion (propuesta|ejecutada|rechazada)|pregunta enviada|cambios enviados)");
+
     private static Optional<Afirmacion> afirmacion(RespuestaAgente respuesta) {
         if (!(respuesta instanceof RespuestaAgente.Respuesta texto)) {
             return Optional.empty();
@@ -116,6 +121,12 @@ final class GuardaDeAfirmaciones {
             return Optional.of(Afirmacion.LLAMADA);
         }
         String plegado = NormalizadorTexto.plegar(texto.texto());
+        Matcher registro = REGISTRO_DEL_SISTEMA.matcher(plegado);
+        if (registro.find()) {
+            String cual = registro.group(1);
+            return Optional.of(cual.startsWith("accion") ? Afirmacion.ACCION
+                    : cual.startsWith("cambios") ? Afirmacion.PANTALLA : Afirmacion.REGISTRO);
+        }
         if (CONSULTA_NARRADA.matcher(plegado).find() && !PREGUNTA_IMITADA.matcher(plegado).find()) {
             return Optional.of(Afirmacion.CONSULTA);
         }
@@ -136,7 +147,11 @@ final class GuardaDeAfirmaciones {
         LLAMADA(SIN_HERRAMIENTA, "Control del sistema: escribiste una llamada a herramienta como texto y no se "
                 + "ejecuto nada. Llama a la herramienta por la interfaz de herramientas, solo con las que se te ofrecen "
                 + "en este turno; nunca escribas XML ni etiquetas de herramienta en la respuesta."),
-        CONSULTA(SIN_CONSULTA, "Control del sistema: tu respuesta cuenta que consultaste herramientas y lo que "
+        REGISTRO(SIN_HERRAMIENTA, "Control del sistema: escribiste un registro entre corchetes como los del "
+                + "historial. Esas lineas las escribe solo el sistema para recordar lo que hicieron las herramientas; "
+                + "no cuentan nada de este turno. Llama ahora a la herramienta que corresponda y responde a la persona "
+                + "con lo que devuelva, sin corchetes ni nombres de herramientas."),
+        CONSULTA(SIN_CONSULTA,"Control del sistema: tu respuesta cuenta que consultaste herramientas y lo que "
                 + "devolvieron, pero en este turno no llamaste a ninguna: esos datos no son reales. Llama ahora a las "
                 + "consultas por la interfaz de herramientas y responde solo con lo que devuelvan, sin nombrarlas.");
 

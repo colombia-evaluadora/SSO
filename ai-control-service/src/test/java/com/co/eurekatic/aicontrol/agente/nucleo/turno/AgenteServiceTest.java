@@ -103,7 +103,8 @@ class AgenteServiceTest {
 
         assertThat(respuesta).isInstanceOf(RespuestaAgente.SinPermiso.class);
         verify(bucle, never()).ejecutar(any());
-        verify(registrador).registrar(eq(CONVERSACION), any(RespuestaAgente.SinPermiso.class), eq(Consumo.NINGUNO));
+        verify(registrador).registrar(eq(CONVERSACION), any(RespuestaAgente.SinPermiso.class), eq(Consumo.NINGUNO),
+                eq(9L));
     }
 
     @Test
@@ -117,7 +118,9 @@ class AgenteServiceTest {
 
         assertThat(respuesta.texto()).isEqualTo("Hola");
         verify(registrador).iniciar(CONVERSACION, "texto");
-        verify(registrador).registrar(eq(CONVERSACION), any(RespuestaAgente.Respuesta.class), any(Consumo.class));
+        // Con el mensaje del turno: la memoria recibe sus llamadas a herramientas antes de la respuesta.
+        verify(registrador).registrar(eq(CONVERSACION), any(RespuestaAgente.Respuesta.class), any(Consumo.class),
+                eq(9L));
     }
 
     @Test
@@ -149,7 +152,7 @@ class AgenteServiceTest {
 
         assertThat(respuesta.texto()).isEqualTo("Ana Pérez tiene 4.5");
         verify(registrador).registrar(eq(CONVERSACION),
-                org.mockito.ArgumentMatchers.argThat(r -> r.texto().equals("Persona_1 tiene 4.5")), any(Consumo.class));
+                org.mockito.ArgumentMatchers.argThat(r -> r.texto().equals("Persona_1 tiene 4.5")), any(Consumo.class), eq(9L));
     }
 
     @Test

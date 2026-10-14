@@ -51,9 +51,22 @@ public class PromptTurno {
     public List<Message> mensajes(List<Message> historial, String textoUsuario, String contextoUiJson) {
         List<Message> mensajes = new ArrayList<>(historial.size() + 2);
         mensajes.add(new SystemMessage(sistema));
-        mensajes.addAll(historial);
+        mensajes.addAll(desdeElPrimerUsuario(historial));
         mensajes.add(new UserMessage(bloqueUsuario(textoUsuario) + bloqueContexto(contextoUiJson)));
         return List.copyOf(mensajes);
+    }
+
+    /**
+     * La ventana de memoria se recorta por el principio y puede quedar empezando en una respuesta de herramienta
+     * sin su llamada, que el proveedor rechaza: el historial empieza siempre en un mensaje del usuario.
+     */
+    static List<Message> desdeElPrimerUsuario(List<Message> historial) {
+        for (int i = 0; i < historial.size(); i++) {
+            if (historial.get(i) instanceof UserMessage) {
+                return historial.subList(i, historial.size());
+            }
+        }
+        return List.of();
     }
 
     private String bloqueContexto(String contextoUiJson) {

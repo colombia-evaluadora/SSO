@@ -7,6 +7,7 @@ import com.co.eurekatic.aicontrol.agente.memoria.MensajeMemoria.ResultadoHerrami
 import com.co.eurekatic.aicontrol.agente.memoria.MensajeMemoria.RespuestaHerramienta;
 import com.co.eurekatic.aicontrol.agente.memoria.MensajeMemoria.Sistema;
 import com.co.eurekatic.aicontrol.agente.memoria.MensajeMemoria.Usuario;
+import com.co.eurekatic.aicontrol.agente.persistencia.herramienta.ToolInvocacionStore;
 import com.co.eurekatic.aicontrol.agente.persistencia.mensaje.MensajeStore;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
@@ -15,6 +16,9 @@ import org.springframework.ai.chat.messages.ToolResponseMessage;
 import org.springframework.ai.chat.messages.UserMessage;
 
 import java.util.List;
+import java.util.Objects;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * Conversion entre los mensajes de Spring AI y {@link MensajeMemoria}, y desde
@@ -65,6 +69,48 @@ public final class MensajeMemoriaMapper {
                     .build();
         };
     }
+
+    /**
+     * Las llamadas a herramientas de un turno, como el par que el modelo conoce: un mensaje del asistente que las
+     * pide y la respuesta de cada una. Sale de {@code ai.tool_invocacion}, que guarda las claves de los argumentos y
+     * un resumen del resultado, nunca los datos: la llamada va sin argumentos (con las claves el modelo copiaria
+     * {@code {"claves": [...]}} como forma de llamar) y la respuesta dice que sus datos ya no estan. Vacio si el
+     * turno no llamo a ninguna.
+     */
+    public static List<Message> llamadas(List<ToolInvocacionStore.Invocacion> invocaciones) {
+        if (invocaciones.isEmpty()) {
+            return List.of();
+        }
+        List<AssistantMessage.ToolCall> pedidas = invocaciones.stream()
+                .map(i -> new AssistantMessage.ToolCall(idDe(i), TIPO_LLAMADA, i.nombre(), "{}"))
+                .toList();
+        List<ToolResponseMessage.ToolResponse> respuestas = invocaciones.stream()
+                .map(i -> new ToolResponseMessage.ToolResponse(idDe(i), i.nombre(),
+                        "[Resultado de un turno anterior, sin sus datos: "
+                                + Objects.requireNonNullElse(i.resultadoResumen(), "sin resumen")
+                                + claves(i.argumentosJson()) + ". Si necesitas el dato, vuelve a llamar.]"))
+                .toList();
+        return List.of(AssistantMessage.builder().content("").toolCalls(pedidas).build(),
+                ToolResponseMessage.builder().responses(respuestas).build());
+    }
+
+    private static String idDe(ToolInvocacionStore.Invocacion invocacion) {
+        return "inv-" + invocacion.id();
+    }
+
+    /** "; argumentos: id, categoria" a partir de {@code {"claves": ["id", "categoria"], ...}}. */
+    private static String claves(String argumentosJson) {
+        if (argumentosJson == null) {
+            return "";
+        }
+        Matcher m = CLAVES.matcher(argumentosJson);
+        if (!m.find() || m.group(1).isBlank()) {
+            return "";
+        }
+        return "; argumentos: " + m.group(1).replace("\"", "").replaceAll("\\s*,\\s*", ", ").strip();
+    }
+
+    private static final Pattern CLAVES = Pattern.compile("\"claves\"\\s*:\\s*\\[([^\\]]*)]");
 
     /**
      * Turno de texto desde la base. La ventana de memoria solo guarda USER y

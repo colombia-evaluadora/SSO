@@ -44,7 +44,7 @@ class GuardaDeAfirmacionesTest {
                 .allSatisfy(t -> assertThat(GuardaDeAfirmaciones.revisar(new RespuestaAgente.Respuesta(t)).texto())
                         .as(t).isEqualTo(GuardaDeAfirmaciones.SIN_ACCION));
         assertThat(NotaDeMemoria.para("RESPUESTA", "Hecho: Registra la asistencia."))
-                .isEqualTo("La persona confirmo y el sistema ejecuto: Registra la asistencia.");
+                .isEqualTo("[Accion ejecutada tras confirmar: Registra la asistencia.]");
         assertThat(GuardaDeAfirmaciones.objecion(new RespuestaAgente.Respuesta("Para continuar necesito estos datos.")))
                 .as("el aviso de datos faltantes sin la herramienta").contains(GuardaDeAfirmaciones.PREGUNTA_SIN_HERRAMIENTA);
         assertThat(List.of("Para seguir necesito estos datos.", "Para poder avanzar, necesito los siguientes datos:",
@@ -52,7 +52,7 @@ class GuardaDeAfirmacionesTest {
                 .allSatisfy(x -> assertThat(GuardaDeAfirmaciones.objecion(new RespuestaAgente.Respuesta(x)))
                         .as(x).contains(GuardaDeAfirmaciones.PREGUNTA_SIN_HERRAMIENTA));
         assertThat(NotaDeMemoria.para("RESPUESTA", "Datos no validos para el servicio academico: indique el peso (%)"))
-                .startsWith("La persona confirmo la accion anterior pero el servicio la rechazo")
+                .startsWith("[Accion rechazada por el servicio al confirmar")
                 .contains("vuelve a llamar a la misma herramienta");
         RespuestaAgente impersonal = new RespuestaAgente.Respuesta(
                 "La fecha de cierre del Taller se actualizó al 30 de octubre de 2026.");
@@ -113,11 +113,21 @@ class GuardaDeAfirmacionesTest {
     }
 
     @Test
-    void laMemoriaGuardaConfirmacionesYUiComoNotasDelSistema() {
-        assertThat(NotaDeMemoria.para("CONFIRMACION", NotaDeMemoria.PREFIJO_CONFIRMACION + "Editar la actividad 7"))
-                .startsWith("Prepare con la herramienta").contains("Editar la actividad 7")
-                .doesNotContain("necesito tu confirmación");
-        assertThat(NotaDeMemoria.para("UI", "Listo: rellené el nombre.")).startsWith("Envie acciones a la pantalla");
+    void laMemoriaGuardaLoQueHizoElSistemaComoRegistrosEntreCorchetesNoEnPrimeraPersona() {
+        assertThat(NotaDeMemoria.para("CONFIRMACION", NotaDeMemoria.PREFIJO_CONFIRMACION + "Editar la actividad 7."))
+                .isEqualTo("[Accion propuesta, pendiente de Confirmar: Editar la actividad 7. Todavia no se ha ejecutado.]");
+        assertThat(NotaDeMemoria.para("UI", "Listo: rellené el nombre."))
+                .isEqualTo("[Cambios enviados a la pantalla. Texto mostrado: Listo: rellené el nombre.]");
+        assertThat(List.of(
+                NotaDeMemoria.para("CONFIRMACION", "Editar 7"),
+                NotaDeMemoria.para("UI", "x"),
+                NotaDeMemoria.para("PREGUNTA", NotaDeMemoria.TEXTO_PREGUNTA),
+                NotaDeMemoria.para("RESPUESTA", "Hecho: Editar 7")))
+                .as("ninguna narra en primera persona lo que hizo una herramienta")
+                .allSatisfy(n -> assertThat(n).startsWith("[").doesNotContainIgnoringCase("con la herramienta"));
+        assertThat(GuardaDeAfirmaciones.objecion(new RespuestaAgente.Respuesta(
+                NotaDeMemoria.para("PREGUNTA", NotaDeMemoria.TEXTO_PREGUNTA))))
+                .as("si el modelo copia un registro").hasValueSatisfying(o -> assertThat(o).contains("corchetes"));
         assertThat(NotaDeMemoria.para("RESPUESTA", "Hola")).isEqualTo("Hola");
         assertThat(NotaDeMemoria.para(null, "Hola")).isEqualTo("Hola");
     }

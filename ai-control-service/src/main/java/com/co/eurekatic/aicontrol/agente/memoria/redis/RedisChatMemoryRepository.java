@@ -2,6 +2,7 @@ package com.co.eurekatic.aicontrol.agente.memoria.redis;
 
 import com.co.eurekatic.aicontrol.agente.memoria.MensajeMemoria;
 import com.co.eurekatic.aicontrol.agente.memoria.MensajeMemoriaMapper;
+import com.co.eurekatic.aicontrol.agente.persistencia.herramienta.ToolInvocacionStore;
 import com.co.eurekatic.aicontrol.agente.persistencia.mensaje.MensajeStore;
 import com.co.eurekatic.aicontrol.config.agente.AgenteProperties;
 import org.slf4j.Logger;
@@ -17,15 +18,18 @@ import tools.jackson.databind.json.JsonMapper;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 /**
  * Memoria de conversacion en Redis, clave {@code ai:mem:{conversationId}}, con
  * TTL desde {@link AgenteProperties.Memoria}.
  *
  * <p>Si la clave no existe (expiro o nunca se escribio), o no se puede leer, la
- * memoria se reconstruye desde {@code ai.mensaje}, solo con los turnos de texto.
+ * memoria se reconstruye desde {@code ai.mensaje} y {@code ai.tool_invocacion}: los turnos de texto y,
+ * tras cada mensaje del usuario, las llamadas a herramientas que colgaron de el.
  * Si Redis no responde, la lectura devuelve vacio: la memoria es una
  * optimizacion y la verdad esta en la base.
  *
@@ -42,13 +46,15 @@ public class RedisChatMemoryRepository implements ChatMemoryRepository {
     private final JsonMapper json;
     private final AgenteProperties.Memoria props;
     private final MensajeStore mensajes;
+    private final ToolInvocacionStore invocaciones;
 
     public RedisChatMemoryRepository(StringRedisTemplate redis, JsonMapper json, AgenteProperties props,
-                                     MensajeStore mensajes) {
+                                     MensajeStore mensajes, ToolInvocacionStore invocaciones) {
         this.redis = redis;
         this.json = json;
         this.props = props.memoria();
         this.mensajes = mensajes;
+        this.invocaciones = invocaciones;
     }
 
     /** Ids de conversacion con memoria viva. Usa SCAN, nunca KEYS, para no bloquear Redis. */
@@ -118,14 +124,18 @@ public class RedisChatMemoryRepository implements ChatMemoryRepository {
     }
 
     /**
-     * Memoria desde {@code ai.mensaje}: solo USER y ASSISTANT, en orden. Las
-     * llamadas a herramientas intermedias no se reconstruyen.
+     * Memoria desde la base: USER y ASSISTANT en orden y, tras cada USER, sus llamadas a herramientas, igual que
+     * las deja el turno al cerrar.
      */
     List<Message> reconstruir(String conversationId) {
         try {
+            UUID id = UUID.fromString(conversationId);
+            Map<Long, List<ToolInvocacionStore.Invocacion>> porMensaje = invocaciones.listarPorConversacion(id).stream()
+                    .collect(Collectors.groupingBy(ToolInvocacionStore.Invocacion::mensajeId));
             List<Message> resultado = new ArrayList<>();
-            for (MensajeStore.Mensaje fila : mensajes.listarFinales(UUID.fromString(conversationId))) {
+            for (MensajeStore.Mensaje fila : mensajes.listarFinales(id)) {
                 resultado.add(MensajeMemoriaMapper.a(MensajeMemoriaMapper.desdeTurno(fila)));
+                resultado.addAll(MensajeMemoriaMapper.llamadas(porMensaje.getOrDefault(fila.id(), List.of())));
             }
             return resultado;
         } catch (RuntimeException e) {
