@@ -34,11 +34,20 @@ import java.util.Map;
  *                viene en blanco o no viene, el membrete se arma como
  *                siempre a partir de {@code filters} -- ningun reporte
  *                existente cambia por esto.
+ * @param columnLabels encabezados a usar en vez de los configurados, por
+ *                clave de columna; opcional. Existe por los rotulos del
+ *                planeador: la misma columna se llama "Actividad" o
+ *                "Experiencia", "Unidad tematica" o "Proyecto pedagogico",
+ *                segun el referente curricular, y el front ya tiene el nombre
+ *                en pantalla. Igual que {@code columns}, solo renombra
+ *                columnas declaradas: una clave desconocida o un texto en
+ *                blanco se ignoran (ver {@code Report.conEtiquetas}).
  */
 public record ReportRequest(
         String format,
         Map<String, Object> filters,
         Map<String, Object> sorting,
         List<String> columns,
-        String filtersLabel) {
+        String filtersLabel,
+        Map<String, String> columnLabels) {
 }

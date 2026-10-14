@@ -459,8 +459,8 @@ ON CONFLICT (microservice_id, path_template, http_method) WHERE path_template IS
 INSERT INTO public.query (uuid, microservice_id, path_template, http_method, type, execution_mode, out_param_names,
                           public_end, captcha, cacheable, cache_ttl_seconds, action, style, param_types, detail, query)
 SELECT 'eval-col-planeador-unidades-export-all-001', m.id_microservice, '/planeador/unidades/export-all', 'POST', 'postgres', 'SELECT', NULL,
-       'f', 'f', 'f', '60', NULL, NULL, '{"BODY.SORTING.ID": "VARCHAR", "BODY.FILTERS.DIA": "DATE", "BODY.FILTERS.IDS": "BIGINT[]", "BODY.SORTING.DESC": "TEXT", "BODY.FILTERS.GRADO": "BIGINT", "BODY.FILTERS.SEARCH": "VARCHAR", "BODY.FILTERS.ASIGNATURA": "BIGINT", "BODY.FILTERS.DIAS_GRACIA": "INT", "BODY.FILTERS.FUNCIONARIO": "BIGINT", "BODY.FILTERS.INCLUIR_INACTIVOS": "BOOLEAN"}'::jsonb,
-       'V406 -- unidades tematicas del planeador SIN PAGINAR para el reporte PDF/Excel (reporting-service, clave planeador-unidades). Misma funcion, mismos filtros y mismo gate/alcance que GET /planeador/unidades (fn_unidad_listar, V216), con los binds bajo BODY.FILTERS.* (SEARCH, ASIGNATURA, GRADO, FUNCIONARIO, INCLUIR_INACTIVOS, DIA, DIAS_GRACIA) + FILTERS.IDS para exportar las seleccionadas y SORTING.ID/DESC para el orden. Todos opcionales. Exporta lo que la pantalla muestra (nombre, descripcion, asignatura, area, grado, docente, estado, fechas, metodo de calculo y los contadores de actividades/objetivos/contenidos); los textos de los objetivos y contenidos NO salen -- eso seria un reporte maestro-detalle distinto. Gemela de V404, que hace lo mismo con la pestana Actividades.',
+       'f', 'f', 'f', '60', NULL, NULL, '{"BODY.SORTING.ID": "VARCHAR", "BODY.FILTERS.DIA": "DATE", "BODY.FILTERS.IDS": "BIGINT[]", "BODY.SORTING.DESC": "TEXT", "BODY.FILTERS.GRADO": "BIGINT", "BODY.FILTERS.SEARCH": "VARCHAR", "BODY.FILTERS.ASIGNATURA": "BIGINT", "BODY.FILTERS.DIAS_GRACIA": "INT", "BODY.FILTERS.FUNCIONARIO": "BIGINT", "BODY.FILTERS.SEDE": "BIGINT", "BODY.FILTERS.PERIODO": "BIGINT", "BODY.FILTERS.INCLUIR_INACTIVOS": "BOOLEAN"}'::jsonb,
+       'V406 -- unidades tematicas del planeador SIN PAGINAR para el reporte PDF/Excel (reporting-service, clave planeador-unidades). Misma funcion, mismos filtros y mismo gate/alcance que GET /planeador/unidades (fn_unidad_listar, V216), con los binds bajo BODY.FILTERS.* (SEARCH, ASIGNATURA, GRADO, FUNCIONARIO, INCLUIR_INACTIVOS, DIA, DIAS_GRACIA, y SEDE y PERIODO del filtro avanzado sede/año/jornada, el ?sede=&periodo= de GET /planeador/unidades) + FILTERS.IDS para exportar las seleccionadas y SORTING.ID/DESC para el orden. Todos opcionales. Exporta lo que la pantalla muestra (nombre, descripcion, asignatura, area, grado, docente, estado, fechas, metodo de calculo y los contadores de actividades/objetivos/contenidos); los textos de los objetivos y contenidos NO salen -- eso seria un reporte maestro-detalle distinto. Gemela de V404, que hace lo mismo con la pestana Actividades.',
        'SELECT * FROM academico_test.fn_unidad_listar(
     public.fn_get_academico_usuario_id(:CONTEXT.USER_ID::BIGINT),
     CAST(:BODY.FILTERS.SEARCH AS VARCHAR),
@@ -473,7 +473,9 @@ SELECT 'eval-col-planeador-unidades-export-all-001', m.id_microservice, '/planea
     NULL::INT,
     0,
     CAST(:BODY.FILTERS.DIA AS DATE),
-    COALESCE(CAST(:BODY.FILTERS.DIAS_GRACIA AS INT), 2)
+    COALESCE(CAST(:BODY.FILTERS.DIAS_GRACIA AS INT), 2),
+    CAST(:BODY.FILTERS.SEDE AS BIGINT),
+    CAST(:BODY.FILTERS.PERIODO AS BIGINT)
 ) t
 WHERE CAST(:BODY.FILTERS.IDS AS BIGINT[]) IS NULL
    OR t.pk_tunidad = ANY(CAST(:BODY.FILTERS.IDS AS BIGINT[]));'
