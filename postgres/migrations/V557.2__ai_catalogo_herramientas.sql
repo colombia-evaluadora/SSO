@@ -123,7 +123,7 @@ SELECT DISTINCT ON (v.codigo)
      TRUE),
     ('calificar_estudiante_actividad', 'ESCRITURA', 'PUT', '/planeador/actividades/estudiantes/:ID/calificar', 'PLANEADOR',
      'Registra la calificacion de un estudiante en una actividad, en la escala de la actividad. Requiere confirmacion.',
-     '{"PARAM.ID":{"descripcion":"Pk del estudiante en la actividad","resuelve_con":"actividad_detalle","inferible":false},"BODY.CALIFICACION":{"descripcion":"Calificacion (porcentaje 0-100 o escala de la actividad)","resuelve_con":null,"inferible":false},"BODY.FECHA":{"descripcion":"Fecha de la calificacion AAAA-MM-DD","resuelve_con":null,"inferible":true}}',
+     '{"PARAM.ID":{"descripcion":"Pk del estudiante en la actividad","resuelve_con":"actividad_detalle","inferible":false},"BODY.CALIFICACION":{"descripcion":"Calificacion en el formato del instrumento de la actividad (lo dice actividad_instrumento y el contrato). Si la definicion del instrumento es null, la actividad no se puede calificar: dile a la persona que primero hay que definir el instrumento","resuelve_con":null,"inferible":false},"BODY.FECHA":{"descripcion":"Fecha de la calificacion AAAA-MM-DD","resuelve_con":null,"inferible":true}}',
      TRUE),
     ('calificar_grupo_escala', 'ESCRITURA', 'PUT', '/planeador/actividades/:ID/calificar-bulk/escala', 'PLANEADOR',
      'Califica a varios estudiantes con una escala numerica o de niveles en una actividad. Requiere confirmacion.',
