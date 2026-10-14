@@ -27,11 +27,11 @@ class BorradorAccionTest {
             true, List.of(), 1, Optional.empty(), Optional.empty(), Set.of());
 
     @Test
-    void guardaSoloLosParametrosDeLaHerramientaConValor() {
+    void guardaPorClaveCanonicaSoloLosParametrosDeLaHerramientaConValor() {
         Map<String, Object> argumentos = new HashMap<>();
-        argumentos.put("BODY.FK_TGRUPO", 990201);
-        argumentos.put("BODY.TITULO", " ");
-        argumentos.put("BODY.PONDERACION", null);
+        argumentos.put("fk_tgrupo", 990201);
+        argumentos.put("titulo", " ");
+        argumentos.put("ponderacion", null);
         argumentos.put("inventado", "x");
 
         assertThat(BorradorAccion.de(CREAR, argumentos).argumentos()).containsExactly(Map.entry("BODY.FK_TGRUPO", 990201));
@@ -52,9 +52,23 @@ class BorradorAccionTest {
     void laNotaNombraCadaCampoConSuEtiquetaYSuClave() {
         String nota = new BorradorAccion("crear_actividad_planeador", Map.of("BODY.FK_TGRUPO", 990201)).nota(CREAR);
 
-        assertThat(nota).contains("Accion en curso", "crear_actividad_planeador", "Grupo [BODY.FK_TGRUPO] = 990201")
+        assertThat(nota).contains("Accion en curso", "crear_actividad_planeador", "Grupo [fk_tgrupo] = 990201")
                 .doesNotContain("docentes_grupos_listar");
         assertThat(new BorradorAccion("crear_actividad_planeador", Map.of()).nota(CREAR)).isEmpty();
+    }
+
+    @Test
+    void laNotaNombraElValorDeCadaIdYUnaEtiquetaViejaSoloSigueSiSuValorNoCambio() {
+        BorradorAccion antes = new BorradorAccion("crear_actividad_planeador",
+                Map.of("BODY.FK_TGRUPO", 990201, "BODY.TITULO", "Taller"))
+                .conEtiquetas(Map.of("grupo=990201", "A - G1 MANANA"));
+
+        assertThat(antes.nota(CREAR)).contains("Grupo [fk_tgrupo] = 990201 (A - G1 MANANA)",
+                "Titulo [titulo] = Taller.");
+        assertThat(antes.seguidoDe(new BorradorAccion("crear_actividad_planeador", Map.of("BODY.TITULO", "Quiz")))
+                .etiquetas()).containsEntry("BODY.FK_TGRUPO", "A - G1 MANANA");
+        assertThat(antes.seguidoDe(new BorradorAccion("crear_actividad_planeador", Map.of("BODY.FK_TGRUPO", 7)))
+                .etiquetas()).as("otro grupo, la etiqueta vieja ya no es suya").isEmpty();
     }
 
     @Test
@@ -62,8 +76,8 @@ class BorradorAccionTest {
         TurnoContexto turno = new TurnoContexto(List.of(CREAR));
 
         assertThat(turno.borrador()).isEmpty();
-        turno.alIntentarEscritura(CREAR, Map.of("BODY.FK_TGRUPO", 990201));
-        turno.alIntentarEscritura(CREAR, Map.of("BODY.TITULO", "Taller"));
+        turno.alIntentarEscritura(CREAR, Map.of("fk_tgrupo", 990201));
+        turno.alIntentarEscritura(CREAR, Map.of("titulo", "Taller"));
 
         assertThat(turno.borrador()).hasValueSatisfying(b -> assertThat(b.argumentos())
                 .containsOnlyKeys("BODY.FK_TGRUPO", "BODY.TITULO"));
@@ -73,8 +87,10 @@ class BorradorAccionTest {
     void viajaComoJsonYVuelveIgual() {
         JsonMapper json = JsonMapper.builder().build();
         BorradorAccion borrador = new BorradorAccion("crear_actividad_planeador",
-                Map.of("BODY.FK_TGRUPO", 990201, "BODY.TITULO", "Taller"));
+                Map.of("BODY.FK_TGRUPO", 990201, "BODY.TITULO", "Taller"), Map.of("BODY.FK_TGRUPO", "A"));
 
         assertThat(json.readValue(json.writeValueAsString(borrador), BorradorAccion.class)).isEqualTo(borrador);
+        assertThat(json.readValue("{\"herramienta\":\"x\",\"argumentos\":{}}", BorradorAccion.class).etiquetas())
+                .as("uno guardado antes de las etiquetas").isEmpty();
     }
 }

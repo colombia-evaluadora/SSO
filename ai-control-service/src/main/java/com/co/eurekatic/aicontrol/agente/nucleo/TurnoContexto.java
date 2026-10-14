@@ -3,6 +3,7 @@ package com.co.eurekatic.aicontrol.agente.nucleo;
 import com.co.eurekatic.aicontrol.agente.nucleo.borrador.BorradorAccion;
 import com.co.eurekatic.aicontrol.agente.catalogo.dominio.HerramientaDef;
 import com.co.eurekatic.aicontrol.agente.catalogo.dominio.TipoHerramienta;
+import com.co.eurekatic.aicontrol.agente.catalogo.invocacion.EtiquetasIds;
 import com.co.eurekatic.aicontrol.agente.catalogo.invocacion.ObservadorResultados;
 import com.co.eurekatic.aicontrol.agente.catalogo.invocacion.ResultadoHerramienta;
 import com.co.eurekatic.aicontrol.agente.catalogo.invocacion.ResultadoHerramienta.RequiereConfirmacion;
@@ -16,6 +17,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -41,6 +43,7 @@ public final class TurnoContexto implements ObservadorResultados {
     private final TablaSeudonimos seudonimos;
     private final AtomicInteger lecturas = new AtomicInteger();
     private final AtomicReference<BorradorAccion> borrador = new AtomicReference<>();
+    private final Map<String, String> etiquetasDeIds = new ConcurrentHashMap<>();
     private final AtomicBoolean preguntaDevuelta = new AtomicBoolean();
 
     public TurnoContexto(List<HerramientaDef> herramientas, ContextoUi contextoUi, Map<String, AccesoMenu> menus,
@@ -74,8 +77,10 @@ public final class TurnoContexto implements ObservadorResultados {
     /** Guarda la ultima tabla de una herramienta de analitica, para presentarla al cerrar el turno. */
     @Override
     public void alObtener(HerramientaDef herramienta, ResultadoHerramienta resultado) {
-        if (resultado instanceof ResultadoHerramienta.Datos) {
+        if (resultado instanceof ResultadoHerramienta.Datos datos) {
             lecturas.incrementAndGet();
+            // Con los nombres de persona ya como alias, igual que los ve el modelo: el borrador viaja a Redis.
+            EtiquetasIds.extraer(seudonimos.ocultarFilas(datos.filas())).forEach(etiquetasDeIds::putIfAbsent);
         }
         if (herramienta.tipo() == TipoHerramienta.ANALITICA && resultado instanceof ResultadoHerramienta.Datos datos) {
             analitica.set(new TablaAnalitica(herramienta.codigo(), datos.filas(), datos.truncado()));
@@ -88,9 +93,12 @@ public final class TurnoContexto implements ObservadorResultados {
                 (anterior, nuevo) -> anterior == null ? nuevo : anterior.seguidoDe(nuevo));
     }
 
-    /** Lo que el modelo intento escribir en este turno, junto si repitio la misma herramienta. */
+    /**
+     * Lo que el modelo intento escribir en este turno, junto si repitio la misma herramienta, con el nombre de cada
+     * id que leyo en el turno.
+     */
     public Optional<BorradorAccion> borrador() {
-        return Optional.ofNullable(borrador.get());
+        return Optional.ofNullable(borrador.get()).map(b -> b.conEtiquetas(etiquetasDeIds));
     }
 
     /** Consultas que devolvieron datos en este turno. */
