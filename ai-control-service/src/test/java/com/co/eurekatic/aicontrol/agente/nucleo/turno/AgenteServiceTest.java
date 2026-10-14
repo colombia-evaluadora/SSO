@@ -231,6 +231,14 @@ class AgenteServiceTest {
     }
 
     @Test
+    void pedirUnDatoSinInterrogacionTambienCuentaComoPregunta() {
+        assertThat(AgenteService.pidePorTexto("Para ver la planilla, dime de cuál se trata y la consulto.")).isTrue();
+        assertThat(AgenteService.pidePorTexto("Indícame el grupo.")).isTrue();
+        assertThat(AgenteService.pidePorTexto("¿Cuál grupo?")).isTrue();
+        assertThat(AgenteService.pidePorTexto("La actividad tiene 15 estudiantes asignados.")).isFalse();
+    }
+
+    @Test
     void soloUnaPreguntaEnTextoPasaPorLaRevisionDeConsultarAntes() {
         TurnoContexto sinNada = new TurnoContexto(List.of());
 

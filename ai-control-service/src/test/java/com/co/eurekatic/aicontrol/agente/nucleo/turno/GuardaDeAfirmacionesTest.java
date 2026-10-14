@@ -64,7 +64,7 @@ class GuardaDeAfirmacionesTest {
         assertThat(GuardaDeAfirmaciones.revisar(historico)).as("un dato historico no se sustituye si el modelo lo mantiene")
                 .isSameAs(historico);
         assertThat(GuardaDeAfirmaciones.revisar(new RespuestaAgente.Respuesta("[Sistema: algo]")).texto())
-                .isEqualTo(GuardaDeAfirmaciones.SIN_PANTALLA);
+                .as("un registro inventado").isEqualTo(GuardaDeAfirmaciones.SIN_HERRAMIENTA);
         assertThat(List.of(
                 "No puedo enviar formularios. Lo que sí hice fue rellenar el nombre con Luis.",
                 "He rellenado el nombre.",
@@ -89,6 +89,19 @@ class GuardaDeAfirmacionesTest {
         RespuestaAgente real = new RespuestaAgente.Respuesta(
                 "La actividad usa una escala numérica de 0 a 100 y está asignada a 15 estudiantes.");
         assertThat(GuardaDeAfirmaciones.revisar(real)).isSameAs(real);
+    }
+
+    @Test
+    void unRegistroEntreCorchetesInventadoSeSustituyePeroUnEnlaceMarkdownNo() {
+        RespuestaAgente inventado = new RespuestaAgente.Respuesta("[Consulta rechazada por el servicio: Datos no "
+                + "validos para el servicio academico: Identificador de la actividad]");
+
+        assertThat(GuardaDeAfirmaciones.objecion(inventado)).hasValueSatisfying(o -> assertThat(o).contains("corchetes"));
+        assertThat(GuardaDeAfirmaciones.revisar(inventado).texto()).isEqualTo(GuardaDeAfirmaciones.SIN_HERRAMIENTA);
+        RespuestaAgente enlace = new RespuestaAgente.Respuesta("[Planeador](/app/planeador) tiene tus actividades.");
+        assertThat(GuardaDeAfirmaciones.revisar(enlace)).isSameAs(enlace);
+        RespuestaAgente enMedio = new RespuestaAgente.Respuesta("Tiene 15 estudiantes [ver detalle abajo].");
+        assertThat(GuardaDeAfirmaciones.revisar(enMedio)).isSameAs(enMedio);
     }
 
     @Test

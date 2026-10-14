@@ -11,6 +11,7 @@ import com.co.eurekatic.aicontrol.agente.nucleo.control.PedirDatosFaltantesHerra
 import com.co.eurekatic.aicontrol.agente.nucleo.intencion.Intencion;
 import com.co.eurekatic.aicontrol.agente.nucleo.intencion.TipoIntencion;
 import com.co.eurekatic.aicontrol.agente.nucleo.respuesta.RespuestaAgente;
+import com.co.eurekatic.aicontrol.agente.seguridad.NormalizadorTexto;
 import com.co.eurekatic.aicontrol.agente.seguridad.seudonimos.AlmacenSeudonimos;
 import com.co.eurekatic.aicontrol.agente.seguridad.seudonimos.TablaSeudonimos;
 import com.co.eurekatic.aicontrol.agente.ui.contexto.LectorContextoUi;
@@ -18,6 +19,7 @@ import org.springframework.stereotype.Service;
 
 import java.util.Optional;
 import java.util.UUID;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 /**
@@ -198,9 +200,17 @@ public class AgenteService {
      * devuelve una vez. Sin esto el modelo pide "el id del grupo" o nombra grupos que no leyo.
      */
     static Optional<String> preguntaSinConsultar(RespuestaAgente respuesta, TurnoContexto contexto) {
-        return respuesta instanceof RespuestaAgente.Respuesta texto && texto.texto().contains("?")
+        return respuesta instanceof RespuestaAgente.Respuesta texto && pidePorTexto(texto.texto())
                 ? PedirDatosFaltantesHerramienta.preguntaSinConsultar(contexto)
                 : Optional.empty();
+    }
+
+    /** "¿Cual?" o, sin interrogacion, "dime de cual se trata y la consulto": pedirle a la persona un dato. */
+    private static final Pattern PIDE_UN_DATO = Pattern.compile(
+            "\\b(dime|dimelo|indica|indicame|especifica|especificame|confirmame|cuentame|aclarame)\\b");
+
+    static boolean pidePorTexto(String texto) {
+        return texto.contains("?") || PIDE_UN_DATO.matcher(NormalizadorTexto.plegar(texto)).find();
     }
 
     /** El borrador de turnos anteriores, solo si su herramienta se ofrece en este turno. */

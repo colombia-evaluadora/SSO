@@ -3,6 +3,7 @@ package com.co.eurekatic.aicontrol.agente.nucleo.turno;
 import com.co.eurekatic.aicontrol.agente.nucleo.respuesta.RespuestaAgente;
 import com.co.eurekatic.aicontrol.agente.seguridad.NormalizadorTexto;
 
+import java.util.Objects;
 import java.util.Optional;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -111,7 +112,10 @@ final class GuardaDeAfirmaciones {
 
     /** Los registros con que la memoria recuerda lo que hizo el sistema ({@code NotaDeMemoria}); el modelo no los escribe. */
     private static final Pattern REGISTRO_DEL_SISTEMA = Pattern.compile(
-            "\\[\\s*(accion (propuesta|ejecutada|rechazada)|pregunta enviada|cambios enviados)");
+            "\\[\\s*(accion (propuesta|ejecutada|rechazada)|pregunta enviada|cambios enviados)"
+                    // Y cualquier variante que invente ("[Consulta rechazada por el servicio: ..."): una respuesta
+                    // real no empieza entre corchetes, salvo un enlace markdown [texto](url).
+                    + "|^\\s*\\[(?![^\\]]*\\]\\()([^\\]\\n]{3,})");
 
     private static Optional<Afirmacion> afirmacion(RespuestaAgente respuesta) {
         if (!(respuesta instanceof RespuestaAgente.Respuesta texto)) {
@@ -123,7 +127,7 @@ final class GuardaDeAfirmaciones {
         String plegado = NormalizadorTexto.plegar(texto.texto());
         Matcher registro = REGISTRO_DEL_SISTEMA.matcher(plegado);
         if (registro.find()) {
-            String cual = registro.group(1);
+            String cual = Objects.requireNonNullElse(registro.group(1), "");
             return Optional.of(cual.startsWith("accion") ? Afirmacion.ACCION
                     : cual.startsWith("cambios") ? Afirmacion.PANTALLA : Afirmacion.REGISTRO);
         }
