@@ -105,7 +105,9 @@ BEGIN
                m.URL,
                TRUE, TRUE, TRUE, TRUE
           FROM academico_test.TMENU m
-         WHERE m.ACTIVE = TRUE
+          LEFT JOIN academico_test.TMENU p ON p.PK_TMENU = m.FK_TMENU
+         WHERE m.ACTIVE = TRUE AND m.ESTADO = 'A'
+           AND (m.FK_TMENU IS NULL OR (p.ACTIVE = TRUE AND p.ESTADO = 'A'))
          ORDER BY m.NOMBRE ASC, m.PK_TMENU ASC;
         RETURN;
     END IF;
@@ -130,8 +132,11 @@ BEGIN
             ON rm.FK_TROL = ra.pk_trol AND rm.ACTIVE = TRUE
           LEFT JOIN academico_test.TROL_MENU_PERMISO rp
             ON rp.FK_TROL_MENU = rm.PK_TROL_MENU
+          -- Un menu inactivo, o con el padre inactivo, no da permisos.
           JOIN academico_test.TMENU m
-            ON m.PK_TMENU = rm.FK_TMENU AND m.ACTIVE = TRUE
+            ON m.PK_TMENU = rm.FK_TMENU AND m.ACTIVE = TRUE AND m.ESTADO = 'A'
+          LEFT JOIN academico_test.TMENU pm ON pm.PK_TMENU = m.FK_TMENU
+         WHERE m.FK_TMENU IS NULL OR (pm.ACTIVE = TRUE AND pm.ESTADO = 'A')
     ),
     bloqueos AS (
         -- Recorte del usuario: solo cuenta SOLO_LECTURA = 'SI'.
