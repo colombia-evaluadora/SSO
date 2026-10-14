@@ -16,6 +16,8 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
@@ -36,6 +38,8 @@ public final class TurnoContexto implements ObservadorResultados {
     private final List<RequiereConfirmacion> propuestas = new CopyOnWriteArrayList<>();
     private final AtomicReference<TablaAnalitica> analitica = new AtomicReference<>();
     private final TablaSeudonimos seudonimos;
+    private final AtomicInteger lecturas = new AtomicInteger();
+    private final AtomicBoolean preguntaDevuelta = new AtomicBoolean();
 
     public TurnoContexto(List<HerramientaDef> herramientas, ContextoUi contextoUi, Map<String, AccesoMenu> menus,
                          TablaSeudonimos seudonimos) {
@@ -68,9 +72,22 @@ public final class TurnoContexto implements ObservadorResultados {
     /** Guarda la ultima tabla de una herramienta de analitica, para presentarla al cerrar el turno. */
     @Override
     public void alObtener(HerramientaDef herramienta, ResultadoHerramienta resultado) {
+        if (resultado instanceof ResultadoHerramienta.Datos) {
+            lecturas.incrementAndGet();
+        }
         if (herramienta.tipo() == TipoHerramienta.ANALITICA && resultado instanceof ResultadoHerramienta.Datos datos) {
             analitica.set(new TablaAnalitica(herramienta.codigo(), datos.filas(), datos.truncado()));
         }
+    }
+
+    /** Consultas que devolvieron datos en este turno. */
+    public int lecturas() {
+        return lecturas.get();
+    }
+
+    /** Cierto solo la primera vez: una pregunta sin consultar antes se devuelve al modelo una sola vez por turno. */
+    public boolean devolverPreguntaUnaVez() {
+        return preguntaDevuelta.compareAndSet(false, true);
     }
 
     public Optional<TablaAnalitica> analitica() {

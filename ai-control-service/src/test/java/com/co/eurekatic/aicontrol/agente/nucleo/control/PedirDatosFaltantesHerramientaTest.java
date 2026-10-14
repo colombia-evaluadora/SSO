@@ -1,7 +1,10 @@
 package com.co.eurekatic.aicontrol.agente.nucleo.control;
 
 import com.co.eurekatic.aicontrol.agente.catalogo.dominio.HerramientaDef;
+import com.co.eurekatic.aicontrol.agente.catalogo.dominio.ParametroDef;
 import com.co.eurekatic.aicontrol.agente.catalogo.dominio.TipoHerramienta;
+import com.co.eurekatic.aicontrol.agente.catalogo.dominio.TipoParametro;
+import com.co.eurekatic.aicontrol.agente.catalogo.invocacion.ResultadoHerramienta;
 import com.co.eurekatic.aicontrol.agente.nucleo.TurnoContexto;
 import com.co.eurekatic.aicontrol.agente.nucleo.respuesta.RespuestaAgente;
 import org.junit.jupiter.api.Test;
@@ -35,6 +38,43 @@ class PedirDatosFaltantesHerramientaTest {
         assertThat(pregunta.faltantes().get(0).campo()).isEqualTo("jornada");
         assertThat(pregunta.faltantes().get(0).opciones()).containsExactly("MAÑANA", "TARDE");
         assertThat(pregunta.borrador()).containsOnlyKeys("nombres");
+    }
+
+    @Test
+    void preguntarSinHaberConsultadoSeDevuelveUnaVezConLasConsultasQueResuelven() {
+        HerramientaDef grupos = new HerramientaDef(8L, "docentes_grupos_listar", TipoHerramienta.LECTURA, "Grupos",
+                List.of(), false, List.of(), 1, Optional.empty(), Optional.empty(), Set.of());
+        HerramientaDef crear = new HerramientaDef(9L, "crear_actividad_planeador", TipoHerramienta.ESCRITURA, "Crea",
+                List.of(new ParametroDef("BODY.FK_TGRUPO", TipoParametro.texto(), "Grupo",
+                        Optional.of("docentes_grupos_listar"), true, false)),
+                true, List.of(), 1, Optional.empty(), Optional.empty(), Set.of());
+        TurnoContexto turno = new TurnoContexto(List.of(grupos, crear));
+        ToolCallback pedir = new PedirDatosFaltantesHerramienta().callbacks().get(0);
+        ToolContext contexto = new ToolContext(Map.of(TurnoContexto.CLAVE, turno));
+
+        String primera = pedir.call(ARGUMENTOS, contexto);
+        String segunda = pedir.call(ARGUMENTOS, contexto);
+
+        assertThat(primera).startsWith(PedirDatosFaltantesHerramienta.CONSULTA_ANTES).contains("docentes_grupos_listar");
+        assertThat(segunda).as("la segunda vez si pregunta").isEqualTo(PedirDatosFaltantesHerramienta.ACUSE);
+        assertThat(turno.directa()).containsInstanceOf(RespuestaAgente.Pregunta.class);
+    }
+
+    @Test
+    void conAlgunaConsultaHechaPreguntaALaPrimera() {
+        HerramientaDef grupos = new HerramientaDef(8L, "docentes_grupos_listar", TipoHerramienta.LECTURA, "Grupos",
+                List.of(), false, List.of(), 1, Optional.empty(), Optional.empty(), Set.of());
+        HerramientaDef crear = new HerramientaDef(9L, "crear_actividad_planeador", TipoHerramienta.ESCRITURA, "Crea",
+                List.of(new ParametroDef("BODY.FK_TGRUPO", TipoParametro.texto(), "Grupo",
+                        Optional.of("docentes_grupos_listar"), true, false)),
+                true, List.of(), 1, Optional.empty(), Optional.empty(), Set.of());
+        TurnoContexto turno = new TurnoContexto(List.of(grupos, crear));
+        turno.alObtener(grupos, new ResultadoHerramienta.Datos(List.of(Map.of("grupo_id", 1), Map.of("grupo_id", 2)), false));
+
+        String acuse = new PedirDatosFaltantesHerramienta().callbacks().get(0)
+                .call(ARGUMENTOS, new ToolContext(Map.of(TurnoContexto.CLAVE, turno)));
+
+        assertThat(acuse).isEqualTo(PedirDatosFaltantesHerramienta.ACUSE);
     }
 
     @Test
