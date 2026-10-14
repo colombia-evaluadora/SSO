@@ -34,6 +34,15 @@ class GuardaDeAfirmacionesTest {
                 .as("llamada escrita como texto").isEqualTo(GuardaDeAfirmaciones.SIN_HERRAMIENTA);
         assertThat(GuardaDeAfirmaciones.objecion(new RespuestaAgente.Respuesta("<invoke name=\"x\">")))
                 .hasValueSatisfying(o -> assertThat(o).contains("interfaz de herramientas"));
+        RespuestaAgente impersonal = new RespuestaAgente.Respuesta(
+                "La fecha de cierre del Taller se actualizó al 30 de octubre de 2026.");
+        assertThat(GuardaDeAfirmaciones.objecion(impersonal)).as("un cambio contado como hecho sin escritura")
+                .contains(GuardaDeAfirmaciones.CAMBIO_SIN_ESCRITURA);
+        assertThat(GuardaDeAfirmaciones.objecion(new RespuestaAgente.Respuesta("Las notas quedaron registradas.")))
+                .contains(GuardaDeAfirmaciones.CAMBIO_SIN_ESCRITURA);
+        RespuestaAgente historico = new RespuestaAgente.Respuesta("La actividad se creó el 2026-10-01 y cierra el 27.");
+        assertThat(GuardaDeAfirmaciones.revisar(historico)).as("un dato historico no se sustituye si el modelo lo mantiene")
+                .isSameAs(historico);
         assertThat(GuardaDeAfirmaciones.revisar(new RespuestaAgente.Respuesta("[Sistema: algo]")).texto())
                 .isEqualTo(GuardaDeAfirmaciones.SIN_PANTALLA);
         assertThat(List.of(

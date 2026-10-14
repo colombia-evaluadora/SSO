@@ -27,6 +27,16 @@ final class GuardaDeAfirmaciones {
     private static final Pattern CONFIRMACION = Pattern.compile(
             "necesito tu confirmacion|(espera|pendiente de|requiere) (de )?tu confirmacion|pulsa confirmar|boton confirmar"
                     + "|prepare con la herramienta");
+    /**
+     * Un cambio en la base contado como hecho ("se actualizo la fecha"). Tambien lo dice un dato historico ("se
+     * creo el 1 de octubre"), asi que solo se objeta: si el modelo lo mantiene tras revisarlo, queda.
+     */
+    private static final Pattern CAMBIO_IMPERSONAL = Pattern.compile(
+            "\\bse (actualizo|cambio|modifico|creo|guardo|registro|asigno|califico|elimino|vinculo)\\b"
+                    + "|\\b(quedo|ha quedado|quedaron|han quedado) (actualizad|cambiad|registrad|guardad|asignad|calificad|cread)");
+    static final String CAMBIO_SIN_ESCRITURA = "Control del sistema: tu respuesta cuenta un cambio en la base como "
+            + "hecho, pero en este turno no se confirmo ninguna escritura. Si la persona pidio el cambio, llama a la "
+            + "herramienta de escritura y el sistema le pedira confirmar; si es un dato leido, dilo como tal.";
     private static final Pattern CAMBIO_HECHO = Pattern.compile(
             "^\\W*(listo|hecho|ya)\\b.{0,80}?\\b(rellene|resalte|llene|actualice|marque|escribi|cambie|te lleve|edite)\\b"
                     + "|\\bhice (fue )?(rellenar|resaltar|llenar|actualizar|marcar|escribir|cambiar|poner)\\b"
@@ -51,7 +61,11 @@ final class GuardaDeAfirmaciones {
         if (afirmada.isPresent() || !(respuesta instanceof RespuestaAgente.Respuesta texto)) {
             return afirmada;
         }
-        return OFRECE_CONSULTAR.matcher(NormalizadorTexto.plegar(texto.texto())).find()
+        String plegado = NormalizadorTexto.plegar(texto.texto());
+        if (CAMBIO_IMPERSONAL.matcher(plegado).find()) {
+            return Optional.of(CAMBIO_SIN_ESCRITURA);
+        }
+        return OFRECE_CONSULTAR.matcher(plegado).find()
                 ? Optional.of(CONSULTA_EN_VEZ_DE_OFRECER)
                 : Optional.empty();
     }
