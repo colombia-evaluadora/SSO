@@ -21,4 +21,10 @@ public interface RegistroIds {
 
     /** Presencia del id en la conversacion; quien pregunta decide que hacer si es desconocida. */
     Presencia consultar(String conversationId, String id);
+
+    /**
+     * Presencia del id como id de esa entidad. Si la conversacion ya vio ids de la entidad, el id tiene que ser
+     * uno de ellos (un grado no vale como grupo); si no vio ninguno, cuenta la presencia sin tipo.
+     */
+    Presencia consultarDe(String conversationId, String entidad, String id);
 }

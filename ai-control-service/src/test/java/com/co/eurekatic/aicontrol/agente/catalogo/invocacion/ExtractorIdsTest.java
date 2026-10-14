@@ -29,6 +29,25 @@ class ExtractorIdsTest {
     }
 
     @Test
+    void cadaIdLlevaLaEntidadQueNombraSuColumnaYElParametroLaSuya() {
+        List<Map<String, Object>> filas = List.of(Map.of("grupo_id", 990201, "grado_id", 990501, "id", 3,
+                "rows", List.of(Map.of("pk_tunidad", 149, "fk_tlv_estado", 7))));
+
+        assertThat(ExtractorIds.extraerTipados(filas))
+                .containsExactlyInAnyOrder("grupo=990201", "grado=990501", "unidad=149", "lista_valor=7");
+        assertThat(ExtractorIds.entidadDeParametro("BODY.FK_TGRUPO")).hasValue("grupo");
+        assertThat(ExtractorIds.entidadDeParametro("BODY.FK_TMATRICULAS")).hasValue("matricula");
+        assertThat(ExtractorIds.entidadDeParametro("PARAM.ACTIVIDADID")).hasValue("actividad");
+        assertThat(ExtractorIds.entidadDeParametro("BODY.FK_TLV_JERARQUIA")).hasValue("lista_valor");
+        assertThat(ExtractorIds.entidadDeParametro("PARAM.ID")).isEmpty();
+        assertThat(ExtractorIds.entidadDeColumna("pk_lista_valor")).hasValue("lista_valor");
+        assertThat(ExtractorIds.entidadDeColumna("fk_tmatricula")).hasValue("matricula");
+        assertThat(ExtractorIds.entidadDeColumna("pk_empleado")).as("listado de funcionarios").hasValue("funcionario");
+        assertThat(ExtractorIds.entidadDeColumna("fk_tfuncionario_docente")).hasValue("funcionario");
+        assertThat(ExtractorIds.entidadDeParametro("BODY.FK_TFUNCIONARIO")).hasValue("funcionario");
+    }
+
+    @Test
     void unEnteroLlegadoComoDecimalSeCanonicalizaComoEntero() {
         assertThat(ExtractorIds.textoDe(12.0)).isEqualTo("12");
         assertThat(ExtractorIds.textoDe(12.5)).isNull();

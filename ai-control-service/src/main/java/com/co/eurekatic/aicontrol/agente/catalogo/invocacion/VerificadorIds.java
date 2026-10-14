@@ -7,6 +7,7 @@ import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 import java.util.regex.Pattern;
 
 /**
@@ -36,13 +37,15 @@ public class VerificadorIds {
             if (valor == null || !parametro.esIdentificador()) {
                 continue;
             }
+            Optional<String> entidad = ExtractorIds.entidadDeParametro(parametro.clave());
             boolean justificado = elementos(valor).stream().allMatch(elemento -> {
                 String id = ExtractorIds.textoDe(elemento);
-                return id != null && (estaEnTexto(texto, id)
-                        || admite(registro.consultar(conversationId, id), herramienta));
+                return id != null && (estaEnTexto(texto, id) || admite(entidad
+                        .map(e -> registro.consultarDe(conversationId, e, id))
+                        .orElseGet(() -> registro.consultar(conversationId, id)), herramienta));
             });
             if (!justificado) {
-                errores.add(mensaje(parametro, nombres.nombreModelo(parametro.clave())));
+                errores.add(mensaje(parametro, nombres.nombreModelo(parametro.clave()), entidad));
             }
         }
         return List.copyOf(errores);
@@ -70,10 +73,14 @@ public class VerificadorIds {
         return numeroAislado.matcher(texto).find();
     }
 
-    private static String mensaje(ParametroDef parametro, String nombre) {
+    private static String mensaje(ParametroDef parametro, String nombre, Optional<String> entidad) {
         String pista = parametro.resuelveCon()
                 .map(herramienta -> " Obtenlo con " + herramienta + " y usa el id que devuelva.")
                 .orElse(" Obtenlo de una consulta previa de esta conversacion.");
-        return "El valor de '" + nombre + "' es un identificador que no aparece en ningun resultado previo." + pista;
+        // Con entidad, el id puede haber salido como otra cosa (el pk de un grado no vale como grupo).
+        String problema = entidad
+                .map(e -> " no es un id de " + e + " de ningun resultado previo.")
+                .orElse(" es un identificador que no aparece en ningun resultado previo.");
+        return "El valor de '" + nombre + "'" + problema + pista;
     }
 }
