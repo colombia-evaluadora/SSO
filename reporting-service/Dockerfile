@@ -23,6 +23,7 @@ COPY provisioner/pom.xml provisioner/
 COPY notification-service/pom.xml notification-service/
 COPY reporting-service/pom.xml reporting-service/
 COPY ai-control-service/pom.xml ai-control-service/
+COPY scheduler-service/pom.xml scheduler-service/
 
 RUN mvn -B -ntp -Dmaven.wagon.http.retryHandler.count=5 -Daether.connector.http.retryHandler.count=5 -Daether.connector.http.retryHandler.serviceUnavailable=429,502,503,504 -pl reporting-service -am dependency:go-offline -q
 
