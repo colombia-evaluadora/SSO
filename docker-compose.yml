@@ -2017,6 +2017,47 @@ services:
       retries: 10
       start_period: 60s
 
+  scheduler-service:
+    # Tareas repetitivas declaradas en scheduler-service/config/tareas.yml.
+    # Perfil propio (opt-in): no arranca en los deploys hasta que se active
+    # COMPOSE_PROFILES=scheduler en el .env del entorno.
+    profiles: ["scheduler"]
+    build:
+      context: .
+      dockerfile: scheduler-service/Dockerfile
+    image: ${IMAGE_PREFIX:-eurekatic}/scheduler-service:${IMAGE_TAG:-1.0.0-SNAPSHOT}
+    container_name: sso-scheduler-service
+    restart: unless-stopped
+    stop_grace_period: ${JAVA_STOP_GRACE_PERIOD:-40s}
+    logging: *default-logging
+    init: true
+    mem_limit: 256m
+    mem_reservation: 160m
+    depends_on:
+      # Las tareas llaman funciones que crean las migraciones.
+      flyway:
+        condition: service_completed_successfully
+    volumes:
+      - ./scheduler-service/config/tareas.yml:/config/tareas.yml:ro
+    environment:
+      # Misma base y credenciales que query-service (QUERY_DS_POSTGRES_*).
+      SCHEDULER_DB_URL: "jdbc:postgresql://${QUERY_DS_POSTGRES_HOST}:${QUERY_DS_POSTGRES_PORT}/${QUERY_DS_POSTGRES_NAME}?sslmode=${QUERY_DS_POSTGRES_SSLMODE}&channel_binding=${QUERY_DS_POSTGRES_CHANNEL_BINDING}"
+      SCHEDULER_DB_USER: ${QUERY_DS_POSTGRES_USER}
+      SCHEDULER_DB_PASSWORD: ${QUERY_DS_POSTGRES_PASSWORD}
+      SCHEDULER_TAREAS_FILE: /config/tareas.yml
+      SCHEDULER_ZONA: "${SCHEDULER_ZONA:-America/Bogota}"
+      OTEL_EXPORTER_OTLP_ENDPOINT: "${OTEL_EXPORTER_OTLP_ENDPOINT:-http://alloy:4318}"
+      MANAGEMENT_TRACING_EXPORT_ENABLED: "${SSO_TELEMETRY_ENABLED:-false}"
+      OTEL_TRACING_SAMPLE_RATE: "${OTEL_TRACING_SAMPLE_RATE:-0.1}"
+      MANAGEMENT_OTLP_METRICS_EXPORT_ENABLED: "${SSO_TELEMETRY_ENABLED:-false}"
+      MANAGEMENT_LOGGING_EXPORT_OTLP_ENABLED: "${SSO_TELEMETRY_ENABLED:-false}"
+    healthcheck:
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/localhost/8091; printf 'GET /actuator/health HTTP/1.0\r\n\r\n' >&3; grep -q UP <&3"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 40s
+
 volumes:
   traefik-acme:
     # Guarda acme.json: la clave privada del certificado y el registro de
