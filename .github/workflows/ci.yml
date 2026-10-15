@@ -136,9 +136,15 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 2
+      # En `push`, sin `base` paths-filter compara contra la rama POR DEFECTO
+      # (main...dev) cuando la rama empujada no es esa: cada push a dev
+      # recompilaba todo lo que aun no se habia promovido a main (ai-control,
+      # auth-center, reporting, gateway...) aunque el merge solo tocara
+      # migraciones. Con `before` compara solo lo que trajo este push.
       - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
         id: filter
         with:
+          base: ${{ github.event_name == 'push' && github.event.before || '' }}
           filters: |
             # `common` actúa de disparador global: si cambia él, el pom
             # raíz o el propio workflow, se recompila todo.
