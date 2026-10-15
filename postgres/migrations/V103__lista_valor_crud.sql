@@ -34,8 +34,8 @@ BEGIN
     IF v_categoria IS NOT NULL
        AND EXISTS (SELECT 1 FROM academico_test.TLISTA_VALOR
                     WHERE CATEGORIA = v_categoria AND ES_SISTEMA) THEN
-        RAISE EXCEPTION 'Solo el super administrador puede modificar la categoría %: tiene valores del sistema',
-            v_categoria
+        RAISE EXCEPTION 'Solo el Superadministrador puede modificar la lista %: tiene valores usados por el sistema.',
+            academico_test.fn_listavalor_lista_nombre(v_categoria)
             USING ERRCODE = '42501';
     END IF;
 END;
@@ -63,7 +63,7 @@ BEGIN
                 WHERE PK_LISTA_VALOR = p_pk_lista_valor AND ES_SISTEMA
                   AND (NOMBRE IS DISTINCT FROM TRIM(p_nombre)
                        OR (p_accion IS NOT NULL AND ACCION IS DISTINCT FROM NULLIF(TRIM(p_accion), '')))) THEN
-        RAISE EXCEPTION 'Solo el super administrador puede cambiar el nombre o la acción: % es un valor del sistema',
+        RAISE EXCEPTION 'Solo el Superadministrador puede cambiar el nombre o la acción de %: es un valor usado por el sistema.',
             academico_test.fn_listavalor_etiqueta(p_pk_lista_valor)
             USING ERRCODE = '42501';
     END IF;
@@ -114,6 +114,7 @@ COMMENT ON FUNCTION academico_test.fn_listavalor_listar(BIGINT, VARCHAR, BIGINT,
     IS 'GET /listas-valor?CATEGORIA=&PADRE=&HABILITADO=: valores no eliminados con su padre, en su orden (fn_listavalor_listar_interno). Gate VER sobre LISTAS_VALOR; 22023 sin categoría ni padre.';
 
 DROP FUNCTION IF EXISTS academico_test.fn_listavalor_categoria_crear(BIGINT, VARCHAR, JSONB);
+DROP FUNCTION IF EXISTS academico_test.fn_listavalor_categoria_crear(BIGINT, VARCHAR, JSONB, VARCHAR, VARCHAR, BOOLEAN);
 
 CREATE OR REPLACE FUNCTION academico_test.fn_listavalor_categoria_crear(
     p_pk_usuario_solicitante BIGINT,
@@ -121,7 +122,8 @@ CREATE OR REPLACE FUNCTION academico_test.fn_listavalor_categoria_crear(
     p_valores                JSONB   DEFAULT NULL,
     p_descripcion            VARCHAR DEFAULT NULL,
     p_categoria_padre        VARCHAR DEFAULT NULL,
-    p_es_ordinal             BOOLEAN DEFAULT FALSE
+    p_es_ordinal             BOOLEAN DEFAULT FALSE,
+    p_nombre                 VARCHAR DEFAULT NULL
 )
 RETURNS JSONB
 LANGUAGE plpgsql
@@ -132,19 +134,22 @@ BEGIN
     PERFORM academico_test.fn_audit_declarar(p_pk_usuario_solicitante,
         format('Lista de valores: crear la lista %s', UPPER(TRIM(p_categoria))));
     RETURN academico_test.fn_listavalor_categoria_crear_interno(
-        p_pk_usuario_solicitante, p_categoria, p_valores, p_descripcion, p_categoria_padre, p_es_ordinal);
+        p_pk_usuario_solicitante, p_categoria, p_valores, p_descripcion, p_categoria_padre, p_es_ordinal, p_nombre);
 END;
 $$;
 
-COMMENT ON FUNCTION academico_test.fn_listavalor_categoria_crear(BIGINT, VARCHAR, JSONB, VARCHAR, VARCHAR, BOOLEAN)
-    IS 'POST /listas-valor/categorias: crea una lista con sus primeros valores opcionales (fn_listavalor_categoria_crear_interno). Orden: 42501 (CREAR sobre LISTAS_VALOR; lista que tuvo valores de sistema solo nivel 0) → 22023 (formato, descripción, lista padre, valores) → 23505 (lista o código ya existe).';
+COMMENT ON FUNCTION academico_test.fn_listavalor_categoria_crear(BIGINT, VARCHAR, JSONB, VARCHAR, VARCHAR, BOOLEAN, VARCHAR)
+    IS 'POST /listas-valor/categorias: crea una lista (nombre opcional, por defecto derivado del código) con sus primeros valores opcionales (fn_listavalor_categoria_crear_interno). Orden: 42501 (CREAR sobre LISTAS_VALOR; lista que tuvo valores de sistema solo nivel 0) → 22023 (formato, nombre, descripción, lista padre, valores) → 23505 (código, nombre o código de valor ya existe).';
+
+DROP FUNCTION IF EXISTS academico_test.fn_listavalor_categoria_actualizar(BIGINT, VARCHAR, VARCHAR, VARCHAR, BOOLEAN);
 
 CREATE OR REPLACE FUNCTION academico_test.fn_listavalor_categoria_actualizar(
     p_pk_usuario_solicitante BIGINT,
     p_categoria              VARCHAR,
     p_descripcion            VARCHAR DEFAULT NULL,
     p_categoria_padre        VARCHAR DEFAULT NULL,
-    p_es_ordinal             BOOLEAN DEFAULT NULL
+    p_es_ordinal             BOOLEAN DEFAULT NULL,
+    p_nombre                 VARCHAR DEFAULT NULL
 )
 RETURNS JSONB
 LANGUAGE plpgsql
@@ -156,12 +161,12 @@ BEGIN
     PERFORM academico_test.fn_audit_declarar(p_pk_usuario_solicitante,
         format('Lista de valores: modificar la lista %s', UPPER(TRIM(p_categoria))));
     RETURN academico_test.fn_listavalor_categoria_actualizar_interno(
-        p_pk_usuario_solicitante, p_categoria, p_descripcion, p_categoria_padre, p_es_ordinal);
+        p_pk_usuario_solicitante, p_categoria, p_descripcion, p_categoria_padre, p_es_ordinal, p_nombre);
 END;
 $$;
 
-COMMENT ON FUNCTION academico_test.fn_listavalor_categoria_actualizar(BIGINT, VARCHAR, VARCHAR, VARCHAR, BOOLEAN)
-    IS 'PUT /listas-valor/categorias/:CATEGORIA: descripción, lista padre y ordinal; el código no se edita (fn_listavalor_categoria_actualizar_interno). Orden: P0002 → 42501 (EDITAR sobre LISTAS_VALOR) → 22023 (descripción, lista padre inválida, en ciclo o incompatible con los valores padre).';
+COMMENT ON FUNCTION academico_test.fn_listavalor_categoria_actualizar(BIGINT, VARCHAR, VARCHAR, VARCHAR, BOOLEAN, VARCHAR)
+    IS 'PUT /listas-valor/categorias/:CATEGORIA: nombre (NULL = sin cambio), descripción, lista padre y ordinal; el código no se edita (fn_listavalor_categoria_actualizar_interno). Orden: P0002 → 42501 (EDITAR sobre LISTAS_VALOR) → 22023 (nombre, descripción, lista padre inválida, en ciclo o incompatible) → 23505 (nombre de otra lista).';
 
 CREATE OR REPLACE FUNCTION academico_test.fn_listavalor_categoria_estado(
     p_pk_usuario_solicitante BIGINT,

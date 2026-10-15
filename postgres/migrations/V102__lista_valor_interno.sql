@@ -33,44 +33,63 @@ $$;
 COMMENT ON FUNCTION academico_test.fn_listavalor_sincronizar_secuencia_interno()
     IS 'INTERNO: adelanta la secuencia de TLISTA_VALOR hasta MAX(PK_LISTA_VALOR) si quedó atrás. La usa fn_listavalor_crear_interno.';
 
+CREATE OR REPLACE FUNCTION academico_test.fn_listavalor_json_fila(
+    p_valor academico_test.TLISTA_VALOR,
+    p_padre academico_test.TLISTA_VALOR
+)
+RETURNS JSONB
+LANGUAGE sql
+IMMUTABLE
+AS $$
+    SELECT jsonb_build_object(
+               'pkListaValor',   p_valor.PK_LISTA_VALOR,
+               'categoria',      p_valor.CATEGORIA,
+               'nombre',         p_valor.NOMBRE,
+               'valor',          p_valor.VALOR,
+               'etiqueta',       p_valor.ETIQUETA,
+               'accion',         p_valor.ACCION,
+               'orden',          p_valor.ORDEN,
+               'predeterminado', p_valor.PREDETERMINADO,
+               'habilitado',     p_valor.HABILITADO,
+               'esSistema',      p_valor.ES_SISTEMA,
+               'active',         p_valor.ACTIVE,
+               'padre',          CASE WHEN p_padre.PK_LISTA_VALOR IS NOT NULL THEN
+                                     jsonb_build_object('pkListaValor', p_padre.PK_LISTA_VALOR,
+                                                        'categoria',    p_padre.CATEGORIA,
+                                                        'nombre',       p_padre.NOMBRE,
+                                                        'valor',        p_padre.VALOR)
+                                 END);
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_listavalor_json_fila(academico_test.TLISTA_VALOR, academico_test.TLISTA_VALOR)
+    IS 'INTERNO: forma JSON de un valor a partir de su fila y la de su padre (NULL si no tiene), sin volver a leer la tabla. Única definición de la forma: la usan fn_listavalor_json_interno y fn_listavalor_listar_interno.';
+
 CREATE OR REPLACE FUNCTION academico_test.fn_listavalor_json_interno(p_pk_lista_valor BIGINT)
 RETURNS JSONB
 LANGUAGE sql
 STABLE
 AS $$
-    SELECT jsonb_build_object(
-               'pkListaValor',   lv.PK_LISTA_VALOR,
-               'categoria',      lv.CATEGORIA,
-               'nombre',         lv.NOMBRE,
-               'valor',          lv.VALOR,
-               'etiqueta',       lv.ETIQUETA,
-               'accion',         lv.ACCION,
-               'orden',          lv.ORDEN,
-               'predeterminado', lv.PREDETERMINADO,
-               'habilitado',     lv.HABILITADO,
-               'esSistema',      lv.ES_SISTEMA,
-               'active',         lv.ACTIVE,
-               'padre',          CASE WHEN p.PK_LISTA_VALOR IS NOT NULL THEN
-                                     jsonb_build_object('pkListaValor', p.PK_LISTA_VALOR,
-                                                        'categoria',    p.CATEGORIA,
-                                                        'nombre',       p.NOMBRE,
-                                                        'valor',        p.VALOR)
-                                 END)
+    SELECT academico_test.fn_listavalor_json_fila(lv, p)
       FROM academico_test.TLISTA_VALOR lv
       LEFT JOIN academico_test.TLISTA_VALOR p ON p.PK_LISTA_VALOR = lv.FK_TLISTA_VALOR_PADRE
      WHERE lv.PK_LISTA_VALOR = p_pk_lista_valor;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_listavalor_json_interno(BIGINT)
-    IS 'INTERNO: forma JSON de un valor con su padre; la devuelven las escrituras de valores y el listado.';
+    IS 'INTERNO: forma JSON de un valor con su padre (fn_listavalor_json_fila); la devuelven las escrituras de valores.';
 
-CREATE OR REPLACE FUNCTION academico_test.fn_listavalor_categoria_json_interno(p_categoria VARCHAR)
-RETURNS JSONB
+CREATE OR REPLACE FUNCTION academico_test.fn_listavalor_categorias_filas_interno(
+    p_categoria VARCHAR DEFAULT NULL,
+    p_buscar    VARCHAR DEFAULT NULL
+)
+RETURNS TABLE (codigo VARCHAR, datos JSONB)
 LANGUAGE sql
 STABLE
 AS $$
-    SELECT jsonb_build_object(
+    SELECT c.CODIGO,
+           jsonb_build_object(
                'categoria',       c.CODIGO,
+               'nombre',          c.NOMBRE,
                'descripcion',     c.DESCRIPCION,
                'categoriaPadre',  cp.CODIGO,
                'esOrdinal',       c.ES_ORDINAL,
@@ -87,11 +106,27 @@ AS $$
                    MAX(lv.PK_LISTA_VALOR) FILTER (WHERE lv.PREDETERMINADO) AS predeterminado
               FROM academico_test.TLISTA_VALOR lv
              WHERE lv.CATEGORIA = c.CODIGO AND lv.ACTIVE = TRUE) v
-     WHERE c.CODIGO = p_categoria AND c.ACTIVE = TRUE;
+     WHERE c.ACTIVE = TRUE
+       AND (p_categoria IS NULL OR c.CODIGO = p_categoria)
+       AND (NULLIF(TRIM(p_buscar), '') IS NULL
+            OR c.NOMBRE ILIKE '%' || TRIM(p_buscar) || '%'
+            OR replace(c.CODIGO, '_', ' ') ILIKE '%' || replace(TRIM(p_buscar), '_', ' ') || '%'
+            OR c.DESCRIPCION ILIKE '%' || TRIM(p_buscar) || '%');
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_listavalor_categorias_filas_interno(VARCHAR, VARCHAR)
+    IS 'INTERNO: listas activas con su forma JSON {categoria (código inmutable), nombre, descripcion, categoriaPadre, esOrdinal, habilitada, totalValores, esSistema, predeterminado, categoriasPadre}, filtradas por código y/o búsqueda (nombre, código o descripción). El agregado de valores va por LATERAL sobre IDX_TLISTA_VALOR_CATEGORIA_ORDEN. Única definición de la forma: la usan fn_listavalor_categoria_json_interno y el listado.';
+
+CREATE OR REPLACE FUNCTION academico_test.fn_listavalor_categoria_json_interno(p_categoria VARCHAR)
+RETURNS JSONB
+LANGUAGE sql
+STABLE
+AS $$
+    SELECT f.datos FROM academico_test.fn_listavalor_categorias_filas_interno(p_categoria) f;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_listavalor_categoria_json_interno(VARCHAR)
-    IS 'INTERNO: forma JSON de una lista: {categoria, descripcion, categoriaPadre, esOrdinal, habilitada, totalValores, esSistema, predeterminado (pk o null), categoriasPadre}. La usan el listado y las escrituras de listas.';
+    IS 'INTERNO: forma JSON de una lista (fn_listavalor_categorias_filas_interno); la devuelven las escrituras de listas.';
 
 CREATE OR REPLACE FUNCTION academico_test.fn_listavalor_mover_interno(
     p_pk_usuario     BIGINT,
@@ -225,6 +260,7 @@ COMMENT ON FUNCTION academico_test.fn_listavalor_crear_interno(BIGINT, VARCHAR, 
     IS 'INTERNO: crea un valor de usuario (ES_SISTEMA = FALSE) en una categoría existente; orden NULL = al final. Categoría y código se normalizan a UPPER(TRIM). Una migración que siembre valores que el código busca por texto inserta directo para que queden ES_SISTEMA. La usan fn_listavalor_crear y fn_listavalor_categoria_crear_interno.';
 
 DROP FUNCTION IF EXISTS academico_test.fn_listavalor_categoria_crear_interno(BIGINT, VARCHAR, JSONB);
+DROP FUNCTION IF EXISTS academico_test.fn_listavalor_categoria_crear_interno(BIGINT, VARCHAR, JSONB, VARCHAR, VARCHAR, BOOLEAN);
 
 CREATE OR REPLACE FUNCTION academico_test.fn_listavalor_categoria_crear_interno(
     p_pk_usuario      BIGINT,
@@ -232,7 +268,8 @@ CREATE OR REPLACE FUNCTION academico_test.fn_listavalor_categoria_crear_interno(
     p_valores         JSONB   DEFAULT NULL,
     p_descripcion     VARCHAR DEFAULT NULL,
     p_categoria_padre VARCHAR DEFAULT NULL,
-    p_es_ordinal      BOOLEAN DEFAULT FALSE
+    p_es_ordinal      BOOLEAN DEFAULT FALSE,
+    p_nombre          VARCHAR DEFAULT NULL
 )
 RETURNS JSONB
 LANGUAGE plpgsql
@@ -240,15 +277,17 @@ AS $$
 DECLARE
     v_categoria VARCHAR := UPPER(TRIM(p_categoria));
     v_padre     VARCHAR := NULLIF(UPPER(TRIM(p_categoria_padre)), '');
+    v_nombre    VARCHAR := COALESCE(NULLIF(TRIM(p_nombre), ''),
+                                    academico_test.fn_listavalor_categoria_nombre_defecto(UPPER(TRIM(p_categoria))));
     v_item      JSONB;
     v_creados   JSONB := '[]'::jsonb;
 BEGIN
-    PERFORM academico_test.fn_listavalor_validar_categoria_creacion(v_categoria, p_descripcion, v_padre);
+    PERFORM academico_test.fn_listavalor_validar_categoria_creacion(v_categoria, p_descripcion, v_padre, v_nombre);
     PERFORM academico_test.fn_listavalor_validar_valores_lote(p_valores);
 
     INSERT INTO academico_test.TLISTA_CATEGORIA
-        (CODIGO, DESCRIPCION, FK_TLISTA_CATEGORIA_PADRE, ES_ORDINAL, CREATED_BY)
-    SELECT v_categoria, NULLIF(TRIM(p_descripcion), ''),
+        (CODIGO, NOMBRE, DESCRIPCION, FK_TLISTA_CATEGORIA_PADRE, ES_ORDINAL, CREATED_BY)
+    SELECT v_categoria, v_nombre, NULLIF(TRIM(p_descripcion), ''),
            (SELECT PK_LISTA_CATEGORIA FROM academico_test.TLISTA_CATEGORIA WHERE CODIGO = v_padre AND ACTIVE = TRUE),
            COALESCE(p_es_ordinal, FALSE), COALESCE(p_pk_usuario::VARCHAR, 'sistema');
 
@@ -266,15 +305,18 @@ BEGIN
 END;
 $$;
 
-COMMENT ON FUNCTION academico_test.fn_listavalor_categoria_crear_interno(BIGINT, VARCHAR, JSONB, VARCHAR, VARCHAR, BOOLEAN)
-    IS 'INTERNO: crea una lista (código inmutable, descripción, lista padre, ordinal) con sus primeros valores opcionales [{nombre, valor, etiqueta, accion, padre, predeterminado}], en el orden enviado; todo o nada. La usa fn_listavalor_categoria_crear.';
+COMMENT ON FUNCTION academico_test.fn_listavalor_categoria_crear_interno(BIGINT, VARCHAR, JSONB, VARCHAR, VARCHAR, BOOLEAN, VARCHAR)
+    IS 'INTERNO: crea una lista (código inmutable, nombre visible —sin él, derivado del código—, descripción, lista padre, ordinal) con sus primeros valores opcionales [{nombre, valor, etiqueta, accion, padre, predeterminado}], en el orden enviado; todo o nada. La usa fn_listavalor_categoria_crear.';
+
+DROP FUNCTION IF EXISTS academico_test.fn_listavalor_categoria_actualizar_interno(BIGINT, VARCHAR, VARCHAR, VARCHAR, BOOLEAN);
 
 CREATE OR REPLACE FUNCTION academico_test.fn_listavalor_categoria_actualizar_interno(
     p_pk_usuario      BIGINT,
     p_categoria       VARCHAR,
     p_descripcion     VARCHAR DEFAULT NULL,
     p_categoria_padre VARCHAR DEFAULT NULL,
-    p_es_ordinal      BOOLEAN DEFAULT NULL
+    p_es_ordinal      BOOLEAN DEFAULT NULL,
+    p_nombre          VARCHAR DEFAULT NULL
 )
 RETURNS JSONB
 LANGUAGE plpgsql
@@ -282,12 +324,14 @@ AS $$
 DECLARE
     v_categoria VARCHAR := UPPER(TRIM(p_categoria));
     v_padre     VARCHAR := NULLIF(UPPER(TRIM(p_categoria_padre)), '');
+    v_nombre    VARCHAR := NULLIF(TRIM(p_nombre), '');
 BEGIN
     PERFORM academico_test.fn_listavalor_validar_categoria_existente(v_categoria);
-    PERFORM academico_test.fn_listavalor_validar_categoria_actualizacion(v_categoria, p_descripcion, v_padre);
+    PERFORM academico_test.fn_listavalor_validar_categoria_actualizacion(v_categoria, p_descripcion, v_padre, v_nombre);
 
     UPDATE academico_test.TLISTA_CATEGORIA
-       SET DESCRIPCION               = NULLIF(TRIM(p_descripcion), ''),
+       SET NOMBRE                    = COALESCE(v_nombre, NOMBRE),
+           DESCRIPCION               = NULLIF(TRIM(p_descripcion), ''),
            FK_TLISTA_CATEGORIA_PADRE = (SELECT PK_LISTA_CATEGORIA FROM academico_test.TLISTA_CATEGORIA
                                          WHERE CODIGO = v_padre AND ACTIVE = TRUE),
            ES_ORDINAL                = COALESCE(p_es_ordinal, ES_ORDINAL),
@@ -299,8 +343,8 @@ BEGIN
 END;
 $$;
 
-COMMENT ON FUNCTION academico_test.fn_listavalor_categoria_actualizar_interno(BIGINT, VARCHAR, VARCHAR, VARCHAR, BOOLEAN)
-    IS 'INTERNO: reemplaza descripción y lista padre de una lista (NULL los quita) y ordinal (NULL = sin cambio). El código no cambia nunca. La usa fn_listavalor_categoria_actualizar.';
+COMMENT ON FUNCTION academico_test.fn_listavalor_categoria_actualizar_interno(BIGINT, VARCHAR, VARCHAR, VARCHAR, BOOLEAN, VARCHAR)
+    IS 'INTERNO: reemplaza descripción y lista padre de una lista (NULL los quita); nombre y ordinal NULL = sin cambio. El código no cambia nunca. La usa fn_listavalor_categoria_actualizar.';
 
 CREATE OR REPLACE FUNCTION academico_test.fn_listavalor_categoria_estado_interno(
     p_pk_usuario BIGINT,
@@ -511,17 +555,12 @@ RETURNS JSONB
 LANGUAGE sql
 STABLE
 AS $$
-    SELECT COALESCE(jsonb_agg(academico_test.fn_listavalor_categoria_json_interno(c.CODIGO)
-                              ORDER BY c.CODIGO), '[]'::jsonb)
-      FROM academico_test.TLISTA_CATEGORIA c
-     WHERE c.ACTIVE = TRUE
-       AND (NULLIF(TRIM(p_buscar), '') IS NULL
-            OR replace(c.CODIGO, '_', ' ') ILIKE '%' || replace(TRIM(p_buscar), '_', ' ') || '%'
-            OR c.DESCRIPCION ILIKE '%' || TRIM(p_buscar) || '%');
+    SELECT COALESCE(jsonb_agg(f.datos ORDER BY f.codigo), '[]'::jsonb)
+      FROM academico_test.fn_listavalor_categorias_filas_interno(NULL, p_buscar) f;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_listavalor_categorias_listar_interno(VARCHAR)
-    IS 'INTERNO: listas activas (habilitadas o no) con la forma de fn_listavalor_categoria_json_interno, por código; p_buscar filtra por código (con _ o espacios) o descripción. La usa fn_listavalor_categorias_listar.';
+    IS 'INTERNO: listas activas (habilitadas o no) por código, en una sola pasada (fn_listavalor_categorias_filas_interno); p_buscar filtra por nombre, código (con _ o espacios) o descripción. La usa fn_listavalor_categorias_listar.';
 
 DROP FUNCTION IF EXISTS academico_test.fn_listavalor_listar_interno(VARCHAR, BIGINT);
 
@@ -533,6 +572,7 @@ CREATE OR REPLACE FUNCTION academico_test.fn_listavalor_listar_interno(
 RETURNS JSONB
 LANGUAGE plpgsql
 STABLE
+SET plan_cache_mode = force_custom_plan
 AS $$
 DECLARE
     v_categoria VARCHAR := NULLIF(UPPER(TRIM(p_categoria)), '');
@@ -540,9 +580,10 @@ BEGIN
     PERFORM academico_test.fn_listavalor_validar_filtro_listado(v_categoria, p_pk_padre);
 
     RETURN (
-        SELECT COALESCE(jsonb_agg(academico_test.fn_listavalor_json_interno(lv.PK_LISTA_VALOR)
-                                  ORDER BY lv.CATEGORIA, lv.ORDEN, lv.NOMBRE), '[]'::jsonb)
+        SELECT COALESCE(jsonb_agg(academico_test.fn_listavalor_json_fila(lv, p)
+                                  ORDER BY lv.CATEGORIA, lv.ORDEN, lv.PK_LISTA_VALOR), '[]'::jsonb)
           FROM academico_test.TLISTA_VALOR lv
+          LEFT JOIN academico_test.TLISTA_VALOR p ON p.PK_LISTA_VALOR = lv.FK_TLISTA_VALOR_PADRE
          WHERE lv.ACTIVE = TRUE
            AND (v_categoria  IS NULL OR lv.CATEGORIA = v_categoria)
            AND (p_pk_padre   IS NULL OR lv.FK_TLISTA_VALOR_PADRE = p_pk_padre)
