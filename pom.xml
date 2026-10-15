@@ -100,6 +100,25 @@
                 <type>pom</type>
                 <scope>import</scope>
             </dependency>
+            <!--
+                reactor-netty-http arrastra netty-codec-http3 y con el los
+                binarios QUIC de cinco sistemas operativos (11,7 MB por jar).
+                Ningun servicio sirve ni consume HTTP/3; las clases de
+                netty-codec-http3 se quedan (reactor-netty las referencia) y
+                solo se quitan los nativos, que se cargan al abrir un canal
+                QUIC.
+            -->
+            <dependency>
+                <groupId>io.netty</groupId>
+                <artifactId>netty-codec-http3</artifactId>
+                <version>${netty.version}</version>
+                <exclusions>
+                    <exclusion>
+                        <groupId>io.netty</groupId>
+                        <artifactId>netty-codec-native-quic</artifactId>
+                    </exclusion>
+                </exclusions>
+            </dependency>
         </dependencies>
     </dependencyManagement>
 
