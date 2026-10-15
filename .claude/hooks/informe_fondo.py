@@ -32,6 +32,7 @@ PENDIENTE = TMP / "sso-informe.pendiente"
 HUELLA = TMP / "sso-informe.huella"
 LOG = TMP / "sso-informe.log"
 LOCK_CADUCA = 600  # s: un lock mas viejo es de un proceso que murio
+_SIN_VENTANA = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
 
 
 def _lock_vivo() -> bool:
@@ -53,9 +54,10 @@ def lanzar() -> None:
     kwargs: dict = {"cwd": REPO, "stdin": subprocess.DEVNULL, "stdout": subprocess.DEVNULL,
                     "stderr": subprocess.DEVNULL, "close_fds": True}
     if os.name == "nt":
-        kwargs["creationflags"] = (subprocess.DETACHED_PROCESS
-                                   | subprocess.CREATE_NEW_PROCESS_GROUP
-                                   | subprocess.CREATE_NO_WINDOW)
+        # Consola oculta, no DETACHED_PROCESS: sin consola, cada hijo de consola
+        # (python, git) abre su propia ventana, y Windows ignora CREATE_NO_WINDOW
+        # si va junto a DETACHED_PROCESS.
+        kwargs["creationflags"] = _SIN_VENTANA | subprocess.CREATE_NEW_PROCESS_GROUP
     else:
         kwargs["start_new_session"] = True
     try:
@@ -81,7 +83,8 @@ def _correr(log, *args: str) -> int:
     log.write(f"\n$ migration-analysis {' '.join(args)}\n")
     log.flush()
     r = subprocess.run([sys.executable, str(CLI), *args], cwd=REPO, stdout=log,
-                       stderr=subprocess.STDOUT, timeout=600)
+                       stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, timeout=600,
+                       creationflags=_SIN_VENTANA)
     return r.returncode
 
 

@@ -3,7 +3,7 @@
     "_postman_id": "5b1d3f0e-6a77-4c2e-9d41-listas-valor",
     "name": "SSO - Listas de valores",
     "description": {
-      "content": "Lista de Valores (V101–V104, selector en V442): listas (`TLISTA_CATEGORIA`, código inmutable), valores con etiqueta, orden, predeterminado único y estado activo/inactivo, y jerarquía lista padre → valor padre. Gate: menú `LISTAS_VALOR` (VER/CREAR/EDITAR/ELIMINAR, sin alcance), solo del Superadministrador. Los valores usados por el sistema (`esSistema`) se renombran y reordenan, pero no se inactivan ni se eliminan. `GET /select/:CATEGORIA` es el catálogo de los formularios. Correr con `newman run docs/listas-valor/listas-valor.postman_collection.json -e <entorno>`; el entorno aporta `baseUrl`, `email` y `password`. La corrida queda en cero (pasos de limpieza); con `MANUAL=1` se conservan los datos. Antes de reiniciar query-service-eval-col las rutas nuevas responden 404.",
+      "content": "Lista de Valores (V101–V104, selector en V442): listas (`TLISTA_CATEGORIA`, código inmutable y nombre editable), valores con etiqueta, orden, predeterminado único y estado activo/inactivo, y jerarquía lista padre → valor padre. Gate: menú `LISTAS_VALOR` (VER/CREAR/EDITAR/ELIMINAR, sin alcance), solo del Superadministrador. Los valores usados por el sistema (`esSistema`) se renombran y reordenan, pero no se inactivan ni se eliminan. `GET /select/:CATEGORIA` es el catálogo de los formularios. Correr con `newman run docs/listas-valor/listas-valor.postman_collection.json -e <entorno>`; el entorno aporta `baseUrl`, `email` y `password`. La corrida queda en cero (pasos de limpieza); con `MANUAL=1` se conservan los datos. Antes de reiniciar query-service-eval-col las rutas nuevas responden 404.",
       "type": "text/markdown"
     },
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
@@ -145,7 +145,7 @@
               "language": "json"
             }
           },
-          "raw": "{\n  \"CATEGORIA\": \"{{categoriaPadre}}\",\n  \"DESCRIPCION\": \"Departamentos de prueba de la colección Postman\",\n  \"VALORES\": \"[{\\\"nombre\\\":\\\"Antioquia\\\",\\\"valor\\\":\\\"ANTIOQUIA\\\",\\\"predeterminado\\\":true},{\\\"nombre\\\":\\\"Santander\\\",\\\"valor\\\":\\\"SANTANDER\\\"}]\"\n}"
+          "raw": "{\n  \"CATEGORIA\": \"{{categoriaPadre}}\",\n  \"NOMBRE\": \"Departamento (prueba)\",\n  \"DESCRIPCION\": \"Departamentos de prueba de la colección Postman\",\n  \"VALORES\": \"[{\\\"nombre\\\":\\\"Antioquia\\\",\\\"valor\\\":\\\"ANTIOQUIA\\\",\\\"predeterminado\\\":true},{\\\"nombre\\\":\\\"Santander\\\",\\\"valor\\\":\\\"SANTANDER\\\"}]\"\n}"
         }
       },
       "event": [
@@ -159,7 +159,8 @@
               "pm.environment.set('padreId', res.valores[0].pkListaValor);",
               "pm.environment.set('padre2Id', res.valores[1].pkListaValor);",
               "pm.test('orden 1..n', () => pm.expect(res.valores.map(v => v.orden)).to.eql([1, 2]));",
-              "pm.test('predeterminado', () => pm.expect(res.predeterminado).to.eql(res.valores[0].pkListaValor));"
+              "pm.test('predeterminado', () => pm.expect(res.predeterminado).to.eql(res.valores[0].pkListaValor));",
+              "pm.test('nombre visible', () => pm.expect(res.nombre).to.eql('Departamento (prueba)'));"
             ]
           }
         }
@@ -192,7 +193,7 @@
           "raw": "{{baseUrl}}/api/eval-col/listas-valor/categorias"
         },
         "description": {
-          "content": "`PADRE` es el código de la lista padre: cada valor debe llevar un `padre` de esa lista. Guarda `hijoId`.",
+          "content": "`PADRE` es el código de la lista padre: cada valor debe llevar un `padre` de esa lista. Sin `NOMBRE`, se deriva del código. Guarda `hijoId`.",
           "type": "text/markdown"
         },
         "body": {
@@ -213,6 +214,7 @@
             "exec": [
               "pm.test('status 200', () => pm.response.to.have.status(200));",
               "const res = pm.response.json().rows[0].resultado;",
+              "pm.test('nombre derivado del código', () => pm.expect(res.nombre).to.eql('Prueba municipio'));",
               "pm.environment.set('hijoId', res.valores[0].pkListaValor);",
               "pm.test('lista padre', () => pm.expect(res.categoriaPadre).to.eql(pm.collectionVariables.get('categoriaPadre')));",
               "pm.test('valor padre', () => pm.expect(res.valores[0].padre.pkListaValor).to.eql(Number(pm.environment.get('padreId'))));"
@@ -430,7 +432,7 @@
       ]
     },
     {
-      "name": "8 - Modificar lista (descripción y ordinal)",
+      "name": "8 - Modificar lista (nombre, descripción y ordinal)",
       "request": {
         "method": "PUT",
         "header": [
@@ -457,7 +459,7 @@
           "raw": "{{baseUrl}}/api/eval-col/listas-valor/categorias/{{categoriaHija}}"
         },
         "description": {
-          "content": "El código no se edita. `DESCRIPCION` y `PADRE` se reemplazan (omitidos quedan en NULL); `ORDINAL` omitido no cambia.",
+          "content": "El código no se edita. `NOMBRE` y `ORDINAL` omitidos no cambian; `DESCRIPCION` y `PADRE` se reemplazan (omitidos quedan en NULL).",
           "type": "text/markdown"
         },
         "body": {
@@ -467,7 +469,7 @@
               "language": "json"
             }
           },
-          "raw": "{\n  \"DESCRIPCION\": \"Municipios de prueba de la colección Postman\",\n  \"PADRE\": \"{{categoriaPadre}}\",\n  \"ORDINAL\": true\n}"
+          "raw": "{\n  \"NOMBRE\": \"Municipio (prueba)\",\n  \"DESCRIPCION\": \"Municipios de prueba de la colección Postman\",\n  \"PADRE\": \"{{categoriaPadre}}\",\n  \"ORDINAL\": true\n}"
         }
       },
       "event": [
@@ -479,6 +481,8 @@
               "pm.test('status 200', () => pm.response.to.have.status(200));",
               "const res = pm.response.json().rows[0].resultado;",
               "pm.test('ordinal', () => pm.expect(res.esOrdinal).to.eql(true));",
+              "pm.test('nombre nuevo', () => pm.expect(res.nombre).to.eql('Municipio (prueba)'));",
+              "pm.test('código intacto', () => pm.expect(res.categoria).to.eql(pm.collectionVariables.get('categoriaHija')));",
               "pm.test('conserva lista padre', () => pm.expect(res.categoriaPadre).to.eql(pm.collectionVariables.get('categoriaPadre')));"
             ]
           }
@@ -486,7 +490,60 @@
       ]
     },
     {
-      "name": "9 - Lista padre en ciclo → 400",
+      "name": "9 - Nombre de otra lista → 409",
+      "request": {
+        "method": "PUT",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "eval-col",
+            "listas-valor",
+            "categorias",
+            "{{categoriaHija}}"
+          ],
+          "raw": "{{baseUrl}}/api/eval-col/listas-valor/categorias/{{categoriaHija}}"
+        },
+        "description": {
+          "content": "El nombre visible es único entre las listas, sin distinguir mayúsculas (23505).",
+          "type": "text/markdown"
+        },
+        "body": {
+          "mode": "raw",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          },
+          "raw": "{\n  \"NOMBRE\": \"departamento (PRUEBA)\",\n  \"PADRE\": \"{{categoriaPadre}}\"\n}"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('status 409', () => pm.response.to.have.status(409));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "10 - Lista padre en ciclo → 400",
       "request": {
         "method": "PUT",
         "header": [
@@ -539,7 +596,7 @@
       ]
     },
     {
-      "name": "10 - Listar valores de la lista (administración)",
+      "name": "11 - Listar valores de la lista (administración)",
       "request": {
         "method": "GET",
         "header": [
@@ -589,7 +646,7 @@
       ]
     },
     {
-      "name": "11 - Reordenar valores",
+      "name": "12 - Reordenar valores",
       "request": {
         "method": "PUT",
         "header": [
@@ -645,7 +702,7 @@
       ]
     },
     {
-      "name": "12 - Reordenar incompleto → 400",
+      "name": "13 - Reordenar incompleto → 400",
       "request": {
         "method": "PUT",
         "header": [
@@ -699,7 +756,7 @@
       ]
     },
     {
-      "name": "13 - Marcar predeterminado",
+      "name": "14 - Marcar predeterminado",
       "request": {
         "method": "PUT",
         "header": [
@@ -754,7 +811,7 @@
       ]
     },
     {
-      "name": "14 - Selector: solo el predeterminado",
+      "name": "15 - Selector: solo el predeterminado",
       "request": {
         "method": "GET",
         "header": [
@@ -806,7 +863,7 @@
       ]
     },
     {
-      "name": "15 - Inactivar valor padre con hijos activos → 409",
+      "name": "16 - Inactivar valor padre con hijos activos → 409",
       "request": {
         "method": "PUT",
         "header": [
@@ -859,7 +916,7 @@
       ]
     },
     {
-      "name": "16 - Inactivar valor",
+      "name": "17 - Inactivar valor",
       "request": {
         "method": "PUT",
         "header": [
@@ -915,7 +972,7 @@
       ]
     },
     {
-      "name": "17 - Selector sin el valor inactivo",
+      "name": "18 - Selector sin el valor inactivo",
       "request": {
         "method": "GET",
         "header": [
@@ -960,7 +1017,7 @@
       ]
     },
     {
-      "name": "18 - Activar valor",
+      "name": "19 - Activar valor",
       "request": {
         "method": "PUT",
         "header": [
@@ -1015,7 +1072,7 @@
       ]
     },
     {
-      "name": "19 - Inactivar lista padre con lista hija activa → 409",
+      "name": "20 - Inactivar lista padre con lista hija activa → 409",
       "request": {
         "method": "PUT",
         "header": [
@@ -1069,7 +1126,7 @@
       ]
     },
     {
-      "name": "20 - Inactivar lista",
+      "name": "21 - Inactivar lista",
       "request": {
         "method": "PUT",
         "header": [
@@ -1125,7 +1182,7 @@
       ]
     },
     {
-      "name": "21 - Selector de lista inactiva vacío",
+      "name": "22 - Selector de lista inactiva vacío",
       "request": {
         "method": "GET",
         "header": [
@@ -1170,7 +1227,7 @@
       ]
     },
     {
-      "name": "22 - Activar lista",
+      "name": "23 - Activar lista",
       "request": {
         "method": "PUT",
         "header": [
@@ -1226,7 +1283,7 @@
       ]
     },
     {
-      "name": "23 - Modificar valor (nombre y etiqueta)",
+      "name": "24 - Modificar valor (nombre y etiqueta)",
       "request": {
         "method": "PUT",
         "header": [
@@ -1281,7 +1338,7 @@
       ]
     },
     {
-      "name": "24 - Crear lista repetida → 409",
+      "name": "25 - Crear lista repetida → 409",
       "request": {
         "method": "POST",
         "header": [
@@ -1333,7 +1390,7 @@
       ]
     },
     {
-      "name": "25 - Eliminar lista padre con lista hija → 409",
+      "name": "26 - Eliminar lista padre con lista hija → 409",
       "request": {
         "method": "PUT",
         "header": [
@@ -1378,7 +1435,7 @@
       ]
     },
     {
-      "name": "26 - Listar sin filtros → 400",
+      "name": "27 - Listar sin filtros → 400",
       "request": {
         "method": "GET",
         "header": [
@@ -1420,7 +1477,7 @@
       ]
     },
     {
-      "name": "27 - Limpieza: eliminar lista hija",
+      "name": "28 - Limpieza: eliminar lista hija",
       "request": {
         "method": "PUT",
         "header": [
@@ -1476,7 +1533,7 @@
       ]
     },
     {
-      "name": "28 - Limpieza: eliminar lista padre",
+      "name": "29 - Limpieza: eliminar lista padre",
       "request": {
         "method": "PUT",
         "header": [
