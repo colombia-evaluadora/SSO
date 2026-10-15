@@ -7,6 +7,12 @@ spring:
     name: file-service
   main:
     banner-mode: off
+  # Hilos virtuales para las peticiones: el limite de concurrencia real
+  # pasa a ser el pool de conexiones, no el de Tomcat. FILE_SERVICE_VIRTUAL_THREADS=false
+  # vuelve a los hilos de plataforma sin reconstruir la imagen.
+  threads:
+    virtual:
+      enabled: ${FILE_SERVICE_VIRTUAL_THREADS:true}
 
   # ---------------------------------------------------------------------------
   # Límites de subida. SIN ESTO, UN CLIENTE PUEDE LLENAR EL DISCO.

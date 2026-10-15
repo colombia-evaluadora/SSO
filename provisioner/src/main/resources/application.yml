@@ -10,6 +10,12 @@ spring:
     name: provisioner
   main:
     banner-mode: off
+  # Hilos virtuales para las peticiones: el limite de concurrencia real
+  # pasa a ser el pool de conexiones, no el de Tomcat. PROVISIONER_VIRTUAL_THREADS=false
+  # vuelve a los hilos de plataforma sin reconstruir la imagen.
+  threads:
+    virtual:
+      enabled: ${PROVISIONER_VIRTUAL_THREADS:true}
   # Exclude JPA/DataSource auto-config: the `common` module
   # pulls in spring-boot-starter-data-jpa, but the provisioner
   # is a stateless Docker socket sidecar that does NOT need a

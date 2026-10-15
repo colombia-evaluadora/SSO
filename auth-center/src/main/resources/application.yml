@@ -7,6 +7,12 @@ spring:
     name: auth-center
   main:
     banner-mode: off
+  # Hilos virtuales para las peticiones: el limite de concurrencia real
+  # pasa a ser el pool de conexiones, no el de Tomcat. AUTH_CENTER_VIRTUAL_THREADS=false
+  # vuelve a los hilos de plataforma sin reconstruir la imagen.
+  threads:
+    virtual:
+      enabled: ${AUTH_CENTER_VIRTUAL_THREADS:true}
 
   datasource:
     # The localhost default assumes the operator is running
