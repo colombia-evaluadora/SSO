@@ -1,4 +1,4 @@
-# syntax=docker/dockerfile:1.7
+# syntax=docker/dockerfile:1.7-labs
 #
 # Multi-stage Dockerfile for the api-gateway module.
 #
@@ -37,21 +37,9 @@ RUN npm run build
 FROM maven:3.9-eclipse-temurin-25 AS java-build
 WORKDIR /workspace
 
-COPY pom.xml ./
-COPY eurekaserver/pom.xml eurekaserver/
-COPY common/pom.xml common/
-COPY auth-center/pom.xml auth-center/
-COPY api-gateway/pom.xml api-gateway/
-COPY file-service/pom.xml file-service/
-COPY hello-service/pom.xml hello-service/
-COPY sso-admin/pom.xml sso-admin/
-COPY query-service/pom.xml query-service/
-COPY provisioner/pom.xml provisioner/
-COPY notification-service/pom.xml notification-service/
-COPY reporting-service/pom.xml reporting-service/
-COPY ai-control-service/pom.xml ai-control-service/
-COPY scheduler-service/pom.xml scheduler-service/
-COPY comms-service/pom.xml comms-service/
+# Todos los pom.xml del repo con su ruta: un modulo nuevo no obliga a
+# tocar este fichero (ver docker/java-service.Dockerfile).
+COPY --parents pom.xml */pom.xml ./
 
 RUN mvn -B -ntp -Dmaven.wagon.http.retryHandler.count=5 -Daether.connector.http.retryHandler.count=5 -Daether.connector.http.retryHandler.serviceUnavailable=429,502,503,504 -pl api-gateway -am dependency:go-offline -q
 
