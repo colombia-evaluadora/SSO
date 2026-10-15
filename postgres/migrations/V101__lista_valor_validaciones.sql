@@ -1,6 +1,6 @@
 -- V101 - CRUD de listas de valores, capa 1 de 4: DDL y validaciones.
--- TLISTA_CATEGORIA es la lista (código inmutable = TLISTA_VALOR.CATEGORIA,
--- descripción, lista padre, ordinal, habilitada); el trigger la crea cuando una
+-- TLISTA_CATEGORIA es la lista (código inmutable = TLISTA_VALOR.CATEGORIA, nombre
+-- editable, descripción, lista padre, ordinal, habilitada); el trigger la crea cuando una
 -- migración siembra valores de una categoría nueva. En TLISTA_VALOR, ACTIVE es
 -- el borrado lógico y HABILITADO el interruptor de los selectores: un valor
 -- deshabilitado no se ofrece, pero sigue en los registros que ya lo tienen.
@@ -30,6 +30,11 @@ CREATE INDEX IF NOT EXISTS IDX_TLISTA_VALOR_PADRE
 CREATE UNIQUE INDEX IF NOT EXISTS UQ_TLISTA_VALOR_PREDETERMINADO
     ON academico_test.TLISTA_VALOR (CATEGORIA)
     WHERE PREDETERMINADO AND ACTIVE = TRUE;
+
+-- Selectores, listado, MAX(ORDEN) del trigger y reordenar leen por categoría en su orden.
+CREATE INDEX IF NOT EXISTS IDX_TLISTA_VALOR_CATEGORIA_ORDEN
+    ON academico_test.TLISTA_VALOR (CATEGORIA, ORDEN)
+    WHERE ACTIVE = TRUE;
 
 -- Orden inicial = el que daban los selectores (por VALOR); los dados de baja al final.
 UPDATE academico_test.TLISTA_VALOR lv
@@ -80,13 +85,35 @@ CREATE INDEX IF NOT EXISTS IDX_TLISTA_CATEGORIA_PADRE
     WHERE FK_TLISTA_CATEGORIA_PADRE IS NOT NULL;
 
 COMMENT ON TABLE academico_test.TLISTA_CATEGORIA
-    IS 'Listas de la Lista de Valores. CODIGO = TLISTA_VALOR.CATEGORIA y no cambia nunca: el código busca los valores por ese texto.';
+    IS 'Listas de la Lista de Valores. CODIGO = TLISTA_VALOR.CATEGORIA y no cambia nunca: el código busca los valores por ese texto. NOMBRE es el rótulo visible y se edita.';
 
-INSERT INTO academico_test.TLISTA_CATEGORIA (CODIGO, ACTIVE, CREATED_BY)
-SELECT lv.CATEGORIA, bool_or(lv.ACTIVE), 'migracion'
+ALTER TABLE academico_test.TLISTA_CATEGORIA ADD COLUMN IF NOT EXISTS NOMBRE VARCHAR(80);
+
+CREATE OR REPLACE FUNCTION academico_test.fn_listavalor_categoria_nombre_defecto(p_codigo VARCHAR)
+RETURNS VARCHAR
+LANGUAGE sql
+IMMUTABLE
+AS $$
+    SELECT upper(left(replace(p_codigo, '_', ' '), 1)) || lower(substr(replace(p_codigo, '_', ' '), 2));
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_listavalor_categoria_nombre_defecto(VARCHAR)
+    IS 'Nombre visible derivado del código (ESTADO_MATRICULA -> Estado matricula) para las listas que no traen uno: backfill, trigger y crear sin NOMBRE.';
+
+INSERT INTO academico_test.TLISTA_CATEGORIA (CODIGO, NOMBRE, ACTIVE, CREATED_BY)
+SELECT lv.CATEGORIA, academico_test.fn_listavalor_categoria_nombre_defecto(lv.CATEGORIA), bool_or(lv.ACTIVE), 'migracion'
   FROM academico_test.TLISTA_VALOR lv
  WHERE NOT EXISTS (SELECT 1 FROM academico_test.TLISTA_CATEGORIA c WHERE c.CODIGO = lv.CATEGORIA)
  GROUP BY lv.CATEGORIA;
+
+UPDATE academico_test.TLISTA_CATEGORIA
+   SET NOMBRE = academico_test.fn_listavalor_categoria_nombre_defecto(CODIGO)
+ WHERE NOMBRE IS NULL;
+
+ALTER TABLE academico_test.TLISTA_CATEGORIA ALTER COLUMN NOMBRE SET NOT NULL;
+
+CREATE UNIQUE INDEX IF NOT EXISTS UQ_TLISTA_CATEGORIA_NOMBRE
+    ON academico_test.TLISTA_CATEGORIA (lower(NOMBRE)) WHERE ACTIVE = TRUE;
 
 -- Lista padre deducida de los padres que ya tienen sus valores, si son de una sola lista.
 UPDATE academico_test.TLISTA_CATEGORIA c
@@ -107,6 +134,8 @@ CREATE OR REPLACE FUNCTION academico_test.fn_listavalor_completar_tg()
 RETURNS TRIGGER
 LANGUAGE plpgsql
 AS $$
+DECLARE
+    v_nombre VARCHAR;
 BEGIN
     IF NEW.ORDEN IS NULL THEN
         SELECT COALESCE(MAX(ORDEN), 0) + 1 INTO NEW.ORDEN
@@ -116,8 +145,14 @@ BEGIN
 
     IF NEW.ACTIVE AND NOT EXISTS (SELECT 1 FROM academico_test.TLISTA_CATEGORIA
                                    WHERE CODIGO = NEW.CATEGORIA AND ACTIVE = TRUE) THEN
-        INSERT INTO academico_test.TLISTA_CATEGORIA (CODIGO, CREATED_BY)
-        VALUES (NEW.CATEGORIA, COALESCE(NEW.CREATED_BY, 'sistema'));
+        v_nombre := academico_test.fn_listavalor_categoria_nombre_defecto(NEW.CATEGORIA);
+        -- Si otra lista ya usa ese nombre, el código (único) evita que el seed falle.
+        IF EXISTS (SELECT 1 FROM academico_test.TLISTA_CATEGORIA
+                    WHERE lower(NOMBRE) = lower(v_nombre) AND ACTIVE = TRUE) THEN
+            v_nombre := NEW.CATEGORIA;
+        END IF;
+        INSERT INTO academico_test.TLISTA_CATEGORIA (CODIGO, NOMBRE, CREATED_BY)
+        VALUES (NEW.CATEGORIA, v_nombre, COALESCE(NEW.CREATED_BY, 'sistema'));
     END IF;
     RETURN NEW;
 END;
@@ -131,18 +166,41 @@ CREATE TRIGGER TRG_TLISTA_VALOR_COMPLETAR
     BEFORE INSERT OR UPDATE OF CATEGORIA, ACTIVE ON academico_test.TLISTA_VALOR
     FOR EACH ROW EXECUTE FUNCTION academico_test.fn_listavalor_completar_tg();
 
+CREATE OR REPLACE FUNCTION academico_test.fn_listavalor_lista_nombre(p_categoria VARCHAR)
+RETURNS VARCHAR
+LANGUAGE sql
+STABLE
+AS $$
+    SELECT COALESCE((SELECT c.NOMBRE FROM academico_test.TLISTA_CATEGORIA c
+                      WHERE c.CODIGO = p_categoria AND c.ACTIVE = TRUE), p_categoria);
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_listavalor_lista_nombre(VARCHAR)
+    IS 'Nombre visible de una lista para los mensajes (el código si no tiene fila activa).';
+
+CREATE OR REPLACE FUNCTION academico_test.fn_listavalor_valor_nombre(p_pk_lista_valor BIGINT)
+RETURNS VARCHAR
+LANGUAGE sql
+STABLE
+AS $$
+    SELECT lv.NOMBRE FROM academico_test.TLISTA_VALOR lv WHERE lv.PK_LISTA_VALOR = p_pk_lista_valor;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_listavalor_valor_nombre(BIGINT)
+    IS 'Nombre visible de un valor para los mensajes que el informe redacta con [Valor].';
+
 CREATE OR REPLACE FUNCTION academico_test.fn_listavalor_etiqueta(p_pk_lista_valor BIGINT)
 RETURNS TEXT
 LANGUAGE sql
 STABLE
 AS $$
-    SELECT format('el valor "%s" (%s) de %s', lv.NOMBRE, COALESCE(lv.VALOR, 'sin valor'), lv.CATEGORIA)
+    SELECT format('"%s" de la lista %s', lv.NOMBRE, academico_test.fn_listavalor_lista_nombre(lv.CATEGORIA))
       FROM academico_test.TLISTA_VALOR lv
      WHERE lv.PK_LISTA_VALOR = p_pk_lista_valor;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_listavalor_etiqueta(BIGINT)
-    IS 'Nombre legible de un valor para mensajes de error y auditoría.';
+    IS 'Nombre legible de un valor con el de su lista ("Santander" de la lista Departamento) para mensajes de error y auditoría.';
 
 CREATE OR REPLACE FUNCTION academico_test.fn_listavalor_validar_existente(p_pk_lista_valor BIGINT)
 RETURNS VOID
@@ -203,7 +261,7 @@ IMMUTABLE
 AS $$
 BEGIN
     IF p_categoria IS NULL OR p_categoria !~ '^[A-Z][A-Z0-9_]{0,29}$' THEN
-        RAISE EXCEPTION 'La categoría "%" no es válida: use mayúsculas sin tildes, números y guion bajo, empezando por letra y con máximo 30 caracteres',
+        RAISE EXCEPTION 'El código de lista "%" no es válido: use mayúsculas sin tildes, números y guion bajo, empezando por letra y con máximo 30 caracteres',
             COALESCE(p_categoria, '')
             USING ERRCODE = '22023';
     END IF;
@@ -221,7 +279,7 @@ AS $$
 BEGIN
     IF NOT EXISTS (SELECT 1 FROM academico_test.TLISTA_CATEGORIA
                     WHERE CODIGO = p_categoria AND ACTIVE = TRUE) THEN
-        RAISE EXCEPTION 'No existe la categoría %', COALESCE(p_categoria, '(vacía)')
+        RAISE EXCEPTION 'No existe la lista %', COALESCE(p_categoria, '(vacía)')
             USING ERRCODE = 'P0002';
     END IF;
 END;
@@ -238,7 +296,7 @@ AS $$
 BEGIN
     IF EXISTS (SELECT 1 FROM academico_test.TLISTA_CATEGORIA
                 WHERE CODIGO = p_categoria AND ACTIVE = TRUE) THEN
-        RAISE EXCEPTION 'La categoría % ya existe: agregue los valores a ella', p_categoria
+        RAISE EXCEPTION 'Ya existe una lista con el código %: agregue los valores a ella', p_categoria
             USING ERRCODE = '23505';
     END IF;
 END;
@@ -263,6 +321,43 @@ $$;
 
 COMMENT ON FUNCTION academico_test.fn_listavalor_validar_descripcion(VARCHAR)
     IS '22023 si la descripción, que es opcional, no tiene entre 10 y 300 caracteres.';
+
+CREATE OR REPLACE FUNCTION academico_test.fn_listavalor_validar_categoria_nombre(p_nombre VARCHAR)
+RETURNS VOID
+LANGUAGE plpgsql
+IMMUTABLE
+AS $$
+BEGIN
+    IF p_nombre IS NULL OR length(TRIM(p_nombre)) NOT BETWEEN 3 AND 80 THEN
+        RAISE EXCEPTION 'El nombre de la lista debe tener entre 3 y 80 caracteres'
+            USING ERRCODE = '22023';
+    END IF;
+END;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_listavalor_validar_categoria_nombre(VARCHAR)
+    IS '22023 si el nombre visible de la lista no tiene entre 3 y 80 caracteres.';
+
+CREATE OR REPLACE FUNCTION academico_test.fn_listavalor_validar_categoria_nombre_unico(
+    p_nombre           VARCHAR,
+    p_categoria_excluir VARCHAR DEFAULT NULL
+)
+RETURNS VOID
+LANGUAGE plpgsql
+STABLE
+AS $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM academico_test.TLISTA_CATEGORIA
+                WHERE lower(NOMBRE) = lower(TRIM(p_nombre)) AND ACTIVE = TRUE
+                  AND CODIGO IS DISTINCT FROM p_categoria_excluir) THEN
+        RAISE EXCEPTION 'El nombre ya existe en otra lista.'
+            USING ERRCODE = '23505';
+    END IF;
+END;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_listavalor_validar_categoria_nombre_unico(VARCHAR, VARCHAR)
+    IS '23505 si otra lista activa tiene el mismo nombre visible (sin distinguir mayúsculas). p_categoria_excluir = el código de la lista que se edita.';
 
 CREATE OR REPLACE FUNCTION academico_test.fn_listavalor_validar_categoria_padre(
     p_categoria       VARCHAR,
@@ -296,8 +391,7 @@ BEGIN
         )
         SELECT 1 FROM ancestros WHERE codigo = p_categoria
     ) THEN
-        RAISE EXCEPTION 'La lista padre no puede ser la misma lista ni formar un ciclo (% -> %)',
-            p_categoria, p_categoria_padre
+        RAISE EXCEPTION 'La lista padre no puede ser la misma lista ni formar un ciclo.'
             USING ERRCODE = '22023';
     END IF;
 END;
@@ -326,8 +420,8 @@ BEGIN
      LIMIT 1;
 
     IF v_otra IS NOT NULL THEN
-        RAISE EXCEPTION 'No se puede cambiar la lista padre de %: sus valores tienen valor padre en %. Quíteselos primero',
-            p_categoria, v_otra
+        RAISE EXCEPTION 'No se puede cambiar la lista padre de %: sus valores tienen valor padre en la lista %. Quíteselos primero.',
+            academico_test.fn_listavalor_lista_nombre(p_categoria), academico_test.fn_listavalor_lista_nombre(v_otra)
             USING ERRCODE = '22023';
     END IF;
 END;
@@ -351,7 +445,8 @@ BEGIN
      LIMIT 1;
 
     IF v_hija IS NOT NULL THEN
-        RAISE EXCEPTION 'No se puede eliminar la lista %: es la lista padre de %', p_categoria, v_hija
+        RAISE EXCEPTION 'No se puede eliminar la lista %: es la lista padre de %.',
+            academico_test.fn_listavalor_lista_nombre(p_categoria), academico_test.fn_listavalor_lista_nombre(v_hija)
             USING ERRCODE = '23503';
     END IF;
 END;
@@ -375,8 +470,8 @@ BEGIN
      LIMIT 1;
 
     IF v_hija IS NOT NULL THEN
-        RAISE EXCEPTION 'No se puede inactivar la lista %: la lista % depende de ella y está activa. Inactívela primero',
-            p_categoria, v_hija
+        RAISE EXCEPTION 'No se puede inactivar la lista % porque la lista % depende de ella y está activa. Inactívela primero.',
+            academico_test.fn_listavalor_lista_nombre(p_categoria), academico_test.fn_listavalor_lista_nombre(v_hija)
             USING ERRCODE = '23503';
     END IF;
 END;
@@ -393,7 +488,8 @@ AS $$
 BEGIN
     IF EXISTS (SELECT 1 FROM academico_test.TLISTA_VALOR
                 WHERE CATEGORIA = p_categoria AND ACTIVE = TRUE AND ES_SISTEMA) THEN
-        RAISE EXCEPTION 'No se puede inactivar ni eliminar la lista %: tiene valores usados por el sistema', p_categoria
+        RAISE EXCEPTION 'No se puede inactivar ni eliminar la lista % porque tiene valores usados por el sistema.',
+            academico_test.fn_listavalor_lista_nombre(p_categoria)
             USING ERRCODE = '23503';
     END IF;
 END;
@@ -432,7 +528,7 @@ BEGIN
                 WHERE CATEGORIA = p_categoria AND ACTIVE = TRUE
                   AND lower(NOMBRE) = lower(TRIM(p_nombre))
                   AND PK_LISTA_VALOR IS DISTINCT FROM p_pk_excluir) THEN
-        RAISE EXCEPTION 'El nombre "%" ya existe en la lista %', TRIM(p_nombre), p_categoria
+        RAISE EXCEPTION 'El nombre ya existe en esta lista.'
             USING ERRCODE = '23505';
     END IF;
 END;
@@ -514,7 +610,7 @@ AS $$
 BEGIN
     IF EXISTS (SELECT 1 FROM academico_test.TLISTA_VALOR
                 WHERE CATEGORIA = p_categoria AND VALOR = TRIM(p_valor) AND ACTIVE = TRUE) THEN
-        RAISE EXCEPTION 'La categoría % ya tiene un valor con código "%"', p_categoria, TRIM(p_valor)
+        RAISE EXCEPTION 'El código ya existe en esta lista.'
             USING ERRCODE = '23505';
     END IF;
 END;
@@ -572,8 +668,8 @@ BEGIN
           IS DISTINCT FROM
           (SELECT array_agg(PK_LISTA_VALOR ORDER BY PK_LISTA_VALOR)
              FROM academico_test.TLISTA_VALOR WHERE CATEGORIA = p_categoria AND ACTIVE = TRUE) THEN
-        RAISE EXCEPTION 'ORDEN debe ser el arreglo de todos los pkListaValor de % en el orden nuevo, sin repetir ni faltar ninguno',
-            p_categoria
+        RAISE EXCEPTION 'ORDEN debe ser el arreglo de todos los pkListaValor de la lista % en el orden nuevo, sin repetir ni faltar ninguno',
+            academico_test.fn_listavalor_lista_nombre(p_categoria)
             USING ERRCODE = '22023';
     END IF;
 END;
@@ -591,7 +687,7 @@ BEGIN
     IF p_pk_padre IS NOT NULL
        AND NOT EXISTS (SELECT 1 FROM academico_test.TLISTA_VALOR
                         WHERE PK_LISTA_VALOR = p_pk_padre AND ACTIVE = TRUE AND HABILITADO) THEN
-        RAISE EXCEPTION 'El valor padre % no existe, está eliminado o inactivo', p_pk_padre
+        RAISE EXCEPTION 'El valor padre debe ser un valor activo de la lista padre.'
             USING ERRCODE = '22023';
     END IF;
 END;
@@ -681,20 +777,23 @@ BEGIN
 
     IF v_lista_padre IS NULL THEN
         IF p_pk_padre IS NOT NULL THEN
-            RAISE EXCEPTION 'La lista % no tiene lista padre: asígnesela antes de dar valor padre a sus valores', p_categoria
+            RAISE EXCEPTION 'La lista % no tiene lista padre: asígnesela antes de dar valor padre a sus valores.',
+                academico_test.fn_listavalor_lista_nombre(p_categoria)
                 USING ERRCODE = '22023';
         END IF;
         RETURN;
     END IF;
 
     IF p_pk_padre IS NULL THEN
-        RAISE EXCEPTION 'La lista % tiene como lista padre %: indique el valor padre', p_categoria, v_lista_padre
+        RAISE EXCEPTION 'La lista % tiene como lista padre %: indique el valor padre.',
+            academico_test.fn_listavalor_lista_nombre(p_categoria), academico_test.fn_listavalor_lista_nombre(v_lista_padre)
             USING ERRCODE = '22023';
     END IF;
 
     IF NOT EXISTS (SELECT 1 FROM academico_test.TLISTA_VALOR
                     WHERE PK_LISTA_VALOR = p_pk_padre AND CATEGORIA = v_lista_padre) THEN
-        RAISE EXCEPTION 'El valor padre de un valor de % debe ser de la lista %', p_categoria, v_lista_padre
+        RAISE EXCEPTION 'El valor padre de un valor de % debe ser de la lista %.',
+            academico_test.fn_listavalor_lista_nombre(p_categoria), academico_test.fn_listavalor_lista_nombre(v_lista_padre)
             USING ERRCODE = '22023';
     END IF;
 END;
@@ -717,8 +816,8 @@ BEGIN
      LIMIT 1;
 
     IF v_pk IS NOT NULL THEN
-        RAISE EXCEPTION 'No se puede inactivar ni eliminar %: es un valor usado por el sistema (se puede renombrar y reordenar)',
-            academico_test.fn_listavalor_etiqueta(v_pk)
+        RAISE EXCEPTION 'Usado por el sistema: % se puede renombrar y reordenar, pero no inactivar ni eliminar.',
+            academico_test.fn_listavalor_valor_nombre(v_pk)
             USING ERRCODE = '23503';
     END IF;
 END;
@@ -741,8 +840,8 @@ BEGIN
      LIMIT 1;
 
     IF v_lista_hija IS NOT NULL THEN
-        RAISE EXCEPTION 'No se puede inactivar % porque tiene valores activos en la lista %. Inactívelos primero',
-            academico_test.fn_listavalor_etiqueta(p_pk_lista_valor), v_lista_hija
+        RAISE EXCEPTION 'No se puede inactivar % porque tiene valores activos en la lista %. Inactívelos primero.',
+            academico_test.fn_listavalor_valor_nombre(p_pk_lista_valor), academico_test.fn_listavalor_lista_nombre(v_lista_hija)
             USING ERRCODE = '23503';
     END IF;
 END;
@@ -837,7 +936,7 @@ IMMUTABLE
 AS $$
 BEGIN
     IF NULLIF(TRIM(p_categoria), '') IS NULL AND p_pk_padre IS NULL THEN
-        RAISE EXCEPTION 'Indique la categoría o el valor padre cuyos valores quiere listar'
+        RAISE EXCEPTION 'Indique la lista o el valor padre cuyos valores quiere listar'
             USING ERRCODE = '22023';
     END IF;
 END;
@@ -846,10 +945,13 @@ $$;
 COMMENT ON FUNCTION academico_test.fn_listavalor_validar_filtro_listado(VARCHAR, BIGINT)
     IS '22023 si el listado de valores no trae ni categoría ni padre: el catálogo entero no se lista de una vez.';
 
+DROP FUNCTION IF EXISTS academico_test.fn_listavalor_validar_categoria_creacion(VARCHAR, VARCHAR, VARCHAR);
+
 CREATE OR REPLACE FUNCTION academico_test.fn_listavalor_validar_categoria_creacion(
     p_categoria       VARCHAR,
     p_descripcion     VARCHAR,
-    p_categoria_padre VARCHAR
+    p_categoria_padre VARCHAR,
+    p_nombre          VARCHAR
 )
 RETURNS VOID
 LANGUAGE plpgsql
@@ -857,33 +959,44 @@ STABLE
 AS $$
 BEGIN
     PERFORM academico_test.fn_listavalor_validar_categoria_formato(p_categoria);
+    PERFORM academico_test.fn_listavalor_validar_categoria_nombre(p_nombre);
     PERFORM academico_test.fn_listavalor_validar_descripcion(p_descripcion);
     PERFORM academico_test.fn_listavalor_validar_categoria_padre(p_categoria, p_categoria_padre);
     PERFORM academico_test.fn_listavalor_validar_categoria_nueva(p_categoria);
+    PERFORM academico_test.fn_listavalor_validar_categoria_nombre_unico(p_nombre);
 END;
 $$;
 
-COMMENT ON FUNCTION academico_test.fn_listavalor_validar_categoria_creacion(VARCHAR, VARCHAR, VARCHAR)
-    IS 'Reglas de una lista nueva: formato del código, descripción y lista padre (22023), código libre (23505).';
+COMMENT ON FUNCTION academico_test.fn_listavalor_validar_categoria_creacion(VARCHAR, VARCHAR, VARCHAR, VARCHAR)
+    IS 'Reglas de una lista nueva: formato del código, nombre, descripción y lista padre (22023); código y nombre libres (23505).';
+
+DROP FUNCTION IF EXISTS academico_test.fn_listavalor_validar_categoria_actualizacion(VARCHAR, VARCHAR, VARCHAR);
 
 CREATE OR REPLACE FUNCTION academico_test.fn_listavalor_validar_categoria_actualizacion(
     p_categoria       VARCHAR,
     p_descripcion     VARCHAR,
-    p_categoria_padre VARCHAR
+    p_categoria_padre VARCHAR,
+    p_nombre          VARCHAR
 )
 RETURNS VOID
 LANGUAGE plpgsql
 STABLE
 AS $$
 BEGIN
+    IF p_nombre IS NOT NULL THEN
+        PERFORM academico_test.fn_listavalor_validar_categoria_nombre(p_nombre);
+    END IF;
     PERFORM academico_test.fn_listavalor_validar_descripcion(p_descripcion);
     PERFORM academico_test.fn_listavalor_validar_categoria_padre(p_categoria, p_categoria_padre);
     PERFORM academico_test.fn_listavalor_validar_categoria_padre_compatible(p_categoria, p_categoria_padre);
+    IF p_nombre IS NOT NULL THEN
+        PERFORM academico_test.fn_listavalor_validar_categoria_nombre_unico(p_nombre, p_categoria);
+    END IF;
 END;
 $$;
 
-COMMENT ON FUNCTION academico_test.fn_listavalor_validar_categoria_actualizacion(VARCHAR, VARCHAR, VARCHAR)
-    IS 'Reglas al editar una lista (22023): descripción, lista padre válida y compatible con los valores padre que ya tienen sus valores. El código no se edita.';
+COMMENT ON FUNCTION academico_test.fn_listavalor_validar_categoria_actualizacion(VARCHAR, VARCHAR, VARCHAR, VARCHAR)
+    IS 'Reglas al editar una lista: nombre si viene (NULL = sin cambio), descripción, lista padre válida y compatible con los valores padre de sus valores (22023); nombre libre (23505). El código no se edita.';
 
 DROP FUNCTION IF EXISTS academico_test.fn_listavalor_validar_valor_nuevo(VARCHAR, VARCHAR, VARCHAR, VARCHAR, BIGINT);
 
