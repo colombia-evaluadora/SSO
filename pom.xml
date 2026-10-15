@@ -167,5 +167,6 @@
         <module>file-service</module>
         <module>reporting-service</module>
         <module>ai-control-service</module>
+        <module>scheduler-service</module>
     </modules>
 </project>
