@@ -223,7 +223,9 @@ services:
   eurekaserver:
     build:
       context: .
-      dockerfile: eurekaserver/Dockerfile
+      dockerfile: docker/java-service.Dockerfile
+      args:
+        MODULE: eurekaserver
     # IMAGE_PREFIX / IMAGE_TAG parametrize every app image so the SAME
     # compose file serves both flows:
     #   - dev local (default): eurekatic/<svc>:1.0.0-SNAPSHOT, built by
@@ -320,7 +322,9 @@ services:
   auth-center:
     build:
       context: .
-      dockerfile: auth-center/Dockerfile
+      dockerfile: docker/java-service.Dockerfile
+      args:
+        MODULE: auth-center
     image: ${IMAGE_PREFIX:-eurekatic}/auth-center:${IMAGE_TAG:-1.0.0-SNAPSHOT}
     container_name: sso-auth-center
     restart: unless-stopped
@@ -609,7 +613,9 @@ services:
     profiles: ["diagnostics"]
     build:
       context: .
-      dockerfile: hello-service/Dockerfile
+      dockerfile: docker/java-service.Dockerfile
+      args:
+        MODULE: hello-service
     image: ${IMAGE_PREFIX:-eurekatic}/hello-service:${IMAGE_TAG:-1.0.0-SNAPSHOT}
     container_name: sso-hello-service
     restart: unless-stopped
@@ -647,7 +653,9 @@ services:
   sso-admin:
     build:
       context: .
-      dockerfile: sso-admin/Dockerfile
+      dockerfile: docker/java-service.Dockerfile
+      args:
+        MODULE: sso-admin
     image: ${IMAGE_PREFIX:-eurekatic}/sso-admin:${IMAGE_TAG:-1.0.0-SNAPSHOT}
     container_name: sso-admin
     restart: unless-stopped
@@ -885,7 +893,9 @@ services:
   notification-service:
     build:
       context: .
-      dockerfile: notification-service/Dockerfile
+      dockerfile: docker/java-service.Dockerfile
+      args:
+        MODULE: notification-service
     image: ${IMAGE_PREFIX:-eurekatic}/notification-service:${IMAGE_TAG:-1.0.0-SNAPSHOT}
     container_name: sso-notification-service
     restart: unless-stopped
@@ -1011,7 +1021,9 @@ services:
     profiles: ["diagnostics"]
     build:
       context: .
-      dockerfile: query-service/Dockerfile
+      dockerfile: docker/java-service.Dockerfile
+      args:
+        MODULE: query-service
     image: ${IMAGE_PREFIX:-eurekatic}/query-service:${IMAGE_TAG:-1.0.0-SNAPSHOT}
     container_name: sso-query-service-postgres
     restart: unless-stopped
@@ -1101,7 +1113,9 @@ services:
     profiles: ["diagnostics"]
     build:
       context: .
-      dockerfile: query-service/Dockerfile
+      dockerfile: docker/java-service.Dockerfile
+      args:
+        MODULE: query-service
     image: ${IMAGE_PREFIX:-eurekatic}/query-service:${IMAGE_TAG:-1.0.0-SNAPSHOT}
     container_name: sso-query-service-postgres-analytics
     restart: unless-stopped
@@ -1216,7 +1230,9 @@ services:
   provisioner:
     build:
       context: .
-      dockerfile: provisioner/Dockerfile
+      dockerfile: docker/java-service.Dockerfile
+      args:
+        MODULE: provisioner
     image: ${IMAGE_PREFIX:-eurekatic}/provisioner:${IMAGE_TAG:-1.0.0-SNAPSHOT}
     container_name: sso-provisioner
     restart: unless-stopped
@@ -1749,7 +1765,9 @@ services:
   file-service:
     build:
       context: .
-      dockerfile: file-service/Dockerfile
+      dockerfile: docker/java-service.Dockerfile
+      args:
+        MODULE: file-service
     image: ${IMAGE_PREFIX:-eurekatic}/file-service:${IMAGE_TAG:-1.0.0-SNAPSHOT}
     container_name: sso-file-service
     restart: unless-stopped
@@ -1858,7 +1876,9 @@ services:
   reporting-service:
     build:
       context: .
-      dockerfile: reporting-service/Dockerfile
+      dockerfile: docker/java-service.Dockerfile
+      args:
+        MODULE: reporting-service
     image: ${IMAGE_PREFIX:-eurekatic}/reporting-service:${IMAGE_TAG:-1.0.0-SNAPSHOT}
     container_name: sso-reporting-service
     restart: unless-stopped
@@ -1935,7 +1955,9 @@ services:
   ai-control-service:
     build:
       context: .
-      dockerfile: ai-control-service/Dockerfile
+      dockerfile: docker/java-service.Dockerfile
+      args:
+        MODULE: ai-control-service
     image: ${IMAGE_PREFIX:-eurekatic}/ai-control-service:${IMAGE_TAG:-1.0.0-SNAPSHOT}
     container_name: sso-ai-control-service
     restart: unless-stopped
@@ -2039,7 +2061,9 @@ services:
     profiles: ["scheduler"]
     build:
       context: .
-      dockerfile: scheduler-service/Dockerfile
+      dockerfile: docker/java-service.Dockerfile
+      args:
+        MODULE: scheduler-service
     image: ${IMAGE_PREFIX:-eurekatic}/scheduler-service:${IMAGE_TAG:-1.0.0-SNAPSHOT}
     container_name: sso-scheduler-service
     restart: unless-stopped
