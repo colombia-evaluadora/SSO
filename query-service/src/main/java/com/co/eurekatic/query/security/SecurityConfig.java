@@ -9,8 +9,6 @@ import org.springframework.http.HttpMethod;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
 import org.springframework.security.config.http.SessionCreationPolicy;
-import com.co.eurekatic.common.security.PasswordEncoderFactory;
-import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
 import org.springframework.web.cors.CorsConfiguration;
@@ -39,11 +37,6 @@ import java.util.List;
  *       the service throw 403 if the resolved query is not
  *       publicEnd.</li>
  * </ul>
- *
- * <p>The {@link PasswordEncoder} bean is declared here
- * only because the api-gateway expects one (consistent with
- * the other services); query-service itself doesn't store
- * credentials.
  */
 @Configuration
 @EnableWebSecurity
@@ -129,14 +122,6 @@ public class SecurityConfig {
         UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
         source.registerCorsConfiguration("/**", cfg);
         return source;
-    }
-
-    @Bean
-    public PasswordEncoder passwordEncoder() {
-        // El mismo encoder que auth-center y sso-admin: Argon2id para
-        // lo nuevo, lectura de los BCrypt heredados. Ver
-        // PasswordEncoderFactory.
-        return PasswordEncoderFactory.create();
     }
 
     @Bean
