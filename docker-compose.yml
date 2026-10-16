@@ -348,6 +348,9 @@ services:
       # Logins concurrentes (0 = 2 por núcleo, acotado por heap) y espera por permiso.
       SSO_LOGIN_MAX_CONCURRENT: ${SSO_LOGIN_MAX_CONCURRENT:-0}
       SSO_LOGIN_ACQUIRE_TIMEOUT_MS: ${SSO_LOGIN_ACQUIRE_TIMEOUT_MS:-200}
+      # Bloqueo por correo tras N contraseñas inválidas (QA-30); duración en formato Duration (30m, 1h).
+      SSO_LOGIN_MAX_FAILED_ATTEMPTS: ${SSO_LOGIN_MAX_FAILED_ATTEMPTS:-10}
+      SSO_LOGIN_LOCK_DURATION: ${SSO_LOGIN_LOCK_DURATION:-30m}
       # JVM acotada aunque el contenedor no tenga mem_limit: sin -Xmx la JVM
       # toma el 75% de la RAM del host y, con la basura de Argon2, llegó a
       # 4,4 GiB y p99 de login de 6,9s. Con esto (benchmark local, 10 logins

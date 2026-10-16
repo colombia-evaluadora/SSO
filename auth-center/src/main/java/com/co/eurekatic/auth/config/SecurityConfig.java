@@ -6,6 +6,7 @@ import com.co.eurekatic.auth.security.EffectiveRolesResolver;
 import com.co.eurekatic.auth.security.EstablishmentResolver;
 import com.co.eurekatic.auth.security.JsonAuthHandlers;
 import com.co.eurekatic.auth.security.JsonLoginFilter;
+import com.co.eurekatic.auth.security.LoginAttemptLimiter;
 import com.co.eurekatic.auth.security.JwtAuthenticationFilter;
 import com.co.eurekatic.auth.session.SessionTrackingService;
 import com.co.eurekatic.common.security.CorsProperties;
@@ -92,12 +93,18 @@ public class SecurityConfig {
             jakarta.validation.Validator validator,
             io.micrometer.core.instrument.MeterRegistry meterRegistry,
             @org.springframework.beans.factory.annotation.Value("${sso.login.max-concurrent:${SSO_LOGIN_MAX_CONCURRENT:0}}") int loginMaxConcurrent,
-            @org.springframework.beans.factory.annotation.Value("${sso.login.acquire-timeout-ms:${SSO_LOGIN_ACQUIRE_TIMEOUT_MS:200}}") long loginAcquireTimeoutMs) throws Exception {
+            @org.springframework.beans.factory.annotation.Value("${sso.login.acquire-timeout-ms:${SSO_LOGIN_ACQUIRE_TIMEOUT_MS:200}}") long loginAcquireTimeoutMs,
+            org.springframework.data.redis.core.StringRedisTemplate redis,
+            @org.springframework.beans.factory.annotation.Value("${sso.login.max-failed-attempts:${SSO_LOGIN_MAX_FAILED_ATTEMPTS:10}}") int loginMaxFailedAttempts,
+            @org.springframework.beans.factory.annotation.Value("${sso.login.lock-duration:${SSO_LOGIN_LOCK_DURATION:30m}}") java.time.Duration loginLockDuration) throws Exception {
 
+        LoginAttemptLimiter attemptLimiter = new LoginAttemptLimiter(
+                redis, loginMaxFailedAttempts, loginLockDuration, "sso:login");
         JsonLoginFilter loginFilter = new JsonLoginFilter(
                 authenticationManager, jwt, objectMapper, jwtProperties, refreshTokenStore,
                 effectiveRolesResolver, sessionTracking, establishmentResolver,
-                validator, meterRegistry, loginMaxConcurrent, loginAcquireTimeoutMs);
+                validator, meterRegistry, loginMaxConcurrent, loginAcquireTimeoutMs,
+                attemptLimiter);
         JwtAuthenticationFilter jwtFilter = new JwtAuthenticationFilter(jwt, jwtProperties);
 
         return http
