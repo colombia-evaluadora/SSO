@@ -421,6 +421,9 @@ BEGIN
     END IF;
 
     -- =====================================================================
+    PERFORM academico_test.fn_audit_declarar(p_pk_usuario_solicitante,
+        format('Actualización del funcionario %s', COALESCE(v_nombre_actual, p_pk_funcionario::TEXT)));
+
     -- 5. PATCH de TUSUARIO (un solo UPDATE con deteccion de cambios).
     --    Solo campos propios del usuario (los del esquema). Los campos
     --    de TFUNCIONARIO van en el UPDATE de abajo.

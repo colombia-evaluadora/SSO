@@ -170,6 +170,9 @@ BEGIN
         RAISE EXCEPTION 'Este funcionario tiene responsabilidades academicas activas (grupos, asignaturas u otros registros vigentes); debe desvincularlo de esos registros antes de darlo de baja'
             USING ERRCODE = '22023';
     END IF;
+    PERFORM academico_test.fn_audit_declarar(p_pk_usuario_solicitante,
+        format('Baja del funcionario %s del establecimiento', COALESCE(academico_test.fn_resolver_actor(v_pk_usuario), p_pk_funcionario::TEXT)));
+
 
     IF v_es_super THEN
         -- -------------------------------------------------------------

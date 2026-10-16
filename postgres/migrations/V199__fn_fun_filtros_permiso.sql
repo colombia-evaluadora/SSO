@@ -190,6 +190,9 @@ BEGIN
             USING ERRCODE = '22023';
     END IF;
 
+    PERFORM academico_test.fn_audit_declarar(p_pk_usuario_solicitante,
+        format('Actualización de los filtros de permiso del funcionario %s', COALESCE(v_nombre_actual, p_pk_funcionario::TEXT)));
+
     -- =====================================================================
     -- 3. Procesar el set deseado, fila por fila (buscar-y-decidir).
     --    DISTINCT colapsa duplicados exactos del payload.

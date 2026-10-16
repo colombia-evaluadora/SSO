@@ -82,6 +82,8 @@ DECLARE
     v_tiene_sede   BOOLEAN;
     v_nivel        INT;
 BEGIN
+    PERFORM academico_test.fn_audit_declarar(p_pk_usuario_solicitante,
+        format('Actualización de los datos del usuario %s', COALESCE(academico_test.fn_resolver_actor(p_pk_tusuario), p_pk_tusuario::TEXT)));
     -- -----------------------------------------------------------------
     -- 1. La persona debe existir y estar activa.
     -- -----------------------------------------------------------------

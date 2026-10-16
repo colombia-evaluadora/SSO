@@ -28,6 +28,8 @@ DECLARE
     v_estado_ant      BIGINT;
     v_estado_ant_nom  VARCHAR;
 BEGIN
+    PERFORM academico_test.fn_audit_declarar(p_pk_usuario_solicitante,
+        format('Eliminación de la matrícula de %s', academico_test.fn_actividad_estudiante_nombre(p_pk_tmatricula)));
     -- -----------------------------------------------------------------
     -- 1. Resolver sede y estudiante. El gate lo aplica en detalle
     --    fn_matricula_soft_delete; aca solo se necesita ubicar la
@@ -239,6 +241,8 @@ DECLARE
     v_pk  BIGINT;
     v_res JSONB;
 BEGIN
+    PERFORM academico_test.fn_audit_declarar(p_pk_usuario_solicitante,
+        format('Eliminación masiva de %s matrículas', CARDINALITY(p_pks)));
     IF p_pk_usuario_solicitante IS NULL OR p_pk_usuario_solicitante <= 0 THEN
         RAISE EXCEPTION 'p_pk_usuario_solicitante es obligatorio y debe ser > 0'
             USING ERRCODE = '22023';
@@ -303,6 +307,8 @@ DECLARE
     v_fecha_retiro        DATE;
     v_hora_retiro         TIMESTAMP;
 BEGIN
+    PERFORM academico_test.fn_audit_declarar(p_pk_usuario_solicitante,
+        format('Retiro de la matrícula de %s', academico_test.fn_actividad_estudiante_nombre(p_pk_tmatricula)));
     -- -----------------------------------------------------------------
     -- 1. Ubicar la matricula y su EE.
     -- -----------------------------------------------------------------
@@ -453,6 +459,8 @@ DECLARE
     v_pk_retiro           BIGINT;
     v_fecha_reintegro     DATE;
 BEGIN
+    PERFORM academico_test.fn_audit_declarar(p_pk_usuario_solicitante,
+        format('Reingreso de la matrícula de %s', academico_test.fn_actividad_estudiante_nombre(p_pk_tmatricula)));
     -- -----------------------------------------------------------------
     -- 1. Ubicar la matricula y su EE.
     -- -----------------------------------------------------------------
@@ -604,6 +612,8 @@ DECLARE
     -- Aprobado, Reprobado, Promovido, Reubicado (ver cabecera).
     c_valores_reactivables CONSTANT VARCHAR[] := ARRAY['2', '3', '13', '14'];
 BEGIN
+    PERFORM academico_test.fn_audit_declarar(p_pk_usuario_solicitante,
+        format('Reactivación de la matrícula de %s', academico_test.fn_actividad_estudiante_nombre(p_pk_tmatricula)));
     -- -----------------------------------------------------------------
     -- 1. Ubicar la matricula y su EE.
     -- -----------------------------------------------------------------

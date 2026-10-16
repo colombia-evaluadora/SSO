@@ -201,6 +201,9 @@ BEGIN
     -- 2. Soft delete de la sede.
     --    MODIFIED_BY/MODIFIED_AT se actualizan para reflejar la baja.
     -- -----------------------------------------------------------------
+    PERFORM academico_test.fn_audit_declarar(p_pk_usuario_solicitante,
+        format('Eliminación de la sede %s', v_nombre_actual), v_fk_ee, p_pk_sede);
+
     UPDATE academico_test.TSEDE
        SET ACTIVE       = FALSE,
            MODIFIED_BY  = p_pk_usuario_solicitante::VARCHAR,
@@ -263,6 +266,9 @@ BEGIN
         RAISE EXCEPTION 'p_pks es obligatorio y debe contener al menos un PK_TSEDE'
             USING ERRCODE = '22023';
     END IF;
+
+    PERFORM academico_test.fn_audit_declarar(p_pk_usuario_solicitante,
+        format('Eliminación masiva de %s sedes', CARDINALITY(p_pks)));
 
     FOR v_pk IN SELECT DISTINCT x FROM unnest(p_pks) AS x ORDER BY x
     LOOP
@@ -382,6 +388,9 @@ BEGIN
     -- 2. Soft delete del establecimiento.
     --    MODIFIED_BY/MODIFIED_AT se actualizan para reflejar la baja.
     -- -----------------------------------------------------------------
+    PERFORM academico_test.fn_audit_declarar(p_pk_usuario_solicitante,
+        format('Eliminación del establecimiento %s', v_nombre_actual), p_pk_establecimiento);
+
     UPDATE academico_test.TESTABLECIMIENTO
        SET ACTIVE       = FALSE,
            MODIFIED_BY  = p_pk_usuario_solicitante::VARCHAR,
@@ -437,6 +446,9 @@ BEGIN
         RAISE EXCEPTION 'p_pks es obligatorio y debe contener al menos un PK_ESTABLECIMIENTO'
             USING ERRCODE = '22023';
     END IF;
+
+    PERFORM academico_test.fn_audit_declarar(p_pk_usuario_solicitante,
+        format('Eliminación masiva de %s establecimientos', CARDINALITY(p_pks)));
 
     FOR v_pk IN SELECT DISTINCT x FROM unnest(p_pks) AS x ORDER BY x
     LOOP

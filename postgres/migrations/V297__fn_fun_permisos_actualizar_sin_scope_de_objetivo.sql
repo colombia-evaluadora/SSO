@@ -218,6 +218,9 @@ BEGIN
         ) INTO v_sedes_coord;
     END IF;
 
+    PERFORM academico_test.fn_audit_declarar(p_pk_usuario_solicitante,
+        format('Actualización de permisos del funcionario %s', COALESCE(v_nombre_actual, p_pk_funcionario::TEXT)));
+
     FOR v_perm IN
         SELECT
             NULLIF(TRIM(elem->>'accion'), '')                       AS accion,
