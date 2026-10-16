@@ -32,21 +32,11 @@
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-opentelemetry</artifactId>
         </dependency>
-        <!--
-            Boot 4's spring-boot-starter-opentelemetry does NOT install a
-            Logback appender out of the box. We add it explicitly so
-            eurekaserver joins the rest of the stack in shipping every log
-            event as an OTLP log record to Alloy / Loki. eurekaserver does
-            not depend on `common` (it has no shared entities), so it keeps
-            its own copy of the appender config — see
-            src/main/java/com/co/eurekatic/eureka/observability/
-            OpenTelemetryAppenderConfig.java. Version is the same one
-            pinned in the parent <properties> block.
-        -->
+        <!-- Appender OTel de Logback y logback-spring.xml compartidos (sin JPA ni JWT). -->
         <dependency>
-            <groupId>io.opentelemetry.instrumentation</groupId>
-            <artifactId>opentelemetry-logback-appender-1.0</artifactId>
-            <version>${opentelemetry-instrumentation.version}</version>
+            <groupId>com.co.eurekatic</groupId>
+            <artifactId>common-observability</artifactId>
+            <version>${project.version}</version>
         </dependency>
     </dependencies>
 
