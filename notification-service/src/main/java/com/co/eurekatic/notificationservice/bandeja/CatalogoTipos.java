@@ -31,6 +31,11 @@ public class CatalogoTipos {
                 "NORMAL", true, false, true, false, false, Duration.ofMinutes(10)));
         add(new TipoNotificacion("CHAT_REACCION", "CHAT", "Reacciones a tus mensajes",
                 "NORMAL", false, false, true, false, false, Duration.ofMinutes(10)));
+        // Foros (comms-service ForoService): misma categoria que el chat en preferencias.
+        add(new TipoNotificacion("FORO_MENCION", "CHAT", "Menciones en los foros",
+                "ALTA", true, false, true, false, false, SIN_AGRUPAR));
+        add(new TipoNotificacion("FORO_RESPUESTA", "CHAT", "Respuestas en publicaciones que sigues",
+                "NORMAL", true, false, true, false, false, Duration.ofMinutes(10)));
         add(new TipoNotificacion("PLANEADOR_APROBADA", "PLANEADOR", "Actividad aprobada o rechazada",
                 "NORMAL", true, true, true, false, false, SIN_AGRUPAR));
         add(new TipoNotificacion("PLANEADOR_VALIDACION", "PLANEADOR", "Actividad enviada a validación",
