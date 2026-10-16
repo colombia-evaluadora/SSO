@@ -58,6 +58,11 @@ eureka:
 # flip this per scenario.
 notif:
   fail-on-missing-credentials: false
+  # HS256 solo en pruebas: BandejaIntegrationTest firma sus tokens con el mismo
+  # secreto. Aqui y no en @TestPropertySource para que todos los IT compartan
+  # contexto y no se roben mensajes de las colas entre contextos.
+  jwt:
+    secret: secreto-de-pruebas-de-al-menos-32-bytes-para-hs256
   provider-config:
     # Refresh-on-demand only — the integration test triggers
     # refreshes explicitly via /actuator/providers/refresh.

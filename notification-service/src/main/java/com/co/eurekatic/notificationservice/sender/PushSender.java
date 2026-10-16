@@ -4,6 +4,7 @@ import com.co.eurekatic.notificationservice.domain.Channel;
 import com.co.eurekatic.notificationservice.domain.RenderedNotification;
 import com.co.eurekatic.notificationservice.provider.ProviderException;
 import com.co.eurekatic.notificationservice.provider.ProviderRegistry;
+import com.co.eurekatic.notificationservice.push.WebPushProvider;
 import io.github.resilience4j.circuitbreaker.CallNotPermittedException;
 import io.github.resilience4j.circuitbreaker.CircuitBreaker;
 import org.slf4j.Logger;
@@ -33,8 +34,13 @@ public class PushSender implements NotificationSender {
         if (providers.isEmpty()) {
             throw new ProviderException("No PUSH providers configured");
         }
+        // Un destinatario "webpush:<sub>" (bandeja) solo lo atiende el proveedor
+        // Web Push; un token FCM nunca le llega. Asi un tipo de destinatario no
+        // abre el breaker del otro proveedor.
+        boolean webPush = WebPushProvider.atiende(rendered);
         ProviderException last = null;
         for (var rp : providers) {
+            if ((rp.provider() instanceof WebPushProvider) != webPush) continue;
             CircuitBreaker breaker = rp.circuitBreaker();
             try {
                 breaker.executeRunnable(() -> rp.provider().deliver(rendered));

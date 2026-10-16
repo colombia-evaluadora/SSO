@@ -344,6 +344,19 @@ spring:
               filters:
                 - StripPrefix=1
                 - AddResponseHeader=X-Source, api-gateway
+            # ─── notification-service: bandeja, preferencias y push ───
+            # GET /api/notificaciones?cursor&limit&categoria&estado&texto,
+            # /contador, /{id}/leida, /leer-todas, /{id}/archivar,
+            # /preferencias, /push/suscripciones, /push/vapid-public-key.
+            # StripPrefix=1 deja /notificaciones/..., donde escucha el
+            # controlador. El servicio verifica el JWT por su cuenta.
+            - id: api-notificaciones
+              uri: lb://notification-service
+              predicates:
+                - Path=/api/notificaciones,/api/notificaciones/**
+              filters:
+                - StripPrefix=1
+                - AddResponseHeader=X-Source, api-gateway
             # ─── OpenAPI / Swagger UI: deliberately NO routes ───
             # There used to be five `forward:` routes here
             # (openapi-ui-self, openapi-spec-self,
