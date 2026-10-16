@@ -469,7 +469,7 @@ public class ChatRepository {
                   FROM public.users u
                   LEFT JOIN ident i ON i.id_user = u.id_user
                  WHERE u.active AND u.enabled AND u.id_user <> :u
-                   AND (CAST(:q AS VARCHAR) IS NULL OR """ + busqueda + """
+                   AND (CAST(:q AS VARCHAR) IS NULL ORs""" + busqueda + """
                          LIKE CAST(:q AS VARCHAR))
                    AND (:todos
                         OR i.pk_tusuario IN (SELECT tu FROM alcance)
