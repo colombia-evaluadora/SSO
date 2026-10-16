@@ -226,6 +226,44 @@ class CommsIntegrationTest {
     }
 
     @Test
+    void buscarPersonasPorAlcanceSinTildesYPorDocumento() throws Exception {
+        long rector = usuario(jdbc, "rector@a.edu.co", "Rector Dos Colegios", "CEVAL-DOCENTE");
+        long natalia = usuario(jdbc, "natalia@b.edu.co", "Natalia Carpintero", "CEVAL-DOCENTE");
+        long otro = usuario(jdbc, "otro@c.edu.co", "Ramón Ajeno", "CEVAL-DOCENTE");
+        long root = usuario(jdbc, "root@sed.gov.co", "Super", "CEVAL-SUPER_ADMINISTRADOR");
+        // El rector trabaja en los colegios 10 y 20; Natalia en el 20; Ramon en el 30.
+        for (var f : List.of(List.of("rector@a.edu.co", "1", "10"), List.of("rector@a.edu.co", "1", "20"),
+                List.of("natalia@b.edu.co", "555123", "20"), List.of("otro@c.edu.co", "9", "30"))) {
+            long tu = jdbc.sql("""
+                    INSERT INTO academico_test.tusuario (cuenta, identificacion, primer_nombre, primer_apellido)
+                    VALUES (:c, :d, 'X', 'Y') ON CONFLICT DO NOTHING RETURNING pk_tusuario""")
+                    .param("c", f.get(0)).param("d", f.get(1)).query(Long.class).optional()
+                    .orElseGet(() -> jdbc.sql("SELECT pk_tusuario FROM academico_test.tusuario WHERE cuenta = :c")
+                            .param("c", f.get(0)).query(Long.class).single());
+            long sede = jdbc.sql("INSERT INTO academico_test.tsede (fk_testablecimiento) VALUES (:e) RETURNING pk_tsede")
+                    .param("e", Long.parseLong(f.get(2))).query(Long.class).single();
+            jdbc.sql("INSERT INTO academico_test.tsede_usuario (fk_tsede, fk_tusuario) VALUES (:s, :t)")
+                    .param("s", sede).param("t", tu).update();
+        }
+        String tRector = JWT.issueAccessToken("rector@a.edu.co", rector, null, Set.of("CEVAL-DOCENTE"), null, "rect");
+        String tRoot = JWT.issueAccessToken("root@sed.gov.co", root, null,
+                Set.of("CEVAL-SUPER_ADMINISTRADOR"), null, "root");
+
+        // Multi-colegio: encuentra por correo, sin tildes ni mayusculas, y por documento.
+        assertThat(rows(get("/comunicaciones/personas?q=NATALIA%40B.EDU", tRector)).findValuesAsText("id"))
+                .containsExactly(String.valueOf(natalia));
+        assertThat(rows(get("/comunicaciones/personas?q=555123", tRector)).findValuesAsText("id"))
+                .containsExactly(String.valueOf(natalia));
+        assertThat(rows(get("/comunicaciones/personas?q=ramon", tRector))).isEmpty();
+        // Super administrador: todos los colegios, con paginacion.
+        assertThat(rows(get("/comunicaciones/personas?q=ram%C3%B3n", tRoot)).findValuesAsText("id"))
+                .containsExactly(String.valueOf(otro));
+        assertThat(rows(get("/comunicaciones/personas?limite=1", tRoot))).hasSize(1);
+        assertThat(rows(get("/comunicaciones/personas?limite=1&desde=1", tRoot)).get(0).get("id").asLong())
+                .isNotEqualTo(rows(get("/comunicaciones/personas?limite=1", tRoot)).get(0).get("id").asLong());
+    }
+
+    @Test
     void sinTokenEs401() throws Exception {
         var r = HTTP.send(HttpRequest.newBuilder(URI.create("http://localhost:" + port + "/comunicaciones/conversaciones"))
                 .GET().build(), HttpResponse.BodyHandlers.ofString());

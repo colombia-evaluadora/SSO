@@ -58,9 +58,18 @@ public class ChatService {
         return repo.conversaciones(u.id());
     }
 
-    public List<Persona> personas(Usuario u, String q) {
+    /** Tope de una pagina de {@code /personas}. */
+    static final int PERSONAS_MAX = 100;
+
+    /** El super administrador busca en todos los colegios (alcance, no politica de DM). */
+    static final String SUPER_ADMIN = "CEVAL-SUPER_ADMINISTRADOR";
+
+    public List<Persona> personas(Usuario u, String q, Integer limite, Integer desde) {
+        int lim = limite == null || limite < 1 ? 50 : Math.min(limite, PERSONAS_MAX);
+        int off = desde == null || desde < 0 ? 0 : desde;
+        boolean todos = u.roles() != null && u.roles().contains(SUPER_ADMIN);
         String perfil = politica.perfil(u.roles());
-        return repo.personas(u.id(), u.establecimiento(), q, 200).stream()
+        return repo.personas(u.id(), u.establecimiento(), todos, q, lim, off).stream()
                 .map(p -> new Persona(p.id(), p.nombre(), p.correo(), politica.perfil(p.roles())))
                 // Quien no se puede escribir ni sumar a un canal no se ofrece (D: politica de menores).
                 .filter(p -> !"PROHIBIDO".equals(politica.reglaDirecto(perfil, p.perfil()))
