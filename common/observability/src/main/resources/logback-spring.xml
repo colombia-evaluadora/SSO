@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Shared Logback config for every Spring Boot 4 service that depends on
+  `common`. Boot 4's spring-boot-starter-opentelemetry does NOT install a
+  Logback appender out of the box, so this file declares one explicitly.
+
+  - The OTEL appender forwards every log event as an OTLP log record to
+    the Grafana Alloy collector. The exporter endpoint is picked up from
+    management.opentelemetry.logging.export.otlp.endpoint
+    (set per-service in application.yml). The OpenTelemetry instance is
+    installed by OpenTelemetryAppenderConfig#afterPropertiesSet, which
+    runs before any application code logs anything.
+
+  - CONSOLE is kept so container `docker compose logs <svc>` still works
+    and unit tests see their expected log lines.
+
+  - logback-spring.xml (not logback.xml) is the variant Spring Boot loads
+    when present on the classpath — it understands the <springProfile>
+    element and is processed after the Spring context is bootstrapped, so
+    the OTel bean is already wired by the time the first event flows.
+-->
+<configuration>
+
+  <!-- Defaults + CONSOLE appender shipped with Spring Boot. -->
+  <include resource="org/springframework/boot/logging/logback/defaults.xml"/>
+  <include resource="org/springframework/boot/logging/logback/console-appender.xml"/>
+
+  <!--
+    OpenTelemetry log appender. common-observability trae la dependencia del
+    appender junto con este fichero, asi que todo servicio que lo hereda
+    tiene la clase en el classpath.
+  -->
+  <appender name="OTEL" class="io.opentelemetry.instrumentation.logback.appender.v1_0.OpenTelemetryAppender"/>
+
+  <root level="INFO">
+    <appender-ref ref="CONSOLE"/>
+    <appender-ref ref="OTEL"/>
+  </root>
+
+</configuration>

@@ -21,13 +21,18 @@
 
     <!--
         Sin Eureka: nadie llama a este servicio por el gateway. De common solo
-        se usan el appender OTel de logs y SqlErrorSanitizer; Hibernate queda
-        excluido en la aplicacion.
+        usa common-core (SqlErrorSanitizer) y common-observability (appender
+        OTel de logs); ni JPA ni JWT llegan al classpath.
     -->
     <dependencies>
         <dependency>
             <groupId>com.co.eurekatic</groupId>
-            <artifactId>common</artifactId>
+            <artifactId>common-core</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>com.co.eurekatic</groupId>
+            <artifactId>common-observability</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
