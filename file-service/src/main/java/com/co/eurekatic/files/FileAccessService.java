@@ -304,6 +304,11 @@ public class FileAccessService {
      * lo sube por {@code POST /files/eval-col/comunicaciones/conversaciones/{id}/mensajes};
      * sin este camino solo un rol privilegiado podía verlo. Un adjunto quitado
      * por su autor, o un mensaje eliminado, deja de verse.
+     *
+     * <p>Los foros (V585) son canales {@code FORO} con la misma membresia y sus
+     * publicaciones y respuestas son filas de {@code tmensaje}: este camino cubre
+     * tambien sus adjuntos ({@code /files/eval-col/comunicaciones/foros/...}),
+     * salvo los de una publicacion eliminada ({@link #enPublicacionEliminada}).
      */
     private boolean esAdjuntoDeChatVisible(long archivoId, String email) {
         if (email == null || email.isBlank()) {
@@ -328,11 +333,38 @@ public class FileAccessService {
                             .addValue("archivoId", archivoId)
                             .addValue("email", email),
                     Integer.class);
-            return encontrado != null && encontrado > 0;
+            return encontrado != null && encontrado > 0 && !enPublicacionEliminada(archivoId);
         } catch (DataAccessException e) {
             // Entorno sin el schema de comunicaciones: se pierde este camino, no el resto.
             log.debug("no se pudo evaluar el adjunto de chat para el archivo id={}: {}",
                     archivoId, e.getMessage());
+            return false;
+        }
+    }
+
+    /**
+     * ¿Es el adjunto del cuerpo o de una respuesta de una publicacion de foro
+     * (V585) que su autor o la moderacion elimino? Eliminar la publicacion no
+     * borra sus respuestas una por una, asi que sin esto sus adjuntos se seguirian
+     * viendo. Consulta aparte con su propio {@code catch}: en un entorno con chat
+     * pero sin foros la tabla no existe y el adjunto del chat se sigue viendo.
+     */
+    private boolean enPublicacionEliminada(long archivoId) {
+        try {
+            Integer eliminadas = jdbc.queryForObject("""
+                    SELECT count(*)
+                      FROM comunicaciones.thilo h
+                      JOIN comunicaciones.tmensaje m ON m.fk_tarchivo = :archivoId
+                     WHERE h.eliminado_en IS NOT NULL
+                       AND (m.pk_tmensaje = h.fk_tmensaje_raiz
+                            OR EXISTS (SELECT 1 FROM comunicaciones.thilo_mensaje hm
+                                        WHERE hm.fk_thilo = h.pk_thilo AND hm.fk_tmensaje = m.pk_tmensaje))
+                    """,
+                    new MapSqlParameterSource().addValue("archivoId", archivoId),
+                    Integer.class);
+            return eliminadas != null && eliminadas > 0;
+        } catch (DataAccessException e) {
+            log.debug("no se pudo evaluar el foro del adjunto id={}: {}", archivoId, e.getMessage());
             return false;
         }
     }

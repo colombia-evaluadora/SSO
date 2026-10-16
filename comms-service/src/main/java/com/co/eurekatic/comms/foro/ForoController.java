@@ -34,13 +34,15 @@ public class ForoController {
                              @JsonProperty("SOLO_MODERADORES") String soloModeradores) { }
 
     public record PublicacionIn(@JsonProperty("TITULO") String titulo, @JsonProperty("TEXTO") String texto,
-                                @JsonProperty("ETIQUETAS") List<Long> etiquetas,
-                                @JsonProperty("ADJUNTO_NOMBRE") String adjuntoNombre,
-                                @JsonProperty("ADJUNTO_FORMATO") String adjuntoFormato,
+                                @JsonProperty("ETIQUETAS") Object etiquetas,
+                                @JsonProperty("ADJUNTO") Long adjunto,
                                 @JsonProperty("CLIENT_MESSAGE_ID") UUID clientMessageId) { }
 
-    public record RespuestaIn(@JsonProperty("TEXTO") String texto, @JsonProperty("ADJUNTO_NOMBRE") String adjuntoNombre,
-                              @JsonProperty("ADJUNTO_FORMATO") String adjuntoFormato,
+    /**
+     * {@code ADJUNTO}: pk_tarchivo que pone file-service al reenviar el multipart
+     * ({@code POST /files/eval-col/comunicaciones/foros/...}), como en el chat.
+     */
+    public record RespuestaIn(@JsonProperty("TEXTO") String texto, @JsonProperty("ADJUNTO") Long adjunto,
                               @JsonProperty("FK_MENSAJE_RESPUESTA") Long respuesta,
                               @JsonProperty("CLIENT_MESSAGE_ID") UUID clientMessageId) { }
 
@@ -92,8 +94,8 @@ public class ForoController {
 
     @PostMapping("/{canal}/publicaciones")
     public Filas<Publicacion> publicar(HttpServletRequest r, @PathVariable long canal, @RequestBody PublicacionIn in) {
-        return Filas.de(foros.publicar(Usuario.de(r), canal, in.titulo(), in.texto(), in.etiquetas(),
-                in.adjuntoNombre(), in.adjuntoFormato(), in.clientMessageId()));
+        return Filas.de(foros.publicar(Usuario.de(r), canal, in.titulo(), in.texto(), etiquetas(in.etiquetas()),
+                in.adjunto(), in.clientMessageId()));
     }
 
     @GetMapping("/publicaciones/{id}")
@@ -113,8 +115,8 @@ public class ForoController {
 
     @PostMapping("/publicaciones/{id}/respuestas")
     public Filas<Mensaje> responder(HttpServletRequest r, @PathVariable long id, @RequestBody RespuestaIn in) {
-        return Filas.de(foros.responder(Usuario.de(r), id, in.texto(), in.adjuntoNombre(), in.adjuntoFormato(),
-                in.respuesta(), in.clientMessageId()));
+        return Filas.de(foros.responder(Usuario.de(r), id, in.texto(), in.adjunto(), in.respuesta(),
+                in.clientMessageId()));
     }
 
     @PatchMapping("/publicaciones/{id}/etiquetas")
@@ -150,5 +152,33 @@ public class ForoController {
     @PatchMapping("/respuestas/{id}/eliminar")
     public Filas<Mensaje> eliminarRespuesta(HttpServletRequest r, @PathVariable long id) {
         return Filas.de(foros.eliminarRespuesta(Usuario.de(r), id));
+    }
+
+    /** Quita el archivo del cuerpo o de una respuesta: su autor o la moderacion. */
+    @PatchMapping("/mensajes/{id}/adjunto/eliminar")
+    public Filas<Mensaje> quitarAdjunto(HttpServletRequest r, @PathVariable long id) {
+        return Filas.de(foros.quitarAdjunto(Usuario.de(r), id));
+    }
+
+    /**
+     * {@code ETIQUETAS} llega como arreglo en JSON y como texto en el multipart:
+     * file-service reenvia cada campo de texto como string, sin arreglos, asi que
+     * el front manda {@code "3,7"}. Acepta las dos formas.
+     */
+    static List<Long> etiquetas(Object valor) {
+        if (valor == null) return List.of();
+        List<?> crudos = valor instanceof List<?> l ? l
+                : java.util.Arrays.stream(valor.toString().split(",")).map(String::trim)
+                        .filter(s -> !s.isEmpty()).toList();
+        List<Long> out = new java.util.ArrayList<>();
+        for (Object x : crudos) {
+            if (x == null) continue;
+            try {
+                out.add(x instanceof Number n ? n.longValue() : Long.parseLong(x.toString().trim()));
+            } catch (NumberFormatException e) {
+                throw new com.co.eurekatic.comms.chat.ApiError(400, "Una etiqueta no es valida.");
+            }
+        }
+        return out;
     }
 }

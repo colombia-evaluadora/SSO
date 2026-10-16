@@ -239,7 +239,7 @@ class FileAccessServiceTest {
         when(jdbc.query(anyString(), any(SqlParameterSource.class), any(RowMapper.class)))
                 .thenReturn(List.of());
         when(jdbc.queryForObject(anyString(), any(SqlParameterSource.class), eq(Integer.class)))
-                .thenAnswer(inv -> ((String) inv.getArgument(0)).contains("comunicaciones.tmensaje") ? 1 : 0);
+                .thenAnswer(inv -> ((String) inv.getArgument(0)).contains("tcanal_miembro") ? 1 : 0);
 
         assertThat(service(jdbc).puedeVer(42L, "acudiente@example.com", Set.of("CEVAL-ACUDIENTE"))).isTrue();
     }
@@ -259,5 +259,38 @@ class FileAccessServiceTest {
                 });
 
         assertThat(service(jdbc).puedeVer(42L, "acudiente@example.com", Set.of("CEVAL-ACUDIENTE"))).isFalse();
+    }
+
+    /** Adjunto de una respuesta de foro: deja de verse si se elimino la publicacion. */
+    @Test
+    void adjuntoDeForoEnPublicacionEliminadaNoSeVe() {
+        var jdbc = mock(NamedParameterJdbcTemplate.class);
+        when(jdbc.query(anyString(), any(SqlParameterSource.class), any(RowMapper.class)))
+                .thenReturn(List.of());
+        when(jdbc.queryForObject(anyString(), any(SqlParameterSource.class), eq(Integer.class)))
+                .thenAnswer(inv -> {
+                    String sql = inv.getArgument(0);
+                    return sql.contains("tcanal_miembro") || sql.contains("comunicaciones.thilo h") ? 1 : 0;
+                });
+
+        assertThat(service(jdbc).puedeVer(42L, "docente@example.com", Set.of("CEVAL-DOCENTE"))).isFalse();
+    }
+
+    /** Sin la tabla de foros (antes de V585) el adjunto del chat se sigue viendo. */
+    @Test
+    void adjuntoDeChatSinTablaDeForosSeSigueViendo() {
+        var jdbc = mock(NamedParameterJdbcTemplate.class);
+        when(jdbc.query(anyString(), any(SqlParameterSource.class), any(RowMapper.class)))
+                .thenReturn(List.of());
+        when(jdbc.queryForObject(anyString(), any(SqlParameterSource.class), eq(Integer.class)))
+                .thenAnswer(inv -> {
+                    String sql = inv.getArgument(0);
+                    if (sql.contains("comunicaciones.thilo h")) {
+                        throw new InvalidDataAccessResourceUsageException("no existe thilo");
+                    }
+                    return sql.contains("tcanal_miembro") ? 1 : 0;
+                });
+
+        assertThat(service(jdbc).puedeVer(42L, "docente@example.com", Set.of("CEVAL-DOCENTE"))).isTrue();
     }
 }
