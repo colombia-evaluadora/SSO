@@ -82,7 +82,10 @@ DECLARE
     v_estado RECORD;
 BEGIN
     SELECT * INTO v_estado FROM academico_test.fn_asistencia_periodo_estado(p_fk_tgrupo);
-    IF v_estado.estado_valor = 'C' THEN
+    IF v_estado.estado_valor = 'C'
+       AND NOT (SELECT academico_test.fn_capturado_con_periodo_abierto(pa.FECHA_FIN, pa.MODIFIED_AT)
+                  FROM academico_test.TPERIODO_ACADEMICO pa
+                 WHERE pa.PK_TPERIODO_ACADEMICO = v_estado.fk_tperiodo_academico) THEN
         RAISE EXCEPTION 'El periodo académico del grupo % está %, así que no se puede % la asistencia.',
             (SELECT format('%s del grado %s', gr.NOMBRE, g.NOMBRE)
                FROM academico_test.TGRUPO gr
