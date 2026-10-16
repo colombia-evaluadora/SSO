@@ -34,7 +34,7 @@ public record CommsProperties(
         if (app == null) app = "COLOMBIA-EVALUADORA";
         if (exchangeNotificaciones == null) exchangeNotificaciones = "notifications";
         if (exchangeTiempoReal == null) exchangeTiempoReal = "comms.realtime";
-        if (politica == null) politica = new Politica(null, null, null, true);
+        if (politica == null) politica = new Politica(null, null, null, true, null);
     }
 
     /**
@@ -42,12 +42,14 @@ public record CommsProperties(
      * @param mencionesMasivas   perfiles que pueden usar {@code @canal}/{@code @todos}
      * @param rolesDirectivos    roles que cuentan como DIRECTIVO
      * @param pendienteDeAprobacion la institucion aun no confirmo la politica
+     * @param foros              quien publica, responde y modera en los foros (menores: configurable)
      */
     public record Politica(
             Map<String, Map<String, String>> directos,
             List<String> mencionesMasivas,
             List<String> rolesDirectivos,
-            boolean pendienteDeAprobacion) {
+            boolean pendienteDeAprobacion,
+            Foros foros) {
 
         public Politica {
             if (directos == null || directos.isEmpty()) directos = SUGERIDA;
@@ -55,6 +57,7 @@ public record CommsProperties(
             if (rolesDirectivos == null) {
                 rolesDirectivos = List.of("CEVAL-RECTOR", "CEVAL-COORDINADOR", "CEVAL-SUPER_ADMINISTRADOR");
             }
+            if (foros == null) foros = new Foros(null, null, null);
         }
 
         /** Matriz sugerida por el plan (§6), sin aprobar: la misma que el mock del front. */
@@ -67,5 +70,18 @@ public record CommsProperties(
                         "ACUDIENTE", "PROHIBIDO", "ESTUDIANTE", "PROHIBIDO"),
                 "ESTUDIANTE", Map.of("DIRECTIVO", "PROHIBIDO", "DOCENTE", "PROHIBIDO",
                         "ACUDIENTE", "PROHIBIDO", "ESTUDIANTE", "PROHIBIDO"));
+    }
+
+    /**
+     * Foros (PLAN §6): perfiles que abren publicaciones, que responden y que moderan
+     * (fijar, cerrar, eliminar, mover etiquetas) ademas del administrador del canal.
+     * Con menores la institucion puede, p. ej., dejar a ESTUDIANTE solo respondiendo.
+     */
+    public record Foros(List<String> publicar, List<String> responder, List<String> moderar) {
+        public Foros {
+            if (publicar == null) publicar = List.of("DIRECTIVO", "DOCENTE", "ACUDIENTE", "ESTUDIANTE");
+            if (responder == null) responder = List.of("DIRECTIVO", "DOCENTE", "ACUDIENTE", "ESTUDIANTE");
+            if (moderar == null) moderar = List.of("DIRECTIVO");
+        }
     }
 }

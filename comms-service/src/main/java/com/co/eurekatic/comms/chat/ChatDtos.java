@@ -37,7 +37,8 @@ public final class ChatDtos {
 
     public record Persona(long id, String nombre, String correo, String perfil) { }
 
-    public record Politica(Object directos, List<String> mencionesMasivas, boolean pendienteDeAprobacion) { }
+    public record Politica(Object directos, List<String> mencionesMasivas, boolean pendienteDeAprobacion,
+                           Object foros) { }
 
     public record Filas<T>(List<T> rows) {
         public static <T> Filas<T> de(T uno) {

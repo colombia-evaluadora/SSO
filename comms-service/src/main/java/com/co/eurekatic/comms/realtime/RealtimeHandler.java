@@ -29,7 +29,7 @@ import java.util.Map;
  * Cierres: 4001 ticket invalido o token vencido (el cliente refresca y pide otro
  * ticket), 4003 acceso revocado (no reintenta).
  *
- * <p>Topicos: {@code user:<sub>} solo el propio; {@code canal:<id>} solo
+ * <p>Topicos: {@code user:<sub>} solo el propio; {@code canal:<id>} y {@code foro:<id>} solo
  * miembros activos no bloqueados; {@code presencia} cualquiera.
  */
 @Component
@@ -158,9 +158,10 @@ public class RealtimeHandler extends TextWebSocketHandler {
     boolean puede(Usuario u, String topic) {
         if (topic.equals("presencia")) return true;
         if (topic.startsWith("user:")) return topic.equals("user:" + u.sub());
-        if (topic.startsWith("canal:")) {
+        // foro:<id> (V563): eventos de publicaciones del canal FORO; solo sus miembros.
+        if (topic.startsWith("canal:") || topic.startsWith("foro:")) {
             try {
-                return chat.esMiembroActivo(Long.parseLong(topic.substring(6)), u.id());
+                return chat.esMiembroActivo(Long.parseLong(topic.substring(topic.indexOf(':') + 1)), u.id());
             } catch (NumberFormatException e) {
                 return false;
             }

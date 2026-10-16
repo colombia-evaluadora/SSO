@@ -75,7 +75,7 @@ public class ChatController {
 
     @PostMapping("/conversaciones")
     public Filas<Conversacion> crear(HttpServletRequest r, @RequestBody CanalIn in) {
-        return Filas.de(chat.crearCanal(Usuario.de(r), in.nombre(), in.categoria(), in.miembros()));
+        return Filas.de(chat.crearCanal(Usuario.de(r), in.nombre(), in.categoria(), in.miembros(), in.tipo()));
     }
 
     @PatchMapping("/conversaciones/{id}")
