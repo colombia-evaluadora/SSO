@@ -1,0 +1,102 @@
+server:
+  # 8092: libre junto a scheduler-service (8091).
+  port: ${PORT:8092}
+  shutdown: graceful
+
+spring:
+  application:
+    name: comms-service
+  main:
+    banner-mode: off
+  threads:
+    virtual:
+      enabled: true
+  # common trae JPA; este servicio usa JDBC directo.
+  autoconfigure:
+    exclude:
+      - org.springframework.boot.hibernate.autoconfigure.HibernateJpaAutoConfiguration
+      - org.springframework.boot.data.jpa.autoconfigure.DataJpaRepositoriesAutoConfiguration
+  datasource:
+    url: '${COMMS_DB_URL:jdbc:postgresql://${DB_URL:localhost:5432}/${DB_NAME:postgres}?sslmode=${DB_SSLMODE:require}&channel_binding=${DB_CHANNEL_BINDING:prefer}}'
+    username: ${COMMS_DB_USER:${DB_USER:}}
+    password: ${COMMS_DB_PASSWORD:${DB_PASSWORD:}}
+    hikari:
+      pool-name: comms
+      maximum-pool-size: ${COMMS_DB_POOL_MAX:8}
+      minimum-idle: 1
+      connection-timeout: 3000
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:}
+      timeout: 2s
+  rabbitmq:
+    host: ${RABBITMQ_HOST:localhost}
+    port: ${RABBITMQ_PORT:5672}
+    username: ${RABBITMQ_USER:guest}
+    password: ${RABBITMQ_PASS:guest}
+    listener:
+      simple:
+        default-requeue-rejected: false
+
+comms:
+  app: ${COMMS_APP_NAME:COLOMBIA-EVALUADORA}
+  ticket-ttl: ${COMMS_TICKET_TTL:30s}
+  historial: ${COMMS_HISTORIAL_EVENTOS:500}
+  historial-ttl: ${COMMS_HISTORIAL_TTL:24h}
+  presencia-ttl: ${COMMS_PRESENCIA_TTL:70s}
+  exchange-notificaciones: notifications
+  exchange-tiempo-real: comms.realtime
+  ws:
+    # Origenes permitidos para el handshake (coma). Ej.: https://testv2.colombiaevaluadora.com
+    allowed-origins: ${COMMS_WS_ALLOWED_ORIGINS:*}
+  jwt:
+    public-key: ${JWT_PUBLIC_KEY:}
+  # Politica de DMs y menciones masivas: la sugerida por el plan (§6) mientras
+  # la institucion no la apruebe. Sobrescribible por propiedades.
+  politica:
+    pendiente-de-aprobacion: true
+
+eureka:
+  client:
+    service-url:
+      defaultZone: ${EUREKA_URL:http://localhost:8761/eureka}
+    healthcheck:
+      enabled: false
+  instance:
+    prefer-ip-address: true
+    lease-renewal-interval-in-seconds: 10
+    lease-expiration-duration-in-seconds: 30
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus
+  endpoint:
+    health:
+      probes:
+        enabled: true
+  otlp:
+    metrics:
+      export:
+        enabled: ${MANAGEMENT_OTLP_METRICS_EXPORT_ENABLED:false}
+        url: ${OTEL_EXPORTER_OTLP_ENDPOINT:http://localhost:4318}/v1/metrics
+  opentelemetry:
+    tracing:
+      export:
+        otlp:
+          endpoint: ${OTEL_EXPORTER_OTLP_ENDPOINT:http://localhost:4318}/v1/traces
+    logging:
+      export:
+        otlp:
+          endpoint: ${OTEL_EXPORTER_OTLP_ENDPOINT:http://localhost:4318}/v1/logs
+  logging:
+    export:
+      otlp:
+        enabled: ${MANAGEMENT_LOGGING_EXPORT_OTLP_ENABLED:false}
+  tracing:
+    enabled: ${MANAGEMENT_TRACING_EXPORT_ENABLED:false}
+    sampling:
+      probability: ${OTEL_TRACING_SAMPLE_RATE:1.0}
