@@ -71,9 +71,13 @@ public class GlobalExceptionHandler {
             meters.counter("query.http.errors", "status",
                     String.valueOf(ex.getStatusCode().value()), "category", ex.code()).increment();
         }
-        return ResponseEntity.status(ex.getStatusCode()).body(Map.of(
-                "code", ex.code(),
-                "message", ex.getReason() == null ? "Error al ejecutar la consulta" : ex.getReason()));
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("code", ex.code());
+        body.put("message", ex.getReason() == null ? "Error al ejecutar la consulta" : ex.getReason());
+        if (ex.detail() != null) {
+            body.put("detail", ex.detail());
+        }
+        return ResponseEntity.status(ex.getStatusCode()).body(body);
     }
 
     @ExceptionHandler(ResponseStatusException.class)

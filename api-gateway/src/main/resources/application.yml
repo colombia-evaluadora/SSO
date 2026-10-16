@@ -33,10 +33,23 @@ gateway:
   # routing (e.g. dev setups that only hit the static
   # /api/qs/** path).
   internal-token: ${GATEWAY_INTERNAL_TOKEN:}
+  # BE-1 (escritura offline): respuestas de Idempotency-Key en el sso-redis.
+  # TTL >= ventana de 14 dias de la sesion offline; si Redis no responde el
+  # filtro deja pasar la peticion (fail open).
+  idempotency:
+    enabled: ${GATEWAY_IDEMPOTENCY_ENABLED:true}
+    ttl-days: ${GATEWAY_IDEMPOTENCY_TTL_DAYS:15}
+    max-body-bytes: ${GATEWAY_IDEMPOTENCY_MAX_BODY_BYTES:262144}
 
 spring:
   application:
     name: api-gateway
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:}
+      timeout: ${REDIS_TIMEOUT:2s}
   main:
     banner-mode: off
     web-application-type: reactive
@@ -338,9 +351,54 @@ spring:
             - id: api-ai-control-service
               uri: lb://ai-control-service
               metadata:
-                response-timeout: ${GATEWAY_AI_RESPONSE_TIMEOUT_MS:125000}
+                response-timeout: ${GATEWAY_AI_RESPONSE_TIMEOUT_MS:170000}
               predicates:
                 - Path=/api/ai/**
+              filters:
+                - StripPrefix=1
+                - AddResponseHeader=X-Source, api-gateway
+            # ─── comms-service: tiempo real y chat ───
+            # WebSocket /api/comms/ws?ticket=... (sin Bearer: el ticket de un
+            # solo uso lo autentica dentro del servicio; permitAll en
+            # GatewaySecurityConfig). Va antes de la ruta HTTP de /api/comms.
+            - id: api-comms-ws
+              uri: lb:ws://comms-service
+              order: -2
+              predicates:
+                - Path=/api/comms/ws
+              filters:
+                - StripPrefix=1
+            # POST /api/comms/ws-ticket (Bearer) -> /comms/ws-ticket.
+            - id: api-comms
+              uri: lb://comms-service
+              order: -1
+              predicates:
+                - Path=/api/comms/**
+              filters:
+                - StripPrefix=1
+                - AddResponseHeader=X-Source, api-gateway
+            # Chat: el front lo llama con su cliente de eval-col
+            # (/api/eval-col/comunicaciones/...). order -1 le gana a la ruta
+            # dinamica del catalogo para /api/eval-col/**. StripPrefix=2 deja
+            # /comunicaciones/..., donde escucha el controlador.
+            - id: api-comms-chat
+              uri: lb://comms-service
+              order: -1
+              predicates:
+                - Path=/api/eval-col/comunicaciones/**
+              filters:
+                - StripPrefix=2
+                - AddResponseHeader=X-Source, api-gateway
+            # ─── notification-service: bandeja, preferencias y push ───
+            # GET /api/notificaciones?cursor&limit&categoria&estado&texto,
+            # /contador, /{id}/leida, /leer-todas, /{id}/archivar,
+            # /preferencias, /push/suscripciones, /push/vapid-public-key.
+            # StripPrefix=1 deja /notificaciones/..., donde escucha el
+            # controlador. El servicio verifica el JWT por su cuenta.
+            - id: api-notificaciones
+              uri: lb://notification-service
+              predicates:
+                - Path=/api/notificaciones,/api/notificaciones/**
               filters:
                 - StripPrefix=1
                 - AddResponseHeader=X-Source, api-gateway
@@ -562,6 +620,11 @@ springdoc:
         description: "Servicio externo ERP"
 
 management:
+    # Redis solo guarda respuestas idempotentes (fail open): su caida no
+    # debe marcar al gateway como DOWN.
+    health:
+      redis:
+        enabled: false
     endpoints:
       web:
         exposure:

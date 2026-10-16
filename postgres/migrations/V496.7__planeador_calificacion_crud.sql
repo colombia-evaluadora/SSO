@@ -32,19 +32,48 @@ BEGIN
 END;
 $$;
 
+CREATE OR REPLACE FUNCTION academico_test.fn_actividad_nota_version(
+    p_pk_tactividad_estudiante BIGINT
+)
+RETURNS TEXT
+LANGUAGE sql STABLE AS $$
+    SELECT COALESCE((SELECT to_char(COALESCE(n.MODIFIED_AT, n.CREATED_AT), 'YYYY-MM-DD"T"HH24:MI:SS.US')
+                       FROM academico_test.TACTIVIDAD_NOTA n
+                      WHERE n.FK_TACTIVIDAD_ESTUDIANTE = p_pk_tactividad_estudiante
+                      LIMIT 1), 'NONE');
+$$;
+COMMENT ON FUNCTION academico_test.fn_actividad_nota_version(BIGINT)
+    IS 'Version de la nota de un estudiante en una actividad para la concurrencia optimista de la escritura offline: MODIFIED_AT o CREATED_AT de TACTIVIDAD_NOTA en ISO con microsegundos, o NONE si aun no hay nota. La planilla la devuelve por celda (version) y calificar la compara con BASE_VERSION.';
+
+DROP FUNCTION IF EXISTS academico_test.fn_actividad_nota_calificar(BIGINT, BIGINT, JSONB, DATE);
+
 CREATE OR REPLACE FUNCTION academico_test.fn_actividad_nota_calificar(
     p_pk_usuario_solicitante   BIGINT,
     p_pk_tactividad_estudiante BIGINT,
     p_calificacion             JSONB,
-    p_fecha                    DATE DEFAULT CURRENT_DATE
+    p_fecha                    DATE DEFAULT CURRENT_DATE,
+    p_base_version             TEXT DEFAULT NULL
 )
 RETURNS NUMERIC
 LANGUAGE plpgsql
 AS $$
 DECLARE
-    v_pk BIGINT := academico_test.fn_actividad_estudiante_actividad(p_pk_tactividad_estudiante);
+    v_pk      BIGINT := academico_test.fn_actividad_estudiante_actividad(p_pk_tactividad_estudiante);
+    v_version TEXT;
 BEGIN
     PERFORM academico_test.fn_actividad_assert_resultados(p_pk_usuario_solicitante, v_pk, 'EDITAR');
+    -- CAS (escritura offline, BE-2): la nota cambió desde la versión que vio el cliente.
+    IF p_base_version IS NOT NULL THEN
+        v_version := academico_test.fn_actividad_nota_version(p_pk_tactividad_estudiante);
+        IF v_version IS DISTINCT FROM p_base_version THEN
+            RAISE EXCEPTION 'La calificación cambió en el servidor mientras estabas sin conexión.'
+                USING ERRCODE = 'CE409',
+                      DETAIL = jsonb_build_object(
+                          'current', (SELECT n.CALIFICACION FROM academico_test.TACTIVIDAD_NOTA n
+                                       WHERE n.FK_TACTIVIDAD_ESTUDIANTE = p_pk_tactividad_estudiante LIMIT 1),
+                          'version', v_version)::TEXT;
+        END IF;
+    END IF;
     PERFORM academico_test.fn_actividad_auditar(p_pk_usuario_solicitante, v_pk,
         format('Calificación de %s en %s',
                academico_test.fn_actividad_estudiante_etiqueta(p_pk_tactividad_estudiante),
@@ -244,8 +273,8 @@ COMMENT ON FUNCTION academico_test.fn_actividad_asistencia_planeador_set(BIGINT,
     IS 'PUT /planeador/actividades/estudiantes/:ID/asistencia. Wrapper: gate EDITAR, Regla 54 y etiqueta; delega en fn_actividad_asistencia_planeador_set_interno. Devuelve el estado de resultado que queda.';
 COMMENT ON FUNCTION academico_test.fn_actividad_assert_resultados(BIGINT, BIGINT, VARCHAR)
     IS 'Gate común de los endpoints de resultados: existencia (P0002), actividad no eliminada (22023), alcance p_accion sobre PLANEADOR (42501) y propiedad de los resultados (Regla 54, 42501).';
-COMMENT ON FUNCTION academico_test.fn_actividad_nota_calificar(BIGINT, BIGINT, JSONB, DATE)
-    IS 'PUT /planeador/actividades/estudiantes/:ID/calificar. Wrapper: gate EDITAR, Regla 54 y etiqueta "Calificación de <estudiante> en <actividad>"; delega en fn_actividad_nota_calificar_interno.';
+COMMENT ON FUNCTION academico_test.fn_actividad_nota_calificar(BIGINT, BIGINT, JSONB, DATE, TEXT)
+    IS 'PUT /planeador/actividades/estudiantes/:ID/calificar. Wrapper: gate EDITAR, Regla 54 y etiqueta "Calificación de <estudiante> en <actividad>"; con p_base_version (escritura offline) rechaza con CE409 -> 409 OFFLINE_CONFLICT si la nota cambió (fn_actividad_nota_version); delega en fn_actividad_nota_calificar_interno.';
 COMMENT ON FUNCTION academico_test.fn_actividad_nota_previsualizar(BIGINT, BIGINT, JSONB, DATE)
     IS 'POST /planeador/actividades/estudiantes/:ID/calificar/vista-previa. Wrapper: el mismo gate EDITAR y Regla 54 de calificar; delega en fn_actividad_nota_previsualizar_interno. No escribe, no audita.';
 COMMENT ON FUNCTION academico_test.fn_actividad_nota_calificar_rubrica_bulk(BIGINT, BIGINT, BIGINT, BIGINT, BIGINT[], DATE)

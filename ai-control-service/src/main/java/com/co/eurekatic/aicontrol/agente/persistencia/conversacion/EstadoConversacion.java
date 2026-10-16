@@ -1,0 +1,8 @@
+package com.co.eurekatic.aicontrol.agente.persistencia.conversacion;
+
+/** Estado de una conversacion, como lo guarda {@code ai.conversacion.estado}. */
+public enum EstadoConversacion {
+    ACTIVA,
+    ARCHIVADA,
+    BLOQUEADA
+}

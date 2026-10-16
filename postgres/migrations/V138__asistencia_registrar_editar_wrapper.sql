@@ -7,6 +7,7 @@
 -- Coordinador (75). Incluye fn_asistencia_gate_escritura (antes V220).
 -- Depende de: V136, V137, V22, V29 (fn_assert_permiso_seccion), V40, V66
 -- (fn_audit_declarar), V496.18-V496.19 (aprobacion; enlace tardio).
+-- Offline: p_base_version (CAS, CE409 si el registro cambio).
 -- ===========================================================================
 
 SET search_path TO academico_test, public;
@@ -78,6 +79,8 @@ $$;
 COMMENT ON FUNCTION academico_test.fn_asistencia_registrar_bulk(BIGINT, BIGINT, BIGINT, DATE, NUMERIC, JSONB, NUMERIC, BIGINT)
     IS 'POST /asistencias/registrar. WRAPPER: 1) fn_asistencia_gate_escritura, 2) fecha no futura, contexto, periodo abierto, docente asignado (Regla 74), día de clase programado (72c) y excusa solo en inasistencia o tardanza (72b), 3) etiqueta de auditoría y fn_asistencia_registrar_bulk_interno. En un periodo de evaluación no calificable no escribe: corregir o capturar tarde abre solicitudes CORRECCION_ASISTENCIA (Regla 75), que el endpoint devuelve en solicitudes_pendientes.';
 
+DROP FUNCTION IF EXISTS academico_test.fn_asistencia_editar(BIGINT, BIGINT, NUMERIC, VARCHAR, BIGINT, BOOLEAN, BOOLEAN);
+
 CREATE OR REPLACE FUNCTION academico_test.fn_asistencia_editar(
     p_pk_usuario_solicitante BIGINT,
     p_pk_tasistencia         BIGINT,
@@ -85,11 +88,13 @@ CREATE OR REPLACE FUNCTION academico_test.fn_asistencia_editar(
     p_observacion            VARCHAR   DEFAULT NULL,
     p_fk_soporte_archivo     BIGINT    DEFAULT NULL,
     p_limpiar_archivo        BOOLEAN   DEFAULT FALSE,
-    p_limpiar_observacion    BOOLEAN   DEFAULT FALSE
+    p_limpiar_observacion    BOOLEAN   DEFAULT FALSE,
+    p_base_version           TEXT      DEFAULT NULL
 )
 RETURNS BIGINT
 LANGUAGE plpgsql VOLATILE AS $$
 DECLARE
+    v_version        TEXT;
     v_fk_tgrupo      BIGINT;
     v_fk_tasignatura BIGINT;
     v_fk_tactividad  BIGINT;
@@ -100,8 +105,10 @@ DECLARE
     v_requiere       BOOLEAN;
 BEGIN
     SELECT m.FK_TGRUPO, a.FK_TASIGNATURA, a.FK_TACTIVIDAD, a.FK_TMATRICULA, a.FK_SOPORTE_ARCHIVO,
-           CASE WHEN lv.VALOR ~ '^\d+$' THEN lv.VALOR::NUMERIC END
-      INTO v_fk_tgrupo, v_fk_tasignatura, v_fk_tactividad, v_fk_tmatricula, v_archivo_actual, v_tipo_actual
+           CASE WHEN lv.VALOR ~ '^\d+$' THEN lv.VALOR::NUMERIC END,
+           academico_test.fn_asistencia_version(a.MODIFIED_AT, a.CREATED_AT)
+      INTO v_fk_tgrupo, v_fk_tasignatura, v_fk_tactividad, v_fk_tmatricula, v_archivo_actual, v_tipo_actual,
+           v_version
       FROM academico_test.TASISTENCIA a
       JOIN academico_test.TMATRICULA m ON m.PK_TMATRICULA = a.FK_TMATRICULA
       LEFT JOIN academico_test.TLISTA_VALOR lv ON lv.PK_LISTA_VALOR = a.FK_TLV_TIPO_ASISTENCIA
@@ -113,6 +120,13 @@ BEGIN
 
     PERFORM academico_test.fn_asistencia_gate_escritura(
         p_pk_usuario_solicitante, v_fk_tgrupo, 'EDITAR');
+
+    -- CAS (escritura offline): el registro cambio desde la version que vio el cliente.
+    IF p_base_version IS NOT NULL AND p_base_version IS DISTINCT FROM v_version THEN
+        RAISE EXCEPTION 'El registro de asistencia cambió en el servidor mientras estabas sin conexión.'
+            USING ERRCODE = 'CE409',
+                  DETAIL = jsonb_build_object('current', v_tipo_actual, 'version', v_version)::TEXT;
+    END IF;
 
     -- Sin periodo de evaluación para la fecha queda el bloqueo plano por el
     -- periodo académico cerrado (V136).
@@ -151,5 +165,5 @@ BEGIN
 END;
 $$;
 
-COMMENT ON FUNCTION academico_test.fn_asistencia_editar(BIGINT, BIGINT, NUMERIC, VARCHAR, BIGINT, BOOLEAN, BOOLEAN)
-    IS 'PATCH /asistencias/:ID: edita un registro de asistencia (estado, observación, soporte). Con el periodo de evaluación de la fecha Calificable se aplica; si ya no lo es, queda como solicitud CORRECCION_ASISTENCIA para el Coordinador (Regla 75) y el registro no cambia; si la fecha no cae en ningún periodo de evaluación, 22023 cuando el periodo académico está Cerrado. Devuelve el PK del registro.';
+COMMENT ON FUNCTION academico_test.fn_asistencia_editar(BIGINT, BIGINT, NUMERIC, VARCHAR, BIGINT, BOOLEAN, BOOLEAN, TEXT)
+    IS 'PATCH /asistencias/:ID: edita un registro de asistencia (estado, observación, soporte). Con p_base_version (escritura offline) rechaza con CE409 -> 409 OFFLINE_CONFLICT si el registro cambió desde esa versión (fn_asistencia_version). Con el periodo de evaluación de la fecha Calificable se aplica; si ya no lo es, queda como solicitud CORRECCION_ASISTENCIA para el Coordinador (Regla 75) y el registro no cambia; si la fecha no cae en ningún periodo de evaluación, 22023 cuando el periodo académico está Cerrado. Devuelve el PK del registro.';

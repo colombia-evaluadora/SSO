@@ -16,12 +16,31 @@ spring:
     virtual:
       enabled: true
 
-  # Sin base de datos: los datos llegan por HTTP desde el query-service.
+  # Sin JPA. El agente usa JdbcClient sobre el schema ai; los datos academicos
+  # siguen llegando por HTTP desde el query-service. El starter JPA llega
+  # transitivo desde common: sin excluir sus repositorios, al existir un
+  # DataSource Spring Data exige un entityManagerFactory que no hay.
   autoconfigure:
     exclude:
-      - org.springframework.boot.jdbc.autoconfigure.DataSourceAutoConfiguration
-      - org.springframework.boot.jdbc.autoconfigure.DataSourceTransactionManagerAutoConfiguration
       - org.springframework.boot.hibernate.autoconfigure.HibernateJpaAutoConfiguration
+      - org.springframework.boot.data.jpa.autoconfigure.DataJpaRepositoriesAutoConfiguration
+
+  # Pool propio y pequeno, solo para el schema ai. DB_URL es host:port (como en
+  # docker-compose), por eso el default arma la URL JDBC completa.
+  datasource:
+    url: '${AI_DB_URL:jdbc:postgresql://${DB_URL:localhost:5432}/${DB_NAME:postgres}?sslmode=${DB_SSLMODE:require}&channel_binding=${DB_CHANNEL_BINDING:prefer}}'
+    username: ${AI_DB_USER:${DB_USER:}}
+    password: ${AI_DB_PASSWORD:${DB_PASSWORD:}}
+    hikari:
+      pool-name: ai-agente
+      maximum-pool-size: ${AI_DB_POOL_MAX:4}
+      minimum-idle: 1
+      # Hikari lo lee como long en milisegundos (3 s).
+      connection-timeout: 3000
+      # Negativo: el pool arranca aunque la base no responda y reintenta en
+      # segundo plano. Con el default (1) una base caida tumba el arranque de
+      # todo el servicio, tambien de los endpoints que no usan base.
+      initialization-fail-timeout: -1
 
   jackson:
     deserialization:
@@ -65,6 +84,11 @@ spring:
         max-tokens: ${AI_MAX_TOKENS:1500}
         temperature: ${AI_TEMPERATURE:0.6}
         top-p: ${AI_TOP_P:0.95}
+    tools:
+      observations:
+        # Los argumentos y resultados de herramientas pueden llevar datos de
+        # estudiantes: las observaciones solo llevan metadatos.
+        include-content: false
     chat:
       # Nunca loguear prompt ni respuesta: son observaciones de menores.
       observations:
@@ -104,6 +128,64 @@ sso:
     max-concurrent: ${AI_MAX_CONCURRENT:4}
     circuit-failure-rate: ${AI_CIRCUIT_FAILURE_RATE:50}
     circuit-open-wait: ${AI_CIRCUIT_OPEN_WAIT:60s}
+    agente:
+      modelos:
+        # Rapido: router, clasificador y redaccion, sin razonamiento. Nunca
+        # ejecuta herramientas de escritura.
+        rapido:
+          nombre: ${AI_MODEL_FAST:${AI_MODEL:MiniMax-M3}}
+          extra-body-json: '${AI_EXTRA_BODY_FAST_JSON:{"thinking":{"type":"disabled"}}}'
+          max-tokens: ${AI_MAX_TOKENS_FAST:1500}
+        # Razonador: planea y elige herramientas. El tope incluye los tokens de
+        # razonamiento: con 1500 se corta antes de elegir herramienta.
+        razonador:
+          nombre: ${AI_MODEL_REASONING:${AI_MODEL:MiniMax-M3}}
+          extra-body-json: '${AI_EXTRA_BODY_REASONING_JSON:{"thinking":{"type":"adaptive"},"reasoning_split":true}}'
+          max-tokens: ${AI_MAX_TOKENS_REASONING:6000}
+      limites:
+        max-total-tool-calls: ${AI_AGENTE_MAX_TOOL_CALLS:15}
+        max-calls-por-herramienta: ${AI_AGENTE_MAX_CALLS_POR_HERRAMIENTA:8}
+        rate-limit-usuario-por-min: ${AI_AGENTE_RATE_LIMIT_USUARIO_POR_MIN:20}
+        texto-max-caracteres: ${AI_AGENTE_TEXTO_MAX_CARACTERES:4000}
+        max-concurrent-razonador: ${AI_AGENTE_MAX_CONCURRENT_REASONING:2}
+        contexto-max-caracteres: ${AI_AGENTE_CONTEXTO_MAX_CARACTERES:20000}
+        # Escalonados: turno < stream < gateway (GATEWAY_AI_RESPONSE_TIMEOUT_MS).
+        duracion-maxima-turno: ${AI_AGENTE_DURACION_MAXIMA_TURNO:PT140S}
+        stream-timeout: ${AI_AGENTE_STREAM_TIMEOUT:PT165S}
+      memoria:
+        max-mensajes: ${AI_AGENTE_MEMORIA_MAX_MENSAJES:30}
+        ttl: ${AI_AGENTE_MEMORIA_TTL:24h}
+      acciones:
+        expira: ${AI_AGENTE_ACCION_EXPIRA:10m}
+      catalogo:
+        # Refresco del catalogo cuando todo va bien; reintento si esta vacio o la base no responde.
+        refresco: ${AI_AGENTE_CATALOGO_REFRESCO:PT5M}
+        reintento: ${AI_AGENTE_CATALOGO_REINTENTO:PT30S}
+        menus-ttl: ${AI_AGENTE_MENUS_TTL:60s}
+        max-filas: ${AI_AGENTE_MAX_FILAS:50}
+        max-caracteres: ${AI_AGENTE_MAX_CARACTERES:12000}
+        # Columnas que no salen hacia el modelo (datos de menores). Coincidencia por fragmento.
+        columnas-sensibles:
+          - identificacion
+          - documento
+          - correo
+          - email
+          - telefono
+          - celular
+          - direccion
+          - nacimiento
+          - identification
+          - phone
+          - address
+          - birth
+          - acudiente
+          - tutor
+          - eps
+          - sisben
+          - barrio
+          - password
+          - contrasena
+          - token
   jwt:
     # Solo la publica: este servicio verifica firmas, no emite tokens.
     public-key: ${JWT_PUBLIC_KEY}
@@ -124,6 +206,10 @@ management:
   # la instancia de Eureka.
   health:
     redis:
+      enabled: false
+    # La base solo la usa el agente. Si cae, el servicio sigue atendiendo
+    # observaciones; el agente responde error y el healthcheck no se rompe.
+    db:
       enabled: false
   otlp:
     metrics:

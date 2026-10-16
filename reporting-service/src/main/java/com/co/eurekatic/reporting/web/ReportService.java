@@ -234,6 +234,10 @@ public class ReportService {
                 request == null ? null : request.filtersLabel());
 
         List<String> columnas = request == null ? null : request.columns();
+        // Encabezados pedidos por el front (rotulos del planeador): una copia
+        // de la definicion, la configurada no se toca.
+        ReportingProperties.Report vista =
+                def.conEtiquetas(request == null ? null : request.columnLabels());
         // La sesion de descargas vive lo que vive el reporte: los bytes de las
         // imagenes se sueltan con el, no se quedan en el proceso.
         FileServiceClient.Sesion imagenes =
@@ -241,8 +245,8 @@ public class ReportService {
                         ? null
                         : fileService.nuevaSesion();
         byte[] content = switch (formato) {
-            case PDF -> pdf.render(clave, def, rows, meta, columnas, imagenes);
-            case EXCEL -> excel.render(clave, def, rows, meta, columnas);
+            case PDF -> pdf.render(clave, vista, rows, meta, columnas, imagenes);
+            case EXCEL -> excel.render(clave, vista, rows, meta, columnas);
         };
 
         String base = def.getFileName() == null ? clave : def.getFileName();

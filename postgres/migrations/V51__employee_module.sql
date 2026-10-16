@@ -296,6 +296,8 @@ AS $$
 DECLARE
     v_pk_usuario      BIGINT;
     v_pk_funcionario  BIGINT;
+    v_por_cuenta      BIGINT;
+    v_por_documento   BIGINT;
 BEGIN
     -- ---------------------------------------------------------------------
     -- 0. Gate de autorizacion (CU-86e2w4xdt): capability 'CREAR' sobre el
@@ -337,20 +339,31 @@ BEGIN
     END IF;
 
     -- ---------------------------------------------------------------------
-    -- 3. Resolver TUSUARIO: reusar uno activo existente (misma cuenta o
-    --    mismo documento) en vez de abortar -- ver REV2 en el comentario
-    --    de arriba. Si no existe, se crea via fn_usu_crear como antes.
+    -- 3. Resolver TUSUARIO. El documento identifica a la persona, igual que
+    --    el autocompletado del front: si hay una ACTIVA con ese documento se
+    --    reusa (el acudiente que pasa a docente llega por aca; los datos
+    --    editados los aplica despues fn_fun_actualizar). Si el correo es la
+    --    cuenta de OTRA persona activa, se rechaza: antes el alta se pegaba a
+    --    esa persona aunque el documento y los nombres fueran de otra. Los
+    --    TUSUARIO inactivos (bajas, pendientes cancelados) nunca se reusan:
+    --    su correo y documento quedan libres y se crea una persona nueva.
     -- ---------------------------------------------------------------------
-    SELECT PK_TUSUARIO
-      INTO v_pk_usuario
+    SELECT PK_TUSUARIO INTO v_por_documento
       FROM academico_test.TUSUARIO
      WHERE ACTIVE = TRUE
-       AND (
-            UPPER(CUENTA) = UPPER(p_correo_electronico)
-            OR (FK_TLV_TIPO_DOCUMENTO = p_fk_tlv_tipo_documento
-                AND IDENTIFICACION    = p_identificacion)
-       )
-     LIMIT 1;
+       AND FK_TLV_TIPO_DOCUMENTO = p_fk_tlv_tipo_documento
+       AND IDENTIFICACION        = p_identificacion;
+
+    SELECT PK_TUSUARIO INTO v_por_cuenta
+      FROM academico_test.TUSUARIO
+     WHERE ACTIVE = TRUE AND UPPER(CUENTA) = UPPER(p_correo_electronico);
+
+    IF v_por_cuenta IS NOT NULL AND v_por_cuenta IS DISTINCT FROM v_por_documento THEN
+        RAISE EXCEPTION 'El correo % ya está registrado a nombre de otra persona, con un documento diferente.',
+            p_correo_electronico
+            USING ERRCODE = '23505';
+    END IF;
+    v_pk_usuario := v_por_documento;
 
     IF v_pk_usuario IS NULL THEN
         v_pk_usuario := academico_test.fn_usu_crear(
@@ -432,7 +445,7 @@ COMMENT ON FUNCTION academico_test.fn_fun_crear(
     BIGINT, VARCHAR, VARCHAR, BIGINT, VARCHAR, VARCHAR, VARCHAR, VARCHAR,
     VARCHAR, DATE, BIGINT, VARCHAR, BIGINT, VARCHAR, BIGINT
 )
-    IS 'REV5: crea (o reusa) un funcionario en dos pasos orquestados: (1) resuelve el TUSUARIO -- reusa uno activo existente con la misma cuenta (correo) o el mismo (tipo_documento, identificacion) en vez de abortar; si no existe ninguno, lo crea via fn_usu_crear, (2) resuelve el TFUNCIONARIO -- si el TUSUARIO resuelto YA tiene un TFUNCIONARIO activo, lo REUSA y retorna su PK sin crear uno nuevo (TFUNCIONARIO es una fila por persona, no por establecimiento, ver header del archivo; el viejo UNIQUE(FK_TUSUARIO, FK_ESTABLECIMIENTO) no evita duplicados porque esa columna vale NULL siempre); si no tiene ninguno, crea uno nuevo. p_fk_tmunicipio_expedicion ya no es obligatorio (columna dejo de ser NOT NULL, V60+). El resto de campos del funcionario (cargos, sede, escalafon, etc.) se completan via fn_fun_actualizar (PATCH). Validaciones: gate de autorizacion -- CU-86e2w4xdt: PERFORM fn_assert_permiso_funcionario(solicitante, ''CREAR'', NULL) (V29), es decir bypass super-admin + capability ''CREAR'' sobre el menu FUNCIONARIOS (TROL_MENU menos TUSUARIO_ROL_PERMISO, via fn_usuario_permisos_menu); objetivo NULL porque el funcionario aun no existe, asi que no hay scope ni rango que evaluar (el EE se valida al vincular y el rol al otorgarlo). Sustituye a fn_puede_afectar_usuarios + su fallback de rector/secretaria por puntero. OJO: fn_usu_crear, que esta funcion invoca cuando hay que crear el TUSUARIO, conserva su gate propio (fn_puede_afectar_usuarios) por estar fuera del alcance del CU. Ademas: FK de municipio si llega. Retorna PK_TFUNCIONARIO (nuevo o reusado).';
+    IS 'REV5: crea (o reusa) un funcionario en dos pasos orquestados: (1) resuelve el TUSUARIO -- reusa el activo con el mismo (tipo_documento, identificacion), como el autocompletado del front; si el correo es la cuenta de OTRA persona activa rechaza con 23505 (antes el alta se pegaba a esa persona); si no hay nadie activo con ese documento, la crea via fn_usu_crear -- un TUSUARIO inactivo (baja o pendiente cancelado) nunca se reusa, su correo y documento quedan libres, (2) resuelve el TFUNCIONARIO -- si el TUSUARIO resuelto YA tiene un TFUNCIONARIO activo, lo REUSA y retorna su PK sin crear uno nuevo (TFUNCIONARIO es una fila por persona, no por establecimiento, ver header del archivo; el viejo UNIQUE(FK_TUSUARIO, FK_ESTABLECIMIENTO) no evita duplicados porque esa columna vale NULL siempre); si no tiene ninguno, crea uno nuevo. p_fk_tmunicipio_expedicion ya no es obligatorio (columna dejo de ser NOT NULL, V60+). El resto de campos del funcionario (cargos, sede, escalafon, etc.) se completan via fn_fun_actualizar (PATCH). Validaciones: gate de autorizacion -- CU-86e2w4xdt: PERFORM fn_assert_permiso_funcionario(solicitante, ''CREAR'', NULL) (V29), es decir bypass super-admin + capability ''CREAR'' sobre el menu FUNCIONARIOS (TROL_MENU menos TUSUARIO_ROL_PERMISO, via fn_usuario_permisos_menu); objetivo NULL porque el funcionario aun no existe, asi que no hay scope ni rango que evaluar (el EE se valida al vincular y el rol al otorgarlo). Sustituye a fn_puede_afectar_usuarios + su fallback de rector/secretaria por puntero. OJO: fn_usu_crear, que esta funcion invoca cuando hay que crear el TUSUARIO, conserva su gate propio (fn_puede_afectar_usuarios) por estar fuera del alcance del CU. Ademas: FK de municipio si llega. Retorna PK_TFUNCIONARIO (nuevo o reusado).';
 
 CREATE OR REPLACE FUNCTION academico_test.fn_usu_buscar_por_documento(
     p_fk_tlv_tipo_documento BIGINT,
@@ -807,6 +820,7 @@ AS $$
 DECLARE
     v_fk_usuario BIGINT;
     v_active     BOOLEAN;
+    v_cuenta     VARCHAR;
 BEGIN
     IF p_pk_usuario_solicitante IS NULL OR p_pk_usuario_solicitante <= 0 THEN
         RAISE EXCEPTION 'p_pk_usuario_solicitante es obligatorio y debe ser > 0'
@@ -883,6 +897,42 @@ BEGIN
            MODIFIED_AT = CURRENT_TIMESTAMP
      WHERE PK_TFUNCIONARIO = p_pk_funcionario;
 
+    -- Si el pendiente era lo unico que la persona tenia en la app, se dan de
+    -- baja tambien su TUSUARIO y su cuenta de acceso, como en
+    -- fn_fun_baja_establecimiento (V300). Antes quedaban activos y el correo
+    -- seguia tomado: la siguiente alta con ese correo se pegaba a esta
+    -- persona cancelada en vez de crear una nueva. La cuenta de acceso se
+    -- conserva si la usa un funcionario activo de PIGSE (misma tabla de
+    -- login), y nunca se da de baja al propio solicitante.
+    IF v_fk_usuario IS DISTINCT FROM p_pk_usuario_solicitante
+       AND NOT EXISTS (
+            SELECT 1 FROM academico_test.TFUNCIONARIO f
+             WHERE f.FK_TUSUARIO = v_fk_usuario AND f.ACTIVE = TRUE
+       )
+       AND NOT academico_test.fn_usu_tiene_otros_vinculos(v_fk_usuario)
+    THEN
+        UPDATE academico_test.TUSUARIO
+           SET ACTIVE      = FALSE,
+               MODIFIED_BY = p_pk_usuario_solicitante::VARCHAR,
+               MODIFIED_AT = CURRENT_TIMESTAMP
+         WHERE PK_TUSUARIO = v_fk_usuario
+           AND ACTIVE      = TRUE
+        RETURNING CUENTA INTO v_cuenta;
+
+        IF v_cuenta IS NOT NULL AND NOT EXISTS (
+            SELECT 1 FROM pigse.TUSUARIO p
+             WHERE p.ACTIVE = TRUE AND UPPER(p.CORREO_ELECTRONICO) = UPPER(v_cuenta)
+        ) THEN
+            UPDATE public.users
+               SET active  = FALSE,
+                   enabled = FALSE
+             WHERE UPPER(email) = UPPER(v_cuenta);
+            -- Solo aca: la reconciliacion tambien quita roles PIGSE-*, y una
+            -- cuenta que sigue en uso en PIGSE no se toca.
+            PERFORM academico_test.fn_sincronizar_rol_publico(v_fk_usuario);
+        END IF;
+    END IF;
+
     RAISE NOTICE 'TFUNCIONARIO % pendiente cancelado por usuario %', p_pk_funcionario, p_pk_usuario_solicitante;
 
     RETURN p_pk_funcionario;
@@ -890,7 +940,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_fun_cancelar_pendiente(BIGINT, BIGINT)
-    IS 'REV5: cancela (soft delete) un TFUNCIONARIO que todavia no se uso en ningun lado -- ni es rector/secretaria de un establecimiento activo, ni tiene ningun TSEDE_USUARIO activo. Pensada para que el front deshaga un registro que quedo huerfano porque el paso siguiente (crear/actualizar el establecimiento que lo iba a referenciar) fallo. Rechaza con 22023 si el funcionario YA esta en uso por cualquiera de esos dos caminos. Idempotente si ya estaba inactivo. Gate (CU-86e2w4xdt, helpers de V29; reemplaza a fn_puede_afectar_usuarios + su fallback de rector/secretaria por puntero): el propio TUSUARIO dueno del pendiente pasa siempre (auto-servicio: rollback del propio submit fallido, es el caso de uso central); cualquier otro solicitante pasa por PERFORM fn_assert_permiso_funcionario(solicitante, ''EDITAR'', NULL). DECISION: el objetivo va en NULL a proposito -- un pendiente cancelable acaba de ser validado como NO rector/secretaria y SIN ningun TSEDE_USUARIO activo, o sea NO alcanzable por scope desde ningun EE, asi que pasar el objetivo daria 42501 siempre para todo no-super-admin y dejaria la funcion inservible; sin EE ni rol no hay scope ni rango que comparar, solo capability.';
+    IS 'REV5: cancela (soft delete) un TFUNCIONARIO que todavia no se uso en ningun lado -- ni es rector/secretaria de un establecimiento activo, ni tiene ningun TSEDE_USUARIO activo. Pensada para que el front deshaga un registro que quedo huerfano porque el paso siguiente (crear/actualizar el establecimiento que lo iba a referenciar) fallo. Rechaza con 22023 si el funcionario YA esta en uso por cualquiera de esos dos caminos. Idempotente si ya estaba inactivo. Si a la persona no le queda otro TFUNCIONARIO activo ni ningun otro papel (fn_usu_tiene_otros_vinculos), da de baja tambien su TUSUARIO y su cuenta de public.users (salvo que la use un funcionario activo de PIGSE) y reconcilia sus roles, como fn_fun_baja_establecimiento: sin eso el correo quedaba tomado y la siguiente alta con ese correo se pegaba a la persona cancelada. Gate (CU-86e2w4xdt, helpers de V29; reemplaza a fn_puede_afectar_usuarios + su fallback de rector/secretaria por puntero): el propio TUSUARIO dueno del pendiente pasa siempre (auto-servicio: rollback del propio submit fallido, es el caso de uso central); cualquier otro solicitante pasa por PERFORM fn_assert_permiso_funcionario(solicitante, ''EDITAR'', NULL). DECISION: el objetivo va en NULL a proposito -- un pendiente cancelable acaba de ser validado como NO rector/secretaria y SIN ningun TSEDE_USUARIO activo, o sea NO alcanzable por scope desde ningun EE, asi que pasar el objetivo daria 42501 siempre para todo no-super-admin y dejaria la funcion inservible; sin EE ni rol no hay scope ni rango que comparar, solo capability.';
 
 CREATE OR REPLACE FUNCTION academico_test.fn_fun_activo_por_usuario(
     p_fk_tusuario BIGINT

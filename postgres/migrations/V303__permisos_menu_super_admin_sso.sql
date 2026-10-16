@@ -5,10 +5,21 @@
 -- CODIGO sale canonico (MATRÍCULA => MATRICULA): el front compara exacto.
 -- Crea TROL_MENU.SOLO_LECTURA y TROL_MENU_PERMISO (VER/CREAR/EDITAR/ELIMINAR),
 -- la fuente de los permisos del rol; un trigger la deriva de SOLO_LECTURA.
+-- TMENU.ADMITE_GUARDAR/ADMITE_ELIMINAR: las acciones que la vista tiene; un
+-- permiso de rol sobre una accion que la vista no tiene no cuenta.
 -- Registra GET /usuarios/:PK_TUSUARIO/permisos-menu. Depende de: V29, V302.
 -- ===========================================================================
 
 SET search_path TO academico_test, public;
+
+ALTER TABLE academico_test.TMENU
+    ADD COLUMN IF NOT EXISTS ADMITE_GUARDAR  BOOLEAN DEFAULT TRUE NOT NULL,
+    ADD COLUMN IF NOT EXISTS ADMITE_ELIMINAR BOOLEAN DEFAULT TRUE NOT NULL;
+
+COMMENT ON COLUMN academico_test.TMENU.ADMITE_GUARDAR IS
+    'La vista tiene crear y editar. En FALSE ningun rol puede guardar en ella.';
+COMMENT ON COLUMN academico_test.TMENU.ADMITE_ELIMINAR IS
+    'La vista tiene eliminar. En FALSE ningun rol puede eliminar en ella.';
 
 ALTER TABLE academico_test.TROL_MENU
     ADD COLUMN IF NOT EXISTS SOLO_LECTURA VARCHAR(5);
@@ -96,16 +107,18 @@ LANGUAGE plpgsql
 STABLE
 AS $function$
 BEGIN
-    -- Super admin del SSO: todos los menus activos con los 4 permisos.
+    -- Super admin del SSO: todos los menus activos con lo que admita cada uno.
     IF academico_test.fn_es_super_admin_sso(p_pk_tusuario) THEN
         RETURN QUERY
         SELECT m.PK_TMENU,
                academico_test.fn_menu_codigo_canonico(m.CODIGO),
                m.NOMBRE,
                m.URL,
-               TRUE, TRUE, TRUE, TRUE
+               m.ADMITE_GUARDAR, m.ADMITE_GUARDAR, m.ADMITE_ELIMINAR, TRUE
           FROM academico_test.TMENU m
-         WHERE m.ACTIVE = TRUE
+          LEFT JOIN academico_test.TMENU p ON p.PK_TMENU = m.FK_TMENU
+         WHERE m.ACTIVE = TRUE AND m.ESTADO = 'A'
+           AND (m.FK_TMENU IS NULL OR (p.ACTIVE = TRUE AND p.ESTADO = 'A'))
          ORDER BY m.NOMBRE ASC, m.PK_TMENU ASC;
         RETURN;
     END IF;
@@ -121,17 +134,20 @@ BEGIN
         -- Una fila por (rol, menu). Sin fila en TROL_MENU_PERMISO se cae a
         -- SOLO_LECTURA: 'SI' => solo ver; otro valor => los 4.
         SELECT rm.PK_TROL_MENU, m.PK_TMENU, m.CODIGO, m.NOMBRE, m.URL,
-               COALESCE(rp.CREAR,    rm.SOLO_LECTURA IS DISTINCT FROM 'SI') AS base_crear,
-               COALESCE(rp.EDITAR,   rm.SOLO_LECTURA IS DISTINCT FROM 'SI') AS base_editar,
-               COALESCE(rp.ELIMINAR, rm.SOLO_LECTURA IS DISTINCT FROM 'SI') AS base_eliminar,
+               m.ADMITE_GUARDAR  AND COALESCE(rp.CREAR,    rm.SOLO_LECTURA IS DISTINCT FROM 'SI') AS base_crear,
+               m.ADMITE_GUARDAR  AND COALESCE(rp.EDITAR,   rm.SOLO_LECTURA IS DISTINCT FROM 'SI') AS base_editar,
+               m.ADMITE_ELIMINAR AND COALESCE(rp.ELIMINAR, rm.SOLO_LECTURA IS DISTINCT FROM 'SI') AS base_eliminar,
                COALESCE(rp.VER, TRUE)                                      AS base_ver
           FROM roles_activos ra
           JOIN academico_test.TROL_MENU rm
             ON rm.FK_TROL = ra.pk_trol AND rm.ACTIVE = TRUE
           LEFT JOIN academico_test.TROL_MENU_PERMISO rp
             ON rp.FK_TROL_MENU = rm.PK_TROL_MENU
+          -- Un menu inactivo, o con el padre inactivo, no da permisos.
           JOIN academico_test.TMENU m
-            ON m.PK_TMENU = rm.FK_TMENU AND m.ACTIVE = TRUE
+            ON m.PK_TMENU = rm.FK_TMENU AND m.ACTIVE = TRUE AND m.ESTADO = 'A'
+          LEFT JOIN academico_test.TMENU pm ON pm.PK_TMENU = m.FK_TMENU
+         WHERE m.FK_TMENU IS NULL OR (pm.ACTIVE = TRUE AND pm.ESTADO = 'A')
     ),
     bloqueos AS (
         -- Recorte del usuario: solo cuenta SOLO_LECTURA = 'SI'.
@@ -167,7 +183,7 @@ END;
 $function$;
 
 COMMENT ON FUNCTION academico_test.fn_usuario_permisos_menu(BIGINT) IS
-    'Capabilities por menu para el front (GET /usuarios/permisos-menu); CODIGO en forma canonica (fn_menu_codigo_canonico). El super admin del SSO (fn_es_super_admin_sso) obtiene todos los menus activos con los cuatro permisos, en linea con el bypass de nivel 0 de fn_assert_permiso_seccion.';
+    'Capabilities por menu para el front (GET /usuarios/permisos-menu); CODIGO en forma canonica (fn_menu_codigo_canonico). Guardar y eliminar se limitan a lo que admite el menu (TMENU.ADMITE_GUARDAR/ADMITE_ELIMINAR). El super admin del SSO (fn_es_super_admin_sso) obtiene todos los menus activos con todo lo que admitan.';
 
 -- GET /usuarios/:PK_TUSUARIO/permisos-menu: solo CEVAL-SUPER_ADMINISTRADOR,
 -- porque recibe el PK y cualquier rol veria los permisos de otros.

@@ -1,6 +1,6 @@
 package com.co.eurekatic.aicontrol.observaciones;
 
-import com.co.eurekatic.aicontrol.config.AiProperties;
+import com.co.eurekatic.aicontrol.config.ia.AiProperties;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.data.redis.core.StringRedisTemplate;

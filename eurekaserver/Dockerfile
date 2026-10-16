@@ -31,6 +31,8 @@ COPY provisioner/pom.xml provisioner/
 COPY notification-service/pom.xml notification-service/
 COPY reporting-service/pom.xml reporting-service/
 COPY ai-control-service/pom.xml ai-control-service/
+COPY scheduler-service/pom.xml scheduler-service/
+COPY comms-service/pom.xml comms-service/
 
 # Pre-resolve dependencies (offline) so the actual build doesn't
 # re-download them on every source change. `-pl` restricts the

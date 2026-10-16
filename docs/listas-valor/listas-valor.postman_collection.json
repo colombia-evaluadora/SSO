@@ -1,9 +1,9 @@
 {
   "info": {
     "_postman_id": "5b1d3f0e-6a77-4c2e-9d41-listas-valor",
-    "name": "SSO - Listas de valores (CRUD y autorreferencia)",
+    "name": "SSO - Listas de valores",
     "description": {
-      "content": "CRUD de `TLISTA_VALOR` (V101–V104): categorías, valores y relación reflexiva padre/hijo. Gate: menú `LISTAS_VALOR` (VER/CREAR/EDITAR/ELIMINAR, sin alcance). Los valores de sistema (`esSistema`) solo los elimina el super administrador. Correr con `newman run docs/listas-valor/listas-valor.postman_collection.json -e <entorno>`; el entorno aporta `baseUrl`, `email` y `password`. La corrida queda en cero (pasos 11-12); con `MANUAL=1` se conservan los datos.",
+      "content": "Lista de Valores (V101–V104, selector en V442): listas (`TLISTA_CATEGORIA`, código inmutable y nombre editable), valores con etiqueta, orden, predeterminado único y estado activo/inactivo, y jerarquía lista padre → valor padre. Gate: menú `LISTAS_VALOR` (VER/CREAR/EDITAR/ELIMINAR, sin alcance), solo del Superadministrador. Los valores usados por el sistema (`esSistema`) se renombran y reordenan, pero no se inactivan ni se eliminan. `GET /select/:CATEGORIA` es el catálogo de los formularios. Correr con `newman run docs/listas-valor/listas-valor.postman_collection.json -e <entorno>`; el entorno aporta `baseUrl`, `email` y `password`. La corrida queda en cero (pasos de limpieza); con `MANUAL=1` se conservan los datos. Antes de reiniciar query-service-eval-col las rutas nuevas responden 404.",
       "type": "text/markdown"
     },
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
@@ -40,7 +40,7 @@
           "raw": "{\n  \"email\": \"{{email}}\",\n  \"password\": \"{{password}}\"\n}"
         },
         "description": {
-          "content": "Guarda el token. El usuario debe tener el menú LISTAS_VALOR (Super administrador, Rector, Jefe de sistema del establecimiento, Auxiliar administrativo).",
+          "content": "Guarda el token. El usuario debe ser Superadministrador: es el único rol con el menú LISTAS_VALOR (y SSO-ADMIN en role_query).",
           "type": "text/markdown"
         }
       },
@@ -58,7 +58,7 @@
       ]
     },
     {
-      "name": "1 - Listar categorías",
+      "name": "1 - Listar listas (BUSCAR)",
       "request": {
         "method": "GET",
         "header": [
@@ -72,7 +72,6 @@
           }
         ],
         "url": {
-          "raw": "{{baseUrl}}/api/eval-col/listas-valor/categorias",
           "host": [
             "{{baseUrl}}"
           ],
@@ -81,10 +80,17 @@
             "eval-col",
             "listas-valor",
             "categorias"
-          ]
+          ],
+          "query": [
+            {
+              "key": "BUSCAR",
+              "value": "estado"
+            }
+          ],
+          "raw": "{{baseUrl}}/api/eval-col/listas-valor/categorias?BUSCAR=estado"
         },
         "description": {
-          "content": "Categorías con valores activos: `[{categoria, totalValores, esSistema, categoriasPadre}]`.",
+          "content": "Listas activas, habilitadas o no, con `descripcion`, `categoriaPadre`, `esOrdinal`, `habilitada`, `totalValores`, `esSistema` y `predeterminado`. `BUSCAR` filtra por código (con `_` o espacios) o descripción.",
           "type": "text/markdown"
         }
       },
@@ -96,14 +102,14 @@
             "exec": [
               "pm.test('status 200', () => pm.response.to.have.status(200));",
               "const res = pm.response.json().rows[0].resultado;",
-              "pm.test('es arreglo', () => pm.expect(res).to.be.an('array'));"
+              "pm.test('arreglo', () => pm.expect(res).to.be.an('array'));"
             ]
           }
         }
       ]
     },
     {
-      "name": "2 - Crear categoría padre",
+      "name": "2 - Crear lista padre con valores",
       "request": {
         "method": "POST",
         "header": [
@@ -117,7 +123,6 @@
           }
         ],
         "url": {
-          "raw": "{{baseUrl}}/api/eval-col/listas-valor/categorias",
           "host": [
             "{{baseUrl}}"
           ],
@@ -126,7 +131,12 @@
             "eval-col",
             "listas-valor",
             "categorias"
-          ]
+          ],
+          "raw": "{{baseUrl}}/api/eval-col/listas-valor/categorias"
+        },
+        "description": {
+          "content": "Lista sin lista padre con dos valores en el orden enviado; el primero queda predeterminado. Guarda `padreId` y `padre2Id`.",
+          "type": "text/markdown"
         },
         "body": {
           "mode": "raw",
@@ -135,11 +145,7 @@
               "language": "json"
             }
           },
-          "raw": "{\n  \"CATEGORIA\": \"{{categoriaPadre}}\",\n  \"VALORES\": \"[{\\\"nombre\\\": \\\"Antioquia\\\", \\\"valor\\\": \\\"05\\\"}, {\\\"nombre\\\": \\\"Caldas\\\", \\\"valor\\\": \\\"17\\\"}]\"\n}"
-        },
-        "description": {
-          "content": "Crea la categoría con sus primeros valores. `VALORES` va como **string JSON serializado** (así lo liga el ParamBinder). Guarda `padreId` y `padre2Id`.",
-          "type": "text/markdown"
+          "raw": "{\n  \"CATEGORIA\": \"{{categoriaPadre}}\",\n  \"NOMBRE\": \"Departamento (prueba)\",\n  \"DESCRIPCION\": \"Departamentos de prueba de la colección Postman\",\n  \"VALORES\": \"[{\\\"nombre\\\":\\\"Antioquia\\\",\\\"valor\\\":\\\"ANTIOQUIA\\\",\\\"predeterminado\\\":true},{\\\"nombre\\\":\\\"Santander\\\",\\\"valor\\\":\\\"SANTANDER\\\"}]\"\n}"
         }
       },
       "event": [
@@ -152,14 +158,16 @@
               "const res = pm.response.json().rows[0].resultado;",
               "pm.environment.set('padreId', res.valores[0].pkListaValor);",
               "pm.environment.set('padre2Id', res.valores[1].pkListaValor);",
-              "pm.test('dos valores, no de sistema', () => { pm.expect(res.valores).to.have.length(2); pm.expect(res.valores[0].esSistema).to.eql(false); });"
+              "pm.test('orden 1..n', () => pm.expect(res.valores.map(v => v.orden)).to.eql([1, 2]));",
+              "pm.test('predeterminado', () => pm.expect(res.predeterminado).to.eql(res.valores[0].pkListaValor));",
+              "pm.test('nombre visible', () => pm.expect(res.nombre).to.eql('Departamento (prueba)'));"
             ]
           }
         }
       ]
     },
     {
-      "name": "3 - Crear categoría hija con padre",
+      "name": "3 - Crear lista hija con lista padre",
       "request": {
         "method": "POST",
         "header": [
@@ -173,7 +181,6 @@
           }
         ],
         "url": {
-          "raw": "{{baseUrl}}/api/eval-col/listas-valor/categorias",
           "host": [
             "{{baseUrl}}"
           ],
@@ -182,7 +189,12 @@
             "eval-col",
             "listas-valor",
             "categorias"
-          ]
+          ],
+          "raw": "{{baseUrl}}/api/eval-col/listas-valor/categorias"
+        },
+        "description": {
+          "content": "`PADRE` es el código de la lista padre: cada valor debe llevar un `padre` de esa lista. Sin `NOMBRE`, se deriva del código. Guarda `hijoId`.",
+          "type": "text/markdown"
         },
         "body": {
           "mode": "raw",
@@ -191,11 +203,7 @@
               "language": "json"
             }
           },
-          "raw": "{\n  \"CATEGORIA\": \"{{categoriaHija}}\",\n  \"VALORES\": \"[{\\\"nombre\\\":\\\"Medellín\\\",\\\"valor\\\":\\\"05001\\\",\\\"padre\\\":{{padreId}}}]\"\n}"
-        },
-        "description": {
-          "content": "Relación reflexiva: el valor apunta a un valor de otra categoría (municipio → departamento). Guarda `hijoId`.",
-          "type": "text/markdown"
+          "raw": "{\n  \"CATEGORIA\": \"{{categoriaHija}}\",\n  \"PADRE\": \"{{categoriaPadre}}\",\n  \"VALORES\": \"[{\\\"nombre\\\":\\\"Medellín\\\",\\\"valor\\\":\\\"MEDELLIN\\\",\\\"padre\\\":{{padreId}}}]\"\n}"
         }
       },
       "event": [
@@ -206,15 +214,17 @@
             "exec": [
               "pm.test('status 200', () => pm.response.to.have.status(200));",
               "const res = pm.response.json().rows[0].resultado;",
+              "pm.test('nombre derivado del código', () => pm.expect(res.nombre).to.eql('Prueba municipio'));",
               "pm.environment.set('hijoId', res.valores[0].pkListaValor);",
-              "pm.test('padre asignado', () => pm.expect(res.valores[0].padre.pkListaValor).to.eql(Number(pm.environment.get('padreId'))));"
+              "pm.test('lista padre', () => pm.expect(res.categoriaPadre).to.eql(pm.collectionVariables.get('categoriaPadre')));",
+              "pm.test('valor padre', () => pm.expect(res.valores[0].padre.pkListaValor).to.eql(Number(pm.environment.get('padreId'))));"
             ]
           }
         }
       ]
     },
     {
-      "name": "4 - Agregar valor a categoría existente",
+      "name": "4 - Agregar valor con etiqueta y orden",
       "request": {
         "method": "POST",
         "header": [
@@ -228,7 +238,6 @@
           }
         ],
         "url": {
-          "raw": "{{baseUrl}}/api/eval-col/listas-valor",
           "host": [
             "{{baseUrl}}"
           ],
@@ -236,7 +245,12 @@
             "api",
             "eval-col",
             "listas-valor"
-          ]
+          ],
+          "raw": "{{baseUrl}}/api/eval-col/listas-valor"
+        },
+        "description": {
+          "content": "`ORDEN` 1 lo pone primero y desplaza a los demás. Guarda `hijo2Id`.",
+          "type": "text/markdown"
         },
         "body": {
           "mode": "raw",
@@ -245,11 +259,7 @@
               "language": "json"
             }
           },
-          "raw": "{\n  \"CATEGORIA\": \"{{categoriaHija}}\",\n  \"NOMBRE\": \"Envigado\",\n  \"VALOR\": \"05266\",\n  \"ACCION\": null,\n  \"PADRE\": {{padreId}}\n}"
-        },
-        "description": {
-          "content": "Agrega un valor a una categoría que ya existe. Guarda `hijo2Id`.",
-          "type": "text/markdown"
+          "raw": "{\n  \"CATEGORIA\": \"{{categoriaHija}}\",\n  \"NOMBRE\": \"Lebrija\",\n  \"VALOR\": \"LEBRIJA\",\n  \"ETIQUETA\": \"Leb\",\n  \"ORDEN\": 1,\n  \"PADRE\": \"{{padre2Id}}\"\n}"
         }
       },
       "event": [
@@ -260,14 +270,333 @@
             "exec": [
               "pm.test('status 200', () => pm.response.to.have.status(200));",
               "const res = pm.response.json().rows[0].resultado;",
-              "pm.environment.set('hijo2Id', res.pkListaValor);"
+              "pm.environment.set('hijo2Id', res.pkListaValor);",
+              "pm.test('orden 1', () => pm.expect(res.orden).to.eql(1));",
+              "pm.test('etiqueta', () => pm.expect(res.etiqueta).to.eql('Leb'));"
             ]
           }
         }
       ]
     },
     {
-      "name": "5 - Listar hijos de un padre",
+      "name": "5 - Valor sin valor padre en lista con padre → 400",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "eval-col",
+            "listas-valor"
+          ],
+          "raw": "{{baseUrl}}/api/eval-col/listas-valor"
+        },
+        "description": {
+          "content": "La lista tiene lista padre: el valor padre es obligatorio (22023).",
+          "type": "text/markdown"
+        },
+        "body": {
+          "mode": "raw",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          },
+          "raw": "{\n  \"CATEGORIA\": \"{{categoriaHija}}\",\n  \"NOMBRE\": \"Huérfano\",\n  \"VALOR\": \"HUERFANO\"\n}"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('status 400', () => pm.response.to.have.status(400));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "6 - Código con formato inválido → 400",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "eval-col",
+            "listas-valor"
+          ],
+          "raw": "{{baseUrl}}/api/eval-col/listas-valor"
+        },
+        "description": {
+          "content": "El código de un valor nuevo es de 2 a 20 mayúsculas, números o `_` (22023).",
+          "type": "text/markdown"
+        },
+        "body": {
+          "mode": "raw",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          },
+          "raw": "{\n  \"CATEGORIA\": \"{{categoriaHija}}\",\n  \"NOMBRE\": \"San Gil\",\n  \"VALOR\": \"SAN-GIL\",\n  \"PADRE\": \"{{padre2Id}}\"\n}"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('status 400', () => pm.response.to.have.status(400));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "7 - Nombre repetido en la lista → 409",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "eval-col",
+            "listas-valor"
+          ],
+          "raw": "{{baseUrl}}/api/eval-col/listas-valor"
+        },
+        "description": {
+          "content": "El nombre es único dentro de la lista, sin distinguir mayúsculas (23505).",
+          "type": "text/markdown"
+        },
+        "body": {
+          "mode": "raw",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          },
+          "raw": "{\n  \"CATEGORIA\": \"{{categoriaHija}}\",\n  \"NOMBRE\": \"lebrija\",\n  \"VALOR\": \"LEBRIJA_2\",\n  \"PADRE\": \"{{padre2Id}}\"\n}"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('status 409', () => pm.response.to.have.status(409));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "8 - Modificar lista (nombre, descripción y ordinal)",
+      "request": {
+        "method": "PUT",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "eval-col",
+            "listas-valor",
+            "categorias",
+            "{{categoriaHija}}"
+          ],
+          "raw": "{{baseUrl}}/api/eval-col/listas-valor/categorias/{{categoriaHija}}"
+        },
+        "description": {
+          "content": "El código no se edita. `NOMBRE` y `ORDINAL` omitidos no cambian; `DESCRIPCION` y `PADRE` se reemplazan (omitidos quedan en NULL).",
+          "type": "text/markdown"
+        },
+        "body": {
+          "mode": "raw",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          },
+          "raw": "{\n  \"NOMBRE\": \"Municipio (prueba)\",\n  \"DESCRIPCION\": \"Municipios de prueba de la colección Postman\",\n  \"PADRE\": \"{{categoriaPadre}}\",\n  \"ORDINAL\": true\n}"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('status 200', () => pm.response.to.have.status(200));",
+              "const res = pm.response.json().rows[0].resultado;",
+              "pm.test('ordinal', () => pm.expect(res.esOrdinal).to.eql(true));",
+              "pm.test('nombre nuevo', () => pm.expect(res.nombre).to.eql('Municipio (prueba)'));",
+              "pm.test('código intacto', () => pm.expect(res.categoria).to.eql(pm.collectionVariables.get('categoriaHija')));",
+              "pm.test('conserva lista padre', () => pm.expect(res.categoriaPadre).to.eql(pm.collectionVariables.get('categoriaPadre')));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "9 - Nombre de otra lista → 409",
+      "request": {
+        "method": "PUT",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "eval-col",
+            "listas-valor",
+            "categorias",
+            "{{categoriaHija}}"
+          ],
+          "raw": "{{baseUrl}}/api/eval-col/listas-valor/categorias/{{categoriaHija}}"
+        },
+        "description": {
+          "content": "El nombre visible es único entre las listas, sin distinguir mayúsculas (23505).",
+          "type": "text/markdown"
+        },
+        "body": {
+          "mode": "raw",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          },
+          "raw": "{\n  \"NOMBRE\": \"departamento (PRUEBA)\",\n  \"PADRE\": \"{{categoriaPadre}}\"\n}"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('status 409', () => pm.response.to.have.status(409));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "10 - Lista padre en ciclo → 400",
+      "request": {
+        "method": "PUT",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "eval-col",
+            "listas-valor",
+            "categorias",
+            "{{categoriaPadre}}"
+          ],
+          "raw": "{{baseUrl}}/api/eval-col/listas-valor/categorias/{{categoriaPadre}}"
+        },
+        "description": {
+          "content": "La lista hija no puede ser lista padre de su propia lista padre (22023).",
+          "type": "text/markdown"
+        },
+        "body": {
+          "mode": "raw",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          },
+          "raw": "{\n  \"PADRE\": \"{{categoriaHija}}\"\n}"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('status 400', () => pm.response.to.have.status(400));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "11 - Listar valores de la lista (administración)",
       "request": {
         "method": "GET",
         "header": [
@@ -281,7 +610,6 @@
           }
         ],
         "url": {
-          "raw": "{{baseUrl}}/api/eval-col/listas-valor?PADRE={{padreId}}",
           "host": [
             "{{baseUrl}}"
           ],
@@ -292,13 +620,14 @@
           ],
           "query": [
             {
-              "key": "PADRE",
-              "value": "{{padreId}}"
+              "key": "CATEGORIA",
+              "value": "{{categoriaHija}}"
             }
-          ]
+          ],
+          "raw": "{{baseUrl}}/api/eval-col/listas-valor?CATEGORIA={{categoriaHija}}"
         },
         "description": {
-          "content": "`?PADRE=` lista los valores hijos (p.ej. municipios de un departamento). También admite `?CATEGORIA=`.",
+          "content": "Valores no eliminados, habilitados o no, en su orden.",
           "type": "text/markdown"
         }
       },
@@ -310,14 +639,14 @@
             "exec": [
               "pm.test('status 200', () => pm.response.to.have.status(200));",
               "const res = pm.response.json().rows[0].resultado;",
-              "pm.test('dos hijos', () => pm.expect(res).to.have.length(2));"
+              "pm.test('Lebrija primero', () => pm.expect(res[0].pkListaValor).to.eql(Number(pm.environment.get('hijo2Id'))));"
             ]
           }
         }
       ]
     },
     {
-      "name": "6 - Editar valor (nombre y padre)",
+      "name": "12 - Reordenar valores",
       "request": {
         "method": "PUT",
         "header": [
@@ -331,7 +660,6 @@
           }
         ],
         "url": {
-          "raw": "{{baseUrl}}/api/eval-col/listas-valor/{{hijo2Id}}",
           "host": [
             "{{baseUrl}}"
           ],
@@ -339,8 +667,15 @@
             "api",
             "eval-col",
             "listas-valor",
-            "{{hijo2Id}}"
-          ]
+            "categorias",
+            "{{categoriaHija}}",
+            "orden"
+          ],
+          "raw": "{{baseUrl}}/api/eval-col/listas-valor/categorias/{{categoriaHija}}/orden"
+        },
+        "description": {
+          "content": "`ORDEN`: todos los pk de la lista en el orden nuevo.",
+          "type": "text/markdown"
         },
         "body": {
           "mode": "raw",
@@ -349,11 +684,7 @@
               "language": "json"
             }
           },
-          "raw": "{\n  \"NOMBRE\": \"Envigado (editado)\",\n  \"ACCION\": null,\n  \"PADRE\": {{padre2Id}}\n}"
-        },
-        "description": {
-          "content": "Reemplaza nombre, acción y padre. `CATEGORIA` y `VALOR` no se editan. Un campo omitido queda en NULL.",
-          "type": "text/markdown"
+          "raw": "{\n  \"ORDEN\": \"[{{hijoId}}, {{hijo2Id}}]\"\n}"
         }
       },
       "event": [
@@ -364,14 +695,14 @@
             "exec": [
               "pm.test('status 200', () => pm.response.to.have.status(200));",
               "const res = pm.response.json().rows[0].resultado;",
-              "pm.test('nombre y padre nuevos', () => { pm.expect(res.nombre).to.eql('Envigado (editado)'); pm.expect(res.padre.pkListaValor).to.eql(Number(pm.environment.get('padre2Id'))); });"
+              "pm.test('Medellín primero', () => pm.expect(res[0].pkListaValor).to.eql(Number(pm.environment.get('hijoId'))));"
             ]
           }
         }
       ]
     },
     {
-      "name": "7 - Eliminar valor con hijos → 409",
+      "name": "13 - Reordenar incompleto → 400",
       "request": {
         "method": "PUT",
         "header": [
@@ -385,7 +716,6 @@
           }
         ],
         "url": {
-          "raw": "{{baseUrl}}/api/eval-col/listas-valor/{{padreId}}/eliminar",
           "host": [
             "{{baseUrl}}"
           ],
@@ -393,52 +723,15 @@
             "api",
             "eval-col",
             "listas-valor",
-            "{{padreId}}",
-            "eliminar"
-          ]
+            "categorias",
+            "{{categoriaHija}}",
+            "orden"
+          ],
+          "raw": "{{baseUrl}}/api/eval-col/listas-valor/categorias/{{categoriaHija}}/orden"
         },
         "description": {
-          "content": "Un valor referenciado (aquí por un hijo activo; en general por cualquier FK activa) no se puede eliminar: 23503 → 409.",
+          "content": "Falta un pk de la lista (22023).",
           "type": "text/markdown"
-        }
-      },
-      "event": [
-        {
-          "listen": "test",
-          "script": {
-            "type": "text/javascript",
-            "exec": [
-              "pm.test('status 409', () => pm.response.to.have.status(409));"
-            ]
-          }
-        }
-      ]
-    },
-    {
-      "name": "8 - Crear categoría repetida → 409",
-      "request": {
-        "method": "POST",
-        "header": [
-          {
-            "key": "Content-Type",
-            "value": "application/json"
-          },
-          {
-            "key": "Authorization",
-            "value": "Bearer {{token}}"
-          }
-        ],
-        "url": {
-          "raw": "{{baseUrl}}/api/eval-col/listas-valor/categorias",
-          "host": [
-            "{{baseUrl}}"
-          ],
-          "path": [
-            "api",
-            "eval-col",
-            "listas-valor",
-            "categorias"
-          ]
         },
         "body": {
           "mode": "raw",
@@ -447,63 +740,7 @@
               "language": "json"
             }
           },
-          "raw": "{\n  \"CATEGORIA\": \"{{categoriaPadre}}\",\n  \"VALORES\": \"[{\\\"nombre\\\": \\\"X\\\", \\\"valor\\\": \\\"X\\\"}]\"\n}"
-        },
-        "description": {
-          "content": "La categoría ya tiene valores activos: 23505 → 409.",
-          "type": "text/markdown"
-        }
-      },
-      "event": [
-        {
-          "listen": "test",
-          "script": {
-            "type": "text/javascript",
-            "exec": [
-              "pm.test('status 409', () => pm.response.to.have.status(409));"
-            ]
-          }
-        }
-      ]
-    },
-    {
-      "name": "9 - Padre en ciclo → 400",
-      "request": {
-        "method": "PUT",
-        "header": [
-          {
-            "key": "Content-Type",
-            "value": "application/json"
-          },
-          {
-            "key": "Authorization",
-            "value": "Bearer {{token}}"
-          }
-        ],
-        "url": {
-          "raw": "{{baseUrl}}/api/eval-col/listas-valor/{{padreId}}",
-          "host": [
-            "{{baseUrl}}"
-          ],
-          "path": [
-            "api",
-            "eval-col",
-            "listas-valor",
-            "{{padreId}}"
-          ]
-        },
-        "body": {
-          "mode": "raw",
-          "options": {
-            "raw": {
-              "language": "json"
-            }
-          },
-          "raw": "{\n  \"NOMBRE\": \"Antioquia\",\n  \"ACCION\": null,\n  \"PADRE\": {{hijoId}}\n}"
-        },
-        "description": {
-          "content": "Asignar como padre a un descendiente cerraría un ciclo: 22023 → 400.",
-          "type": "text/markdown"
+          "raw": "{\n  \"ORDEN\": \"[{{hijoId}}]\"\n}"
         }
       },
       "event": [
@@ -519,7 +756,62 @@
       ]
     },
     {
-      "name": "10 - Listar sin filtros → 400",
+      "name": "14 - Marcar predeterminado",
+      "request": {
+        "method": "PUT",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "eval-col",
+            "listas-valor",
+            "{{hijo2Id}}",
+            "predeterminado"
+          ],
+          "raw": "{{baseUrl}}/api/eval-col/listas-valor/{{hijo2Id}}/predeterminado"
+        },
+        "description": {
+          "content": "Solo un predeterminado por lista: marcar uno desmarca el anterior.",
+          "type": "text/markdown"
+        },
+        "body": {
+          "mode": "raw",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          },
+          "raw": "{\n  \"PREDETERMINADO\": true\n}"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('status 200', () => pm.response.to.have.status(200));",
+              "const res = pm.response.json().rows[0].resultado;",
+              "pm.test('predeterminado', () => pm.expect(res.predeterminado).to.eql(true));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "15 - Selector: solo el predeterminado",
       "request": {
         "method": "GET",
         "header": [
@@ -533,7 +825,630 @@
           }
         ],
         "url": {
-          "raw": "{{baseUrl}}/api/eval-col/listas-valor",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "eval-col",
+            "select",
+            "{{categoriaHija}}"
+          ],
+          "query": [
+            {
+              "key": "PREDETERMINADO",
+              "value": "true"
+            }
+          ],
+          "raw": "{{baseUrl}}/api/eval-col/select/{{categoriaHija}}?PREDETERMINADO=true"
+        },
+        "description": {
+          "content": "Catálogo de los formularios. `PREDETERMINADO=true` devuelve 0 o 1 fila.",
+          "type": "text/markdown"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('status 200', () => pm.response.to.have.status(200));",
+              "const rows = pm.response.json().rows;",
+              "pm.test('una fila', () => pm.expect(rows.length).to.eql(1));",
+              "pm.test('es Lebrija', () => pm.expect(Number(rows[0].pk_lista_valor)).to.eql(Number(pm.environment.get('hijo2Id'))));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "16 - Inactivar valor padre con hijos activos → 409",
+      "request": {
+        "method": "PUT",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "eval-col",
+            "listas-valor",
+            "{{padre2Id}}",
+            "estado"
+          ],
+          "raw": "{{baseUrl}}/api/eval-col/listas-valor/{{padre2Id}}/estado"
+        },
+        "description": {
+          "content": "Santander tiene a Lebrija activo en la lista hija: hay que inactivarlo primero (23503).",
+          "type": "text/markdown"
+        },
+        "body": {
+          "mode": "raw",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          },
+          "raw": "{\n  \"HABILITADO\": false\n}"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('status 409', () => pm.response.to.have.status(409));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "17 - Inactivar valor",
+      "request": {
+        "method": "PUT",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "eval-col",
+            "listas-valor",
+            "{{hijo2Id}}",
+            "estado"
+          ],
+          "raw": "{{baseUrl}}/api/eval-col/listas-valor/{{hijo2Id}}/estado"
+        },
+        "description": {
+          "content": "Deja de salir en los selectores y deja de ser predeterminado; sigue en los registros que ya lo tienen.",
+          "type": "text/markdown"
+        },
+        "body": {
+          "mode": "raw",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          },
+          "raw": "{\n  \"HABILITADO\": false\n}"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('status 200', () => pm.response.to.have.status(200));",
+              "const res = pm.response.json().rows[0].resultado;",
+              "pm.test('inactivo', () => pm.expect(res.habilitado).to.eql(false));",
+              "pm.test('ya no es predeterminado', () => pm.expect(res.predeterminado).to.eql(false));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "18 - Selector sin el valor inactivo",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "eval-col",
+            "select",
+            "{{categoriaHija}}"
+          ],
+          "raw": "{{baseUrl}}/api/eval-col/select/{{categoriaHija}}"
+        },
+        "description": {
+          "content": "Solo valores habilitados, en su orden, con `etiqueta`, `orden`, `predeterminado` y `fk_tlista_valor_padre`.",
+          "type": "text/markdown"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('status 200', () => pm.response.to.have.status(200));",
+              "const rows = pm.response.json().rows;",
+              "pm.test('sin Lebrija', () => pm.expect(rows.map(r => Number(r.pk_lista_valor))).to.not.include(Number(pm.environment.get('hijo2Id'))));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "19 - Activar valor",
+      "request": {
+        "method": "PUT",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "eval-col",
+            "listas-valor",
+            "{{hijo2Id}}",
+            "estado"
+          ],
+          "raw": "{{baseUrl}}/api/eval-col/listas-valor/{{hijo2Id}}/estado"
+        },
+        "description": {
+          "content": "Vuelve a estar disponible en los selectores.",
+          "type": "text/markdown"
+        },
+        "body": {
+          "mode": "raw",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          },
+          "raw": "{\n  \"HABILITADO\": true\n}"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('status 200', () => pm.response.to.have.status(200));",
+              "const res = pm.response.json().rows[0].resultado;",
+              "pm.test('activo', () => pm.expect(res.habilitado).to.eql(true));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "20 - Inactivar lista padre con lista hija activa → 409",
+      "request": {
+        "method": "PUT",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "eval-col",
+            "listas-valor",
+            "categorias",
+            "{{categoriaPadre}}",
+            "estado"
+          ],
+          "raw": "{{baseUrl}}/api/eval-col/listas-valor/categorias/{{categoriaPadre}}/estado"
+        },
+        "description": {
+          "content": "La lista hija depende de ella (23503).",
+          "type": "text/markdown"
+        },
+        "body": {
+          "mode": "raw",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          },
+          "raw": "{\n  \"HABILITADA\": false\n}"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('status 409', () => pm.response.to.have.status(409));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "21 - Inactivar lista",
+      "request": {
+        "method": "PUT",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "eval-col",
+            "listas-valor",
+            "categorias",
+            "{{categoriaHija}}",
+            "estado"
+          ],
+          "raw": "{{baseUrl}}/api/eval-col/listas-valor/categorias/{{categoriaHija}}/estado"
+        },
+        "description": {
+          "content": "Una lista inactiva no ofrece valores en los selectores.",
+          "type": "text/markdown"
+        },
+        "body": {
+          "mode": "raw",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          },
+          "raw": "{\n  \"HABILITADA\": false\n}"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('status 200', () => pm.response.to.have.status(200));",
+              "const res = pm.response.json().rows[0].resultado;",
+              "pm.test('inactiva', () => pm.expect(res.habilitada).to.eql(false));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "22 - Selector de lista inactiva vacío",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "eval-col",
+            "select",
+            "{{categoriaHija}}"
+          ],
+          "raw": "{{baseUrl}}/api/eval-col/select/{{categoriaHija}}"
+        },
+        "description": {
+          "content": "Sin filas.",
+          "type": "text/markdown"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('status 200', () => pm.response.to.have.status(200));",
+              "const rows = pm.response.json().rows;",
+              "pm.test('vacío', () => pm.expect(rows.length).to.eql(0));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "23 - Activar lista",
+      "request": {
+        "method": "PUT",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "eval-col",
+            "listas-valor",
+            "categorias",
+            "{{categoriaHija}}",
+            "estado"
+          ],
+          "raw": "{{baseUrl}}/api/eval-col/listas-valor/categorias/{{categoriaHija}}/estado"
+        },
+        "description": {
+          "content": "Vuelve a ofrecer sus valores.",
+          "type": "text/markdown"
+        },
+        "body": {
+          "mode": "raw",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          },
+          "raw": "{\n  \"HABILITADA\": true\n}"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('status 200', () => pm.response.to.have.status(200));",
+              "const res = pm.response.json().rows[0].resultado;",
+              "pm.test('activa', () => pm.expect(res.habilitada).to.eql(true));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "24 - Modificar valor (nombre y etiqueta)",
+      "request": {
+        "method": "PUT",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "eval-col",
+            "listas-valor",
+            "{{hijoId}}"
+          ],
+          "raw": "{{baseUrl}}/api/eval-col/listas-valor/{{hijoId}}"
+        },
+        "description": {
+          "content": "NOMBRE, ETIQUETA, ACCION y PADRE se reemplazan; el código no cambia.",
+          "type": "text/markdown"
+        },
+        "body": {
+          "mode": "raw",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          },
+          "raw": "{\n  \"NOMBRE\": \"Medellín (capital)\",\n  \"ETIQUETA\": \"Med\",\n  \"PADRE\": \"{{padreId}}\"\n}"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('status 200', () => pm.response.to.have.status(200));",
+              "const res = pm.response.json().rows[0].resultado;",
+              "pm.test('nombre', () => pm.expect(res.nombre).to.eql('Medellín (capital)'));",
+              "pm.test('código intacto', () => pm.expect(res.valor).to.eql('MEDELLIN'));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "25 - Crear lista repetida → 409",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "eval-col",
+            "listas-valor",
+            "categorias"
+          ],
+          "raw": "{{baseUrl}}/api/eval-col/listas-valor/categorias"
+        },
+        "description": {
+          "content": "El código ya existe (23505).",
+          "type": "text/markdown"
+        },
+        "body": {
+          "mode": "raw",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          },
+          "raw": "{\n  \"CATEGORIA\": \"{{categoriaPadre}}\"\n}"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('status 409', () => pm.response.to.have.status(409));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "26 - Eliminar lista padre con lista hija → 409",
+      "request": {
+        "method": "PUT",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "eval-col",
+            "listas-valor",
+            "categorias",
+            "{{categoriaPadre}}",
+            "eliminar"
+          ],
+          "raw": "{{baseUrl}}/api/eval-col/listas-valor/categorias/{{categoriaPadre}}/eliminar"
+        },
+        "description": {
+          "content": "Es lista padre de otra activa (23503).",
+          "type": "text/markdown"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('status 409', () => pm.response.to.have.status(409));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "27 - Listar sin filtros → 400",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
           "host": [
             "{{baseUrl}}"
           ],
@@ -541,10 +1456,11 @@
             "api",
             "eval-col",
             "listas-valor"
-          ]
+          ],
+          "raw": "{{baseUrl}}/api/eval-col/listas-valor"
         },
         "description": {
-          "content": "Sin `CATEGORIA` ni `PADRE`: 22023 → 400.",
+          "content": "Hace falta CATEGORIA o PADRE (22023).",
           "type": "text/markdown"
         }
       },
@@ -561,7 +1477,7 @@
       ]
     },
     {
-      "name": "11 - Limpieza: eliminar categoría hija",
+      "name": "28 - Limpieza: eliminar lista hija",
       "request": {
         "method": "PUT",
         "header": [
@@ -575,7 +1491,6 @@
           }
         ],
         "url": {
-          "raw": "{{baseUrl}}/api/eval-col/listas-valor/categorias/{{categoriaHija}}/eliminar",
           "host": [
             "{{baseUrl}}"
           ],
@@ -586,25 +1501,15 @@
             "categorias",
             "{{categoriaHija}}",
             "eliminar"
-          ]
+          ],
+          "raw": "{{baseUrl}}/api/eval-col/listas-valor/categorias/{{categoriaHija}}/eliminar"
         },
         "description": {
-          "content": "Baja lógica de todos sus valores. Se salta con la variable de entorno `MANUAL`.",
+          "content": "Deja la corrida en cero. Con `MANUAL=1` se salta.",
           "type": "text/markdown"
         }
       },
       "event": [
-        {
-          "listen": "test",
-          "script": {
-            "type": "text/javascript",
-            "exec": [
-              "pm.test('status 200', () => pm.response.to.have.status(200));",
-              "const res = pm.response.json().rows[0].resultado;",
-              "pm.test('dos eliminados', () => pm.expect(res.valoresEliminados).to.eql(2));"
-            ]
-          }
-        },
         {
           "listen": "prerequest",
           "script": {
@@ -613,11 +1518,22 @@
               "if (pm.environment.get('MANUAL')) { pm.execution.skipRequest(); }"
             ]
           }
+        },
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('status 200', () => pm.response.to.have.status(200));",
+              "const res = pm.response.json().rows[0].resultado;",
+              "pm.test('2 valores', () => pm.expect(res.valoresEliminados).to.eql(2));"
+            ]
+          }
         }
       ]
     },
     {
-      "name": "12 - Limpieza: eliminar categoría padre",
+      "name": "29 - Limpieza: eliminar lista padre",
       "request": {
         "method": "PUT",
         "header": [
@@ -631,7 +1547,6 @@
           }
         ],
         "url": {
-          "raw": "{{baseUrl}}/api/eval-col/listas-valor/categorias/{{categoriaPadre}}/eliminar",
           "host": [
             "{{baseUrl}}"
           ],
@@ -642,29 +1557,32 @@
             "categorias",
             "{{categoriaPadre}}",
             "eliminar"
-          ]
+          ],
+          "raw": "{{baseUrl}}/api/eval-col/listas-valor/categorias/{{categoriaPadre}}/eliminar"
         },
         "description": {
-          "content": "Ya sin hijos activos, la categoría padre se puede eliminar. Deja la corrida en cero.",
+          "content": "Deja la corrida en cero. Con `MANUAL=1` se salta.",
           "type": "text/markdown"
         }
       },
       "event": [
-        {
-          "listen": "test",
-          "script": {
-            "type": "text/javascript",
-            "exec": [
-              "pm.test('status 200', () => pm.response.to.have.status(200));"
-            ]
-          }
-        },
         {
           "listen": "prerequest",
           "script": {
             "type": "text/javascript",
             "exec": [
               "if (pm.environment.get('MANUAL')) { pm.execution.skipRequest(); }"
+            ]
+          }
+        },
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('status 200', () => pm.response.to.have.status(200));",
+              "const res = pm.response.json().rows[0].resultado;",
+              "pm.test('2 valores', () => pm.expect(res.valoresEliminados).to.eql(2));"
             ]
           }
         }

@@ -526,6 +526,161 @@
           }
         }
       ]
+    },
+    {
+      "name": "[409] calificar con BASE_VERSION vieja (OFFLINE_CONFLICT, escritura offline)",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"409 conflicto\", () => pm.response.to.have.status(409));",
+              "pm.test(\"codigo estable\", () => pm.expect(pm.response.json().code).to.eql(\"OFFLINE_CONFLICT\"));"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "PUT",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"CALIFICACION\": \"{\\\"niveles\\\":[{\\\"pkCriterio\\\":{{pkCriterio}},\\\"pkNivel\\\":{{pkNivel}}}]}\",\n  \"FECHA\": \"2026-09-04\"\n,\n  \"BASE_VERSION\": \"2000-01-01T00:00:00.000000\"\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/api/eval-col/planeador/actividades/estudiantes/{{tactividadEstudianteId}}/calificar",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "eval-col",
+            "planeador",
+            "actividades",
+            "estudiantes",
+            "{{tactividadEstudianteId}}",
+            "calificar"
+          ],
+          "variable": [
+            {
+              "key": "ID",
+              "value": "{{tactividadEstudianteId}}",
+              "description": "PK_TACTIVIDAD_ESTUDIANTE (NO PK_TACTIVIDAD)"
+            }
+          ]
+        },
+        "description": {
+          "content": "BE-2: `BASE_VERSION` es la `version` de la celda en `GET /planeador/planilla/calificaciones` (`fn_actividad_nota_version`; `NONE` = aún sin nota). Si la nota cambió, `fn_actividad_nota_calificar` lanza CE409 -> **409** `code: \"OFFLINE_CONFLICT\"` con `detail` = `{ current, version }` y no escribe nada. Sin `BASE_VERSION` califica como siempre.",
+          "type": "text/markdown"
+        }
+      },
+      "response": [
+        {
+          "name": "200 — % calculado",
+          "originalRequest": {
+            "method": "PUT",
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/actividades/estudiantes/{{tactividadEstudianteId}}/calificar"
+            }
+          },
+          "status": "OK",
+          "code": 200,
+          "_postman_previewlanguage": "json",
+          "header": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            }
+          ],
+          "body": "{\n  \"rows\": [ { \"calificacion\": 85.5 } ]\n}"
+        },
+        {
+          "name": "400 — sin asistencia registrada (22023)",
+          "originalRequest": {
+            "method": "PUT",
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/actividades/estudiantes/{{tactividadEstudianteId}}/calificar"
+            }
+          },
+          "status": "Bad Request",
+          "code": 400,
+          "_postman_previewlanguage": "json",
+          "header": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            }
+          ],
+          "body": "{\n  \"error\": \"No se puede calificar: no hay asistencia registrada para esta asignatura el 2026-09-04\",\n  \"sqlState\": \"22023\"\n}"
+        },
+        {
+          "name": "400 — rubrica incompleta (22023)",
+          "originalRequest": {
+            "method": "PUT",
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/actividades/estudiantes/{{tactividadEstudianteId}}/calificar"
+            }
+          },
+          "status": "Bad Request",
+          "code": 400,
+          "_postman_previewlanguage": "json",
+          "header": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            }
+          ],
+          "body": "{\n  \"error\": \"La rubrica tiene 3 criterio(s) activo(s) pero se calificaron 1 — deben cubrirse todos\",\n  \"sqlState\": \"22023\"\n}"
+        },
+        {
+          "name": "400 — actividad FORMATIVA (22023)",
+          "originalRequest": {
+            "method": "PUT",
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/actividades/estudiantes/{{tactividadEstudianteId}}/calificar"
+            }
+          },
+          "status": "Bad Request",
+          "code": 400,
+          "_postman_previewlanguage": "json",
+          "header": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            }
+          ],
+          "body": "{\n  \"error\": \"La actividad 900 tiene referente FORMATIVO: no se califica con nota numerica, use fn_actividad_observar_estudiante o fn_actividad_observar_grupal\",\n  \"sqlState\": \"22023\"\n}"
+        },
+        {
+          "name": "404 — asignacion actividad-estudiante inexistente (P0002)",
+          "originalRequest": {
+            "method": "PUT",
+            "url": {
+              "raw": "{{baseUrl}}/api/eval-col/planeador/actividades/estudiantes/99999999/calificar"
+            }
+          },
+          "status": "Not Found",
+          "code": 404,
+          "_postman_previewlanguage": "json",
+          "header": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            }
+          ],
+          "body": "{\n  \"error\": \"No se encontro la asignacion actividad-estudiante solicitada\",\n  \"sqlState\": \"P0002\"\n}"
+        }
+      ]
     }
   ]
 }

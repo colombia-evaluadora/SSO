@@ -1,0 +1,26 @@
+# Catalogo de tareas del scheduler-service (montado en /config/tareas.yml).
+# Cambiarlo solo exige reiniciar el contenedor, no recompilar.
+#
+# Campos de cada tarea:
+#   id                 [a-z0-9-], unico; es tambien el nombre del bloqueo
+#   cron | cada        exactamente uno: cron de 6 campos (seg min hora dia mes dow) o duracion (10m)
+#   zona               opcional, por defecto scheduler.zona (America/Bogota)
+#   activa             por defecto true
+#   accion             sql | http (o cualquier bean que implemente Accion)
+#   parametros         los de la accion (ver AccionSql / AccionHttp)
+#   bloqueo-maximo     por defecto 10m; mayor que la duracion esperada
+#   bloqueo-minimo     por defecto 5s
+#   reintentos         por defecto 0
+#   espera-reintento   por defecto 30s
+#
+# Los secretos van como ${VARIABLE} y se pasan por environment.
+scheduler:
+  tareas: []
+#   - id: periodos-evaluacion-estado
+#     cron: "0 5 0 * * *"
+#     accion: sql
+#     reintentos: 2
+#     parametros:
+#       sentencia: SELECT academico_test.fn_periodo_evaluacion_transicionar_interno(CURRENT_DATE)
+#       ajustes:
+#         app.user_id: scheduler-service
