@@ -152,9 +152,10 @@ jobs:
             # `afectados` a partir de los pom.xml (ver mas abajo).
             todo:
               - '**'
+            # Solo la UI: editar este workflow (algo que hace cada servicio
+            # nuevo) no debe lanzar los cuatro jobs de admin-ui.
             admin-ui:
               - 'admin-ui/**'
-              - '.github/workflows/ci.yml'
             migrations:
               - 'postgres/migrations/**'
               - '.github/scripts/check-flyway-migrations.sh'
