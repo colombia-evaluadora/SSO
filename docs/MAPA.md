@@ -1,7 +1,7 @@
 # Mapa del dominio
 
 **Generado** por `python scripts/migration-analysis mapa` — no editar a mano.
-Estado: 511 migraciones (V1–V561.1), 1409 funciones vivas, 49 endpoints vivos. Ultima generacion: 2026-10-16.
+Estado: 511 migraciones (V1–V561.1), 1413 funciones vivas, 49 endpoints vivos. Ultima generacion: 2026-10-16.
 
 Para una **funcion**, la migracion dueña es la que hay que editar: es su ultima escritura viva, no la que la creo.
 
@@ -23,15 +23,15 @@ Las secciones son las categorias funcionales de `scripts/migration-analysis/anal
 - [Calificación con instrumentos](#calificacion) — 120 funcion(es), 1 endpoint(s)
 - [Referentes curriculares](#referentes) — 68 funcion(es), 1 endpoint(s)
 - [Planeador (unidades, actividades)](#planeador) — 286 funcion(es), 15 endpoint(s)
-- [Lista de Valores](#listas_valor) — 82 funcion(es), 0 endpoint(s)
+- [Lista de Valores](#listas_valor) — 83 funcion(es), 0 endpoint(s)
 - [Auditoría](#auditoria) — 6 funcion(es), 9 endpoint(s)
 - [Periodos académicos](#periodos) — 113 funcion(es), 0 endpoint(s)
 - [Funcionarios](#funcionarios) — 43 funcion(es), 2 endpoint(s)
 - [Sedes](#sedes) — 29 funcion(es), 0 endpoint(s)
 - [Establecimiento](#establecimiento) — 14 funcion(es), 0 endpoint(s)
 - [Menús](#menus) — 35 funcion(es), 1 endpoint(s)
-- [Permisos](#permisos) — 22 funcion(es), 0 endpoint(s)
-- [Estructura académica](#academico) — 176 funcion(es), 0 endpoint(s)
+- [Permisos](#permisos) — 23 funcion(es), 0 endpoint(s)
+- [Estructura académica](#academico) — 178 funcion(es), 0 endpoint(s)
 - [Plataforma SSO](#plataforma) — 26 funcion(es), 0 endpoint(s)
 - [Sin clasificar](#sin-clasificar) — 1 funcion(es), 0 endpoint(s)
 
@@ -1050,7 +1050,7 @@ Las secciones son las categorias funcionales de `scripts/migration-analysis/anal
 | `academico_test.fn_listavalor_eliminar_interno` | 2 | V102 | V103 |
 | `academico_test.fn_listavalor_estado` | 3 | V103 | V104 |
 | `academico_test.fn_listavalor_estado_interno` | 3 | V102 | V103 |
-| `academico_test.fn_listavalor_etiqueta` | 1 | V101 | V103, V312 |
+| `academico_test.fn_listavalor_etiqueta` | 1 | V101 | V103, V311, V312 |
 | `academico_test.fn_listavalor_json_fila` | 2 | V102 | — |
 | `academico_test.fn_listavalor_json_interno` | 1 | V102 | — |
 | `academico_test.fn_listavalor_lista_nombre` | 1 | V101 | V103 |
@@ -1095,6 +1095,7 @@ Las secciones son las categorias funcionales de `scripts/migration-analysis/anal
 | `academico_test.fn_listavalor_validar_valor_unico` | 2 | V101 | — |
 | `academico_test.fn_listavalor_validar_valores_lote` | 1 | V101 | V102 |
 | `academico_test.fn_listavalor_valor_nombre` | 1 | V101 | — |
+| `academico_test.fn_parametroedad_calendario_eliminar_interno` | 1 | V311 | V312 |
 | `academico_test.fn_parametroedad_validar_edad` | 1 | V310 | V311 |
 | `academico_test.fn_parametroedad_validar_fecha_corte` | 2 | V310 | V311 |
 | `academico_test.fn_parametroedad_validar_valor_lista` | 3 | V310 | V311, V312 |
@@ -1424,6 +1425,7 @@ Las secciones son las categorias funcionales de `scripts/migration-analysis/anal
 | `academico_test.fn_grupo_director_rol_sync_interno` | 5 | V43.2 | — |
 | `academico_test.fn_list_roles` | 1 | V113 | V126 |
 | `academico_test.fn_padre_obtener_por_id` | 2 | V161 | V204 |
+| `academico_test.fn_parametroedad_calendario_eliminar` | 2 | V312 | V313 |
 | `academico_test.fn_parametroedad_calendario_guardar` | 4 | V312 | V313 |
 | `academico_test.fn_parametroedad_listar` | 1 | V312 | V313 |
 | `academico_test.fn_rango_supera` | 4 | V298 | V297 |
@@ -1561,6 +1563,8 @@ Las secciones son las categorias funcionales de `scripts/migration-analysis/anal
 | `academico_test.fn_horario_validar_plan_item` | 2 | V45.1 | — |
 | `academico_test.fn_nivel_ensenanza_listar` | 1 | V43.3 | V79, V214 |
 | `academico_test.fn_parametroedad_calendario_guardar_interno` | 4 | V311 | V312 |
+| `academico_test.fn_parametroedad_grado_eliminar` | 2 | V312 | V313 |
+| `academico_test.fn_parametroedad_grado_eliminar_interno` | 1 | V311 | V312 |
 | `academico_test.fn_parametroedad_grado_guardar` | 3 | V312 | V313 |
 | `academico_test.fn_parametroedad_grado_guardar_interno` | 3 | V311 | V312 |
 | `academico_test.fn_parametroedad_listar_interno` | 0 | V311 | V312 |

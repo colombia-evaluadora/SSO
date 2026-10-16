@@ -1,7 +1,7 @@
 -- V308 - Parámetros de edad, capa 0 de 5: tablas.
 -- Edad recomendada por grado (lista GRADOS) y fecha de corte por calendario
 -- (lista CALENDARIO), con las que se calcula la situación de edad. Son globales:
--- un registro por grado y uno por calendario, sin baja (la vista no elimina).
+-- un registro por grado y uno por calendario; eliminar borra la fila.
 -- Depende de: V22 (TLISTA_VALOR), V283 (auditoría CDC).
 
 SET search_path TO academico_test, public;

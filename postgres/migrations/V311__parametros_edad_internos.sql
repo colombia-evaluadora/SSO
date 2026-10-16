@@ -1,5 +1,5 @@
 -- V311 - Parámetros de edad, capa 3 de 5: núcleos sin permisos.
--- Guardar es un upsert por grado o calendario: la vista solo crea y modifica.
+-- Guardar es un upsert por grado o calendario; eliminar borra la fila.
 -- Depende de: V308 (tablas), V310 (validaciones).
 
 SET search_path TO academico_test, public;
@@ -87,3 +87,39 @@ $$;
 
 COMMENT ON FUNCTION academico_test.fn_parametroedad_calendario_guardar_interno(BIGINT, BIGINT, INTEGER, INTEGER)
     IS 'INTERNO: crea o reemplaza la fecha de corte del calendario (pk de la lista CALENDARIO). Errores: P0002 calendario inexistente; 22023 mes, día o 29 de febrero.';
+
+CREATE OR REPLACE FUNCTION academico_test.fn_parametroedad_grado_eliminar_interno(p_fk_tlv_grado BIGINT)
+RETURNS JSONB
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    DELETE FROM academico_test.TEDAD_RECOMENDADA_GRADO WHERE FK_TLV_GRADO = p_fk_tlv_grado;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'El grado % no tiene edad recomendada',
+            academico_test.fn_listavalor_etiqueta(p_fk_tlv_grado)
+            USING ERRCODE = 'P0002';
+    END IF;
+    RETURN jsonb_build_object('pkGrado', p_fk_tlv_grado);
+END;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_parametroedad_grado_eliminar_interno(BIGINT)
+    IS 'INTERNO: quita la edad recomendada del grado; sus inscripciones y matrículas quedan Sin calcular. Errores: P0002 si el grado no tenía edad.';
+
+CREATE OR REPLACE FUNCTION academico_test.fn_parametroedad_calendario_eliminar_interno(p_fk_tlv_calendario BIGINT)
+RETURNS JSONB
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    DELETE FROM academico_test.TFECHA_CORTE_CALENDARIO WHERE FK_TLV_CALENDARIO = p_fk_tlv_calendario;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'El calendario % no tiene fecha de corte',
+            academico_test.fn_listavalor_etiqueta(p_fk_tlv_calendario)
+            USING ERRCODE = 'P0002';
+    END IF;
+    RETURN jsonb_build_object('pkCalendario', p_fk_tlv_calendario);
+END;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_parametroedad_calendario_eliminar_interno(BIGINT)
+    IS 'INTERNO: quita la fecha de corte del calendario; sus inscripciones y matrículas quedan Sin calcular. Errores: P0002 si el calendario no tenía fecha de corte.';
