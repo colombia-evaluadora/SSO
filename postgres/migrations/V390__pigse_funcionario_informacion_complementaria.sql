@@ -193,7 +193,6 @@ CREATE OR REPLACE FUNCTION pigse.fn_fun_actualizar(
 AS $function$
 DECLARE
     v_pk_usuario BIGINT;
-    v_fk_id_user BIGINT;
 BEGIN
     SELECT f.FK_TUSUARIO INTO v_pk_usuario
       FROM pigse.TFUNCIONARIO f WHERE f.PK_TFUNCIONARIO = p_pk_funcionario AND f.ACTIVE = TRUE;
@@ -225,30 +224,7 @@ BEGIN
            SEGUNDO_APELLIDO   = COALESCE(p_segundo_apellido, SEGUNDO_APELLIDO),
            TELEFONO           = COALESCE(p_telefono, TELEFONO),
            MODIFIED_BY        = p_pk_usuario_solicitante::VARCHAR, MODIFIED_AT = CURRENT_TIMESTAMP
-     WHERE PK_TUSUARIO = v_pk_usuario
-    RETURNING FK_ID_USER INTO v_fk_id_user;
-
-    -- El correo de login vive en public.users y en PIGSE no hay trigger que
-    -- lo sincronice desde TUSUARIO (V215 solo cubre academico_test). Sin esto
-    -- un cambio de correo dejaba TUSUARIO con el correo nuevo y la cuenta SSO
-    -- con el viejo: "olvide contrasena"/"reenviar activacion" con el correo
-    -- nuevo no encontraban cuenta (404, no se enviaba nada) y
-    -- reactivar-por-cambio-de-correo se rechazaba porque "todavia existe una
-    -- cuenta con el correo anterior". Se mueve users.email aca, en la misma
-    -- transaccion, y el front luego llama a reactivar-por-cambio-de-correo.
-    IF p_correo_electronico IS NOT NULL AND v_fk_id_user IS NOT NULL THEN
-        IF EXISTS (
-            SELECT 1 FROM public.users
-             WHERE UPPER(email) = UPPER(TRIM(p_correo_electronico)) AND id_user <> v_fk_id_user
-        ) THEN
-            RAISE EXCEPTION 'Ya existe otra cuenta con el correo %', TRIM(p_correo_electronico) USING ERRCODE = '23505';
-        END IF;
-
-        UPDATE public.users
-           SET email = TRIM(p_correo_electronico)
-         WHERE id_user = v_fk_id_user
-           AND email IS DISTINCT FROM TRIM(p_correo_electronico);
-    END IF;
+     WHERE PK_TUSUARIO = v_pk_usuario;
 
     UPDATE pigse.TFUNCIONARIO
        SET FK_TESTABLECIMIENTO     = COALESCE(p_fk_establecimiento, FK_TESTABLECIMIENTO),
