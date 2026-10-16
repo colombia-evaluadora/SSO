@@ -44,6 +44,9 @@ CATEGORIES: list[tuple[str, str, str, str]] = [
     ("planeador", "Planeador (unidades, actividades)", "#1E88E5",
      r"planeador|unidad|tunidad|actividad|tactividad|evidencia|enunciado|material|tarea|"
      r"docente_unidad|tablero_docente|calendario_docente|biblioteca|rotulo"),
+    # Antes que auditoria: fn_listavalor_etiqueta casaria con su `etiqueta`.
+    ("listas_valor", "Lista de Valores", "#0277BD",
+     r"listavalor|lista_valor|listas-valor|tlista_categoria|/select\b"),
     ("auditoria", "Auditoría", "#546E7A",
      r"audit|clickhouse|tsesion_web|sesion|etiqueta|revert|publication|replica|"
      r"context-emitter|context_emitter|cdc|pg_cron"),
@@ -62,7 +65,7 @@ CATEGORIES: list[tuple[str, str, str, str]] = [
      r"nivel|criterio|evaluation|tipo_evaluacion"),
     ("plataforma", "Plataforma SSO", "#78909C",
      r"auth|users|microservice|query|endpoint|app\b|app_|token|password|file|archivo|"
-     r"tarchivo|catalog|lista_valor|tlista|usuario|tusuario|group"),
+     r"tarchivo|catalog|usuario|tusuario|group"),
 ]
 FALLBACK = "sin-clasificar"
 FALLBACK_LABEL = "Sin clasificar"

@@ -1,7 +1,7 @@
 # Mapa del dominio
 
 **Generado** por `python scripts/migration-analysis mapa` — no editar a mano.
-Estado: 502 migraciones (V1–V559.3), 1357 funciones vivas, 49 endpoints vivos. Ultima generacion: 2026-10-14.
+Estado: 502 migraciones (V1–V559.3), 1394 funciones vivas, 49 endpoints vivos. Ultima generacion: 2026-10-15.
 
 Para una **funcion**, la migracion dueña es la que hay que editar: es su ultima escritura viva, no la que la creo.
 
@@ -13,9 +13,9 @@ Las secciones son las categorias funcionales de `scripts/migration-analysis/anal
 
 ## Indice
 
-- [PIGSE](#pigse) — 104 funcion(es), 20 endpoint(s)
+- [PIGSE](#pigse) — 99 funcion(es), 20 endpoint(s)
 - [Prematrícula](#prematricula) — 16 funcion(es), 0 endpoint(s)
-- [Matrícula](#matricula) — 70 funcion(es), 0 endpoint(s)
+- [Matrícula](#matricula) — 71 funcion(es), 0 endpoint(s)
 - [Informes](#informes) — 63 funcion(es), 0 endpoint(s)
 - [Observaciones](#observaciones) — 30 funcion(es), 0 endpoint(s)
 - [Asistencias](#asistencias) — 72 funcion(es), 0 endpoint(s)
@@ -23,15 +23,16 @@ Las secciones son las categorias funcionales de `scripts/migration-analysis/anal
 - [Calificación con instrumentos](#calificacion) — 119 funcion(es), 1 endpoint(s)
 - [Referentes curriculares](#referentes) — 68 funcion(es), 1 endpoint(s)
 - [Planeador (unidades, actividades)](#planeador) — 286 funcion(es), 15 endpoint(s)
-- [Auditoría](#auditoria) — 12 funcion(es), 9 endpoint(s)
+- [Lista de Valores](#listas_valor) — 79 funcion(es), 0 endpoint(s)
+- [Auditoría](#auditoria) — 6 funcion(es), 9 endpoint(s)
 - [Periodos académicos](#periodos) — 113 funcion(es), 0 endpoint(s)
 - [Funcionarios](#funcionarios) — 43 funcion(es), 2 endpoint(s)
 - [Sedes](#sedes) — 29 funcion(es), 0 endpoint(s)
 - [Establecimiento](#establecimiento) — 14 funcion(es), 0 endpoint(s)
 - [Menús](#menus) — 35 funcion(es), 1 endpoint(s)
-- [Permisos](#permisos) — 23 funcion(es), 0 endpoint(s)
+- [Permisos](#permisos) — 20 funcion(es), 0 endpoint(s)
 - [Estructura académica](#academico) — 171 funcion(es), 0 endpoint(s)
-- [Plataforma SSO](#plataforma) — 55 funcion(es), 0 endpoint(s)
+- [Plataforma SSO](#plataforma) — 26 funcion(es), 0 endpoint(s)
 
 <a id="pigse"></a>
 
@@ -66,11 +67,6 @@ Las secciones son las categorias funcionales de `scripts/migration-analysis/anal
 | `academico_test.fn_actividad_validar_existente` | 1 | V496.1 | V496.2, V496.3, V496.5, V496.7, V531.3 |
 | `academico_test.fn_ente_usuario_crear` | 6 | V150 | V263 |
 | `academico_test.fn_ente_usuario_soft_delete` | 4 | V150 | — |
-| `academico_test.fn_listavalor_actualizar_interno` | 5 | V102 | V103 |
-| `academico_test.fn_listavalor_categoria_eliminar` | 2 | V103 | V104 |
-| `academico_test.fn_listavalor_categoria_eliminar_interno` | 2 | V102 | V103 |
-| `academico_test.fn_listavalor_crear` | 6 | V103 | V104 |
-| `academico_test.fn_listavalor_eliminar_interno` | 2 | V102 | V103 |
 | `academico_test.fn_listavalor_validar_categoria_existente` | 1 | V101 | V102, V103 |
 | `academico_test.fn_listavalor_validar_existente` | 1 | V101 | V102, V103 |
 | `academico_test.fn_pigse_cumplimiento_listar` | 0 | V156 | V196 |
@@ -261,6 +257,7 @@ Las secciones son las categorias funcionales de `scripts/migration-analysis/anal
 | `academico_test.fn_matricula_validar_plazo_matricula` | 1 | V415 | — |
 | `academico_test.fn_matricula_valor_forzar_no_editable` | 0 | V159 | — |
 | `academico_test.fn_padre_actualizar` | 23 | V177 | — |
+| `academico_test.fn_padre_crear` | 22 | V161 | V177, V415 |
 | `academico_test.fn_periodo_resolver_matricula` | 4 | V415 | V127 |
 | `academico_test.fn_periodo_validar_limite_matricula` | 3 | V37.1 | — |
 | `academico_test.fn_usu_autocompletar_por_documento` | 2 | V51 | V93 |
@@ -1014,6 +1011,92 @@ Las secciones son las categorias funcionales de `scripts/migration-analysis/anal
 | `academico_test.tg_planeador_minimo_enunciado_evidencia` | 0 | V496.2 | — |
 | `academico_test.tg_tactividad_depurar_por_unidad` | 0 | V496.2 | — |
 
+<a id="listas_valor"></a>
+
+## Lista de Valores
+
+| Funcion | Params | Migracion dueña | La usan |
+|---|---|---|---|
+| `academico_test.fn_create_plan_from_value` | 2 | V113 | V119 |
+| `academico_test.fn_list_plans_from_value` | 1 | V113 | V119 |
+| `academico_test.fn_listavalor_actualizar` | 7 | V103 | V104 |
+| `academico_test.fn_listavalor_actualizar_interno` | 7 | V102 | V103 |
+| `academico_test.fn_listavalor_assert_sistema` | 3 | V103 | — |
+| `academico_test.fn_listavalor_assert_sistema_edicion` | 4 | V103 | — |
+| `academico_test.fn_listavalor_categoria_actualizar` | 6 | V103 | V104 |
+| `academico_test.fn_listavalor_categoria_actualizar_interno` | 6 | V102 | V103 |
+| `academico_test.fn_listavalor_categoria_crear` | 7 | V103 | V104 |
+| `academico_test.fn_listavalor_categoria_crear_interno` | 7 | V102 | V103 |
+| `academico_test.fn_listavalor_categoria_eliminar` | 2 | V103 | V104 |
+| `academico_test.fn_listavalor_categoria_eliminar_interno` | 2 | V102 | V103 |
+| `academico_test.fn_listavalor_categoria_estado` | 3 | V103 | V104 |
+| `academico_test.fn_listavalor_categoria_estado_interno` | 3 | V102 | V103 |
+| `academico_test.fn_listavalor_categoria_json_interno` | 1 | V102 | — |
+| `academico_test.fn_listavalor_categoria_nombre_defecto` | 1 | V101 | V102 |
+| `academico_test.fn_listavalor_categoria_ordenar` | 3 | V103 | V104 |
+| `academico_test.fn_listavalor_categoria_ordenar_interno` | 3 | V102 | V103 |
+| `academico_test.fn_listavalor_categorias_filas_interno` | 2 | V102 | — |
+| `academico_test.fn_listavalor_categorias_listar` | 2 | V103 | V104 |
+| `academico_test.fn_listavalor_categorias_listar_interno` | 1 | V102 | V103 |
+| `academico_test.fn_listavalor_completar_tg` | 0 | V101 | — |
+| `academico_test.fn_listavalor_crear` | 9 | V103 | V104 |
+| `academico_test.fn_listavalor_crear_interno` | 9 | V102 | V103 |
+| `academico_test.fn_listavalor_eliminar` | 2 | V103 | V104 |
+| `academico_test.fn_listavalor_eliminar_interno` | 2 | V102 | V103 |
+| `academico_test.fn_listavalor_estado` | 3 | V103 | V104 |
+| `academico_test.fn_listavalor_estado_interno` | 3 | V102 | V103 |
+| `academico_test.fn_listavalor_etiqueta` | 1 | V101 | V103 |
+| `academico_test.fn_listavalor_json_fila` | 2 | V102 | — |
+| `academico_test.fn_listavalor_json_interno` | 1 | V102 | — |
+| `academico_test.fn_listavalor_lista_nombre` | 1 | V101 | V103 |
+| `academico_test.fn_listavalor_listar` | 4 | V103 | V104 |
+| `academico_test.fn_listavalor_listar_interno` | 3 | V102 | V103 |
+| `academico_test.fn_listavalor_mover_interno` | 3 | V102 | — |
+| `academico_test.fn_listavalor_opciones` | 3 | V102 | V442 |
+| `academico_test.fn_listavalor_predeterminado` | 3 | V103 | V104 |
+| `academico_test.fn_listavalor_predeterminado_interno` | 3 | V102 | V103 |
+| `academico_test.fn_listavalor_sincronizar_secuencia_interno` | 0 | V102 | — |
+| `academico_test.fn_listavalor_validar_accion` | 1 | V101 | — |
+| `academico_test.fn_listavalor_validar_activo` | 1 | V101 | V102, V103 |
+| `academico_test.fn_listavalor_validar_actualizacion` | 6 | V101 | V102 |
+| `academico_test.fn_listavalor_validar_categoria_actualizacion` | 4 | V101 | V102 |
+| `academico_test.fn_listavalor_validar_categoria_creacion` | 4 | V101 | V102 |
+| `academico_test.fn_listavalor_validar_categoria_formato` | 1 | V101 | — |
+| `academico_test.fn_listavalor_validar_categoria_nombre` | 1 | V101 | — |
+| `academico_test.fn_listavalor_validar_categoria_nombre_unico` | 2 | V101 | — |
+| `academico_test.fn_listavalor_validar_categoria_nueva` | 1 | V101 | — |
+| `academico_test.fn_listavalor_validar_categoria_padre` | 2 | V101 | — |
+| `academico_test.fn_listavalor_validar_categoria_padre_compatible` | 2 | V101 | — |
+| `academico_test.fn_listavalor_validar_categoria_sin_hijas` | 1 | V101 | V102 |
+| `academico_test.fn_listavalor_validar_categoria_sin_hijas_habilitadas` | 1 | V101 | V102 |
+| `academico_test.fn_listavalor_validar_categoria_sin_sistema` | 1 | V101 | V102 |
+| `academico_test.fn_listavalor_validar_descripcion` | 1 | V101 | — |
+| `academico_test.fn_listavalor_validar_etiqueta` | 1 | V101 | — |
+| `academico_test.fn_listavalor_validar_filtro_listado` | 2 | V101 | V102 |
+| `academico_test.fn_listavalor_validar_habilitado` | 1 | V101 | V102, V103 |
+| `academico_test.fn_listavalor_validar_no_en_uso` | 1 | V101 | V102 |
+| `academico_test.fn_listavalor_validar_no_sistema` | 1 | V101 | V102 |
+| `academico_test.fn_listavalor_validar_nombre` | 1 | V101 | — |
+| `academico_test.fn_listavalor_validar_nombre_unico` | 3 | V101 | — |
+| `academico_test.fn_listavalor_validar_orden` | 1 | V101 | — |
+| `academico_test.fn_listavalor_validar_orden_lote` | 2 | V101 | V102 |
+| `academico_test.fn_listavalor_validar_padre_activo` | 1 | V101 | — |
+| `academico_test.fn_listavalor_validar_padre_categoria` | 2 | V101 | — |
+| `academico_test.fn_listavalor_validar_padre_habilitado` | 1 | V101 | V102 |
+| `academico_test.fn_listavalor_validar_padre_sin_ciclo` | 2 | V101 | — |
+| `academico_test.fn_listavalor_validar_sin_hijos_habilitados` | 1 | V101 | V102 |
+| `academico_test.fn_listavalor_validar_valor` | 1 | V101 | — |
+| `academico_test.fn_listavalor_validar_valor_nuevo` | 7 | V101 | V102 |
+| `academico_test.fn_listavalor_validar_valor_unico` | 2 | V101 | — |
+| `academico_test.fn_listavalor_validar_valores_lote` | 1 | V101 | V102 |
+| `academico_test.fn_listavalor_valor_nombre` | 1 | V101 | — |
+| `academico_test.fn_solicitud_aprobacion_estado` | 1 | V496.18 | — |
+| `academico_test.fn_solicitud_aprobacion_tipo` | 1 | V496.18 | V496.19, V496.20 |
+| `academico_test.fn_tlv_estado_resultado_pk` | 1 | V496.5 | V496.6 |
+| `academico_test.fn_tlv_momento_registro_pk` | 1 | V496.5 | V496.6 |
+| `academico_test.fn_tlv_solicitud_estado_pk` | 1 | V496.18 | V469.3, V496.6, V496.19, V496.23, V536, V537 |
+| `academico_test.fn_tlv_solicitud_tipo_pk` | 1 | V496.18 | V469.3, V496.6, V496.19, V496.23, V536, V537 |
+
 <a id="auditoria"></a>
 
 ## Auditoría
@@ -1037,12 +1120,6 @@ Las secciones son las categorias funcionales de `scripts/migration-analysis/anal
 | `academico_test.fn_cdc_asegurar_auditoria` | 2 | V283 | V496.1, V496.18, V557, V559 |
 | `academico_test.fn_cdc_evento_tabla_nueva` | 0 | V283 | — |
 | `academico_test.fn_grado_grupo_etiqueta` | 3 | V224 | V251, V452, V481, V490, V526, V528… |
-| `academico_test.fn_listavalor_actualizar` | 5 | V103 | V104 |
-| `academico_test.fn_listavalor_eliminar` | 2 | V103 | V104 |
-| `academico_test.fn_listavalor_etiqueta` | 1 | V101 | V103 |
-| `academico_test.fn_listavalor_validar_activo` | 1 | V101 | V102, V103 |
-| `academico_test.fn_listavalor_validar_no_en_uso` | 1 | V101 | V102 |
-| `academico_test.fn_listavalor_validar_padre_sin_ciclo` | 2 | V101 | — |
 | `academico_test.fn_mi_establecimiento_para_auditoria` | 1 | V496.22 | — |
 
 <a id="periodos"></a>
@@ -1335,13 +1412,10 @@ Las secciones son las categorias funcionales de `scripts/migration-analysis/anal
 | `academico_test.fn_assert_rango_rol_otorgable` | 2 | V298 | V111, V297 |
 | `academico_test.fn_assert_superadmin` | 1 | V113 | V115, V119, V498 |
 | `academico_test.fn_cat_roles_listar` | 1 | V304 | V119 |
+| `academico_test.fn_estudiante_obtener_por_id` | 2 | V160 | V204 |
 | `academico_test.fn_grupo_director_rol_sync_interno` | 5 | V43.2 | — |
 | `academico_test.fn_list_roles` | 1 | V113 | V126 |
-| `academico_test.fn_listavalor_assert_sistema` | 3 | V103 | — |
-| `academico_test.fn_listavalor_assert_sistema_edicion` | 4 | V103 | — |
-| `academico_test.fn_listavalor_categoria_crear` | 3 | V103 | V104 |
-| `academico_test.fn_listavalor_categorias_listar` | 1 | V103 | V104 |
-| `academico_test.fn_listavalor_listar` | 3 | V103 | V104 |
+| `academico_test.fn_padre_obtener_por_id` | 2 | V161 | V204 |
 | `academico_test.fn_rango_supera` | 4 | V298 | V297 |
 | `academico_test.fn_rol_categoria_nivel` | 1 | V29 | V297, V298, V300, V489, V535, V553 |
 | `academico_test.fn_sincronizar_rol_publico` | 1 | V302 | V51, V111, V300, V301, V399, V414… |
@@ -1540,42 +1614,13 @@ Las secciones son las categorias funcionales de `scripts/migration-analysis/anal
 | `academico_test.fn_cat_discapacidades_listar` | 1 | V58 | V119 |
 | `academico_test.fn_cat_municipios_listar` | 1 | V58 | V119 |
 | `academico_test.fn_cat_propiedad_juridica_listar` | 1 | V58 | V119 |
-| `academico_test.fn_create_plan_from_value` | 2 | V113 | V119 |
 | `academico_test.fn_es_super_admin_sso` | 1 | V29 | V302, V303, V304 |
-| `academico_test.fn_estudiante_obtener_por_id` | 2 | V160 | V204 |
 | `academico_test.fn_estudiante_soft_delete` | 4 | V160 | V166 |
-| `academico_test.fn_list_plans_from_value` | 1 | V113 | V119 |
-| `academico_test.fn_listavalor_categoria_crear_interno` | 3 | V102 | V103 |
-| `academico_test.fn_listavalor_categorias_listar_interno` | 0 | V102 | V103 |
-| `academico_test.fn_listavalor_crear_interno` | 6 | V102 | V103 |
-| `academico_test.fn_listavalor_json_interno` | 1 | V102 | — |
-| `academico_test.fn_listavalor_listar_interno` | 2 | V102 | V103 |
-| `academico_test.fn_listavalor_sincronizar_secuencia_interno` | 0 | V102 | — |
-| `academico_test.fn_listavalor_validar_accion` | 1 | V101 | — |
-| `academico_test.fn_listavalor_validar_actualizacion` | 4 | V101 | V102 |
-| `academico_test.fn_listavalor_validar_categoria_formato` | 1 | V101 | V102 |
-| `academico_test.fn_listavalor_validar_categoria_nueva` | 1 | V101 | V102 |
-| `academico_test.fn_listavalor_validar_filtro_listado` | 2 | V101 | V102 |
-| `academico_test.fn_listavalor_validar_nombre` | 1 | V101 | — |
-| `academico_test.fn_listavalor_validar_padre_activo` | 1 | V101 | — |
-| `academico_test.fn_listavalor_validar_padre_categoria` | 3 | V101 | — |
-| `academico_test.fn_listavalor_validar_valor` | 1 | V101 | — |
-| `academico_test.fn_listavalor_validar_valor_nuevo` | 5 | V101 | V102 |
-| `academico_test.fn_listavalor_validar_valor_unico` | 2 | V101 | — |
-| `academico_test.fn_listavalor_validar_valores_lote` | 1 | V101 | V102 |
-| `academico_test.fn_padre_crear` | 22 | V161 | V177, V415 |
-| `academico_test.fn_padre_obtener_por_id` | 2 | V161 | V204 |
 | `academico_test.fn_padre_soft_delete` | 3 | V161 | V166 |
 | `academico_test.fn_puede_afectar_usuarios` | 1 | V50 | V30, V150 |
 | `academico_test.fn_resolver_actor` | 1 | V66 | V214.3, V492.1, V496.1, V496.5 |
-| `academico_test.fn_solicitud_aprobacion_estado` | 1 | V496.18 | — |
-| `academico_test.fn_solicitud_aprobacion_tipo` | 1 | V496.18 | V496.19, V496.20 |
 | `academico_test.fn_sync_tusuario_to_users` | 0 | V215 | — |
 | `academico_test.fn_sync_users_to_tusuario` | 0 | V215 | — |
-| `academico_test.fn_tlv_estado_resultado_pk` | 1 | V496.5 | V496.6 |
-| `academico_test.fn_tlv_momento_registro_pk` | 1 | V496.5 | V496.6 |
-| `academico_test.fn_tlv_solicitud_estado_pk` | 1 | V496.18 | V469.3, V496.6, V496.19, V496.23, V536, V537 |
-| `academico_test.fn_tlv_solicitud_tipo_pk` | 1 | V496.18 | V469.3, V496.6, V496.19, V496.23, V536, V537 |
 | `academico_test.fn_usu_buscar_por_documento` | 3 | V51 | V93 |
 | `academico_test.fn_usu_crear` | 15 | V51 | — |
 | `academico_test.fn_usuario_coincide_busqueda` | 6 | V116 | — |

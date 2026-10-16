@@ -1,0 +1,76 @@
+server:
+  port: ${PORT:8091}
+  shutdown: graceful
+
+spring:
+  application:
+    name: scheduler-service
+  main:
+    banner-mode: off
+  config:
+    # Catalogo de tareas fuera de la imagen: se monta en el contenedor y se
+    # cambia sin recompilar. Si no existe se usan solo las de este fichero.
+    import: optional:file:${SCHEDULER_TAREAS_FILE:/config/tareas.yml}
+  threads:
+    virtual:
+      enabled: true
+  datasource:
+    url: ${SCHEDULER_DB_URL:jdbc:postgresql://localhost:5432/postgres}
+    username: ${SCHEDULER_DB_USER:postgres}
+    password: ${SCHEDULER_DB_PASSWORD:}
+    hikari:
+      # Pocas tareas y cortas: no hace falta un pool grande.
+      maximum-pool-size: ${SCHEDULER_DB_POOL:4}
+      minimum-idle: 0
+  sql:
+    init:
+      mode: always
+      schema-locations: classpath:scheduler/schema.sql
+      continue-on-error: false
+
+scheduler:
+  tabla-bloqueo: ${SCHEDULER_TABLA_BLOQUEO:scheduler.shedlock}
+  zona: ${SCHEDULER_ZONA:America/Bogota}
+  tareas: []
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus,tareas
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      show-details: never
+  otlp:
+    metrics:
+      export:
+        enabled: ${MANAGEMENT_OTLP_METRICS_EXPORT_ENABLED:false}
+        url: ${OTEL_EXPORTER_OTLP_ENDPOINT:http://localhost:4318}/v1/metrics
+        step: 10s
+  opentelemetry:
+    tracing:
+      export:
+        otlp:
+          endpoint: ${OTEL_EXPORTER_OTLP_ENDPOINT:http://localhost:4318}/v1/traces
+    logging:
+      export:
+        otlp:
+          endpoint: ${OTEL_EXPORTER_OTLP_ENDPOINT:http://localhost:4318}/v1/logs
+    resource-attributes:
+      service.namespace: sso
+      deployment.environment: ${DEPLOY_ENV:dev}
+  logging:
+    export:
+      otlp:
+        enabled: ${MANAGEMENT_LOGGING_EXPORT_OTLP_ENABLED:false}
+  tracing:
+    enabled: ${MANAGEMENT_TRACING_EXPORT_ENABLED:false}
+    sampling:
+      probability: ${OTEL_TRACING_SAMPLE_RATE:1.0}
+
+logging:
+  level:
+    root: INFO
+    com.co.eurekatic: INFO
