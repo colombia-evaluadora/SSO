@@ -6,7 +6,9 @@ import com.co.eurekatic.comms.chat.ChatDtos.Cita;
 import com.co.eurekatic.comms.chat.ChatDtos.Conversacion;
 import com.co.eurekatic.comms.chat.ChatDtos.Mencion;
 import com.co.eurekatic.comms.chat.ChatDtos.Mensaje;
+import com.co.eurekatic.comms.chat.ChatDtos.OpcionVotacion;
 import com.co.eurekatic.comms.chat.ChatDtos.Reaccion;
+import com.co.eurekatic.comms.chat.ChatDtos.VotacionRapida;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Repository;
 
@@ -172,7 +174,9 @@ public class ChatRepository {
     }
 
     private static final String SQL_CONVERSACIONES = """
-            SELECT c.pk_tcanal, c.tipo, c.categoria, c.nombre, c.creado_por,
+            SELECT c.pk_tcanal, c.tipo, c.categoria, c.nombre, c.creado_por, c.es_bot,
+                   (c.categoria IN ('VOTACION', 'ENCUESTA', 'EXAMEN') AND c.actividad_cerrada_en IS NULL)
+                       AS actividad_abierta,
                    COALESCE(NULLIF(cr.full_name, ''), cr.email) AS creador,
                    m.silenciado_hasta, m.archivado, m.marcado_no_leido, m.menciones_pendientes,
                    (SELECT COUNT(*) FROM comunicaciones.tmensaje x
@@ -210,7 +214,8 @@ public class ChatRepository {
         boolean silenciado = silencio != null && silencio.isAfter(OffsetDateTime.now());
         return new Conversacion(rs.getLong("pk_tcanal"),
                 directo && !nombres.isEmpty() ? nombres.get(0) : rs.getString("nombre"),
-                rs.getString("tipo"), rs.getString("categoria"), noLeidos, false, false, rs.getInt("total"),
+                rs.getString("tipo"), rs.getString("categoria"), noLeidos, rs.getBoolean("actividad_abierta"),
+                rs.getBoolean("es_bot"), rs.getInt("total"),
                 nombres, silenciado ? silencio.toInstant().toString() : null, rs.getBoolean("archivado"),
                 directo ? null : rs.getString("creador"), rs.getLong("creado_por") == usuario,
                 rs.getInt("menciones_pendientes"));
@@ -227,12 +232,19 @@ public class ChatRepository {
 
     public long insertarMensaje(long canal, long autor, String tipo, String texto, String adjNombre, String adjFormato,
                                 Long respuesta, UUID clientId) {
+        return insertarMensaje(canal, autor, tipo, texto, adjNombre, adjFormato, null, null, respuesta, clientId);
+    }
+
+    public long insertarMensaje(long canal, long autor, String tipo, String texto, String adjNombre, String adjFormato,
+                                Long archivo, Long peso, Long respuesta, UUID clientId) {
         return jdbc.sql("""
                 INSERT INTO comunicaciones.tmensaje
-                    (fk_tcanal, fk_autor, tipo, texto, adjunto_nombre, adjunto_formato, fk_respuesta, client_msg_id)
-                VALUES (:canal, :autor, :tipo, :texto, :an, :af, :resp, :cid) RETURNING pk_tmensaje""")
+                    (fk_tcanal, fk_autor, tipo, texto, adjunto_nombre, adjunto_formato, fk_tarchivo, adjunto_peso,
+                     fk_respuesta, client_msg_id)
+                VALUES (:canal, :autor, :tipo, :texto, :an, :af, :arch, :peso, :resp, :cid) RETURNING pk_tmensaje""")
                 .param("canal", canal).param("autor", autor).param("tipo", tipo).param("texto", texto)
-                .param("an", adjNombre).param("af", adjFormato).param("resp", respuesta).param("cid", clientId)
+                .param("an", adjNombre).param("af", adjFormato).param("arch", archivo).param("peso", peso)
+                .param("resp", respuesta).param("cid", clientId)
                 .query(Long.class).single();
     }
 
@@ -340,9 +352,11 @@ public class ChatRepository {
                         .computeIfAbsent(rs.getString(2), k -> new ArrayList<>())
                         .add(new Object[] {rs.getLong(3), rs.getString(4)}))
                 .list();
+        Map<Long, VotacionRapida> votaciones = votaciones(ids, visor);
         List<Mensaje> out = jdbc.sql("""
                 SELECT m.pk_tmensaje, m.fk_tcanal, m.fk_autor, COALESCE(NULLIF(a.full_name, ''), a.email) AS autor,
                        m.texto, m.created_at, m.tipo, m.adjunto_nombre, m.adjunto_formato, m.adjunto_eliminado_en,
+                       m.fk_tarchivo, m.adjunto_peso,
                        m.editado_en, m.fijado, m.fk_respuesta, r.texto AS r_texto, r.eliminado_en AS r_elim,
                        COALESCE(NULLIF(ra.full_name, ''), ra.email) AS r_autor
                   FROM comunicaciones.tmensaje m
@@ -374,12 +388,59 @@ public class ChatRepository {
                             visor != null && autor == visor, rs.getString("texto"),
                             rs.getObject("created_at", OffsetDateTime.class).toInstant().toString(),
                             adjNombre == null ? null : new Adjunto(adjNombre, rs.getString("adjunto_formato"),
-                                    adjElim == null ? null : adjElim.toInstant().toString()),
+                                    adjElim == null ? null : adjElim.toInstant().toString(),
+                                    rs.getObject("fk_tarchivo", Long.class), rs.getObject("adjunto_peso", Long.class)),
                             rs.getObject("editado_en") != null, rs.getBoolean("fijado"),
-                            "SISTEMA".equals(rs.getString("tipo")), rs2, cita, ms, meMenciona);
+                            "SISTEMA".equals(rs.getString("tipo")), rs2, cita, ms, meMenciona, votaciones.get(id));
                 })
                 .list();
         return out;
+    }
+
+    /** Etiquetas de las dos opciones; el id es la posicion (1, 2). */
+    static final Map<String, List<String>> ETIQUETAS_VOTACION = Map.of(
+            "SI_NO", List.of("Sí", "No"), "VERDADERO_FALSO", List.of("Verdadero", "Falso"));
+
+    /** Votaciones rapidas de los mensajes {@code ids}; {@code miVoto} solo con visor. */
+    Map<Long, VotacionRapida> votaciones(Collection<Long> ids, Long visor) {
+        Map<Long, int[]> conteos = new LinkedHashMap<>();
+        Map<Long, Integer> mios = new LinkedHashMap<>();
+        jdbc.sql("""
+                SELECT fk_tmensaje, opcion, COUNT(*), BOOL_OR(fk_usuario = CAST(:visor AS BIGINT))
+                  FROM comunicaciones.tvotacion_rapida_voto WHERE fk_tmensaje IN (:ids)
+                 GROUP BY fk_tmensaje, opcion""")
+                .param("ids", ids).param("visor", visor)
+                .query((rs, n) -> {
+                    int op = rs.getInt(2);
+                    if (op >= 1 && op <= 2) conteos.computeIfAbsent(rs.getLong(1), k -> new int[2])[op - 1] = rs.getInt(3);
+                    if (rs.getBoolean(4)) mios.put(rs.getLong(1), op);
+                    return 1;
+                }).list();
+        Map<Long, VotacionRapida> out = new LinkedHashMap<>();
+        jdbc.sql("""
+                SELECT fk_tmensaje, pregunta, tipo, minutos, cierra_en
+                  FROM comunicaciones.tvotacion_rapida WHERE fk_tmensaje IN (:ids)""")
+                .param("ids", ids)
+                .query((rs, n) -> {
+                    long id = rs.getLong(1);
+                    String tipo = rs.getString(3);
+                    List<String> etiquetas = ETIQUETAS_VOTACION.getOrDefault(tipo, List.of("Sí", "No"));
+                    int[] c = conteos.getOrDefault(id, new int[2]);
+                    List<OpcionVotacion> opciones = List.of(new OpcionVotacion(1, etiquetas.get(0), c[0]),
+                            new OpcionVotacion(2, etiquetas.get(1), c[1]));
+                    return out.put(id, new VotacionRapida(rs.getString(2), tipo, rs.getInt(4),
+                            rs.getObject(5, OffsetDateTime.class).toInstant().toString(), opciones, mios.get(id)));
+                }).list();
+        return out;
+    }
+
+    /** Al enviar: el borrador vivo del canal pasa a ENVIADO con el texto que salio. */
+    public void marcarBorradorEnviado(long canal, long usuario, long mensaje, String texto) {
+        jdbc.sql("""
+                UPDATE comunicaciones.tborrador
+                   SET estado = 'ENVIADO', fk_tmensaje = :m, texto = :t, modified_at = NOW()
+                 WHERE fk_tcanal = :c AND fk_usuario = :u AND estado = 'BORRADOR' AND eliminado_en IS NULL""")
+                .param("m", mensaje).param("t", texto).param("c", canal).param("u", usuario).update();
     }
 
     // ── personas ───────────────────────────────────────────────────────────

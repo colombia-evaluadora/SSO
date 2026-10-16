@@ -17,7 +17,11 @@ public final class ChatDtos {
 
     public record Autor(long id, String nombre, boolean enLinea) { }
 
-    public record Adjunto(String nombre, String formato, String eliminadoEn) { }
+    /**
+     * {@code archivoId}: pk_tarchivo en file-service (null en adjuntos viejos solo con nombre);
+     * el front lo ve con un token de vista. {@code peso} en bytes.
+     */
+    public record Adjunto(String nombre, String formato, String eliminadoEn, Long archivoId, Long peso) { }
 
     /**
      * {@code usuarios}: ids de quienes reaccionaron. Extension al tipo del front
@@ -31,7 +35,25 @@ public final class ChatDtos {
 
     public record Mensaje(long id, long conversacionId, Autor autor, boolean esPropio, String texto, String fecha,
                           Adjunto adjunto, boolean editado, boolean fijado, boolean sistema,
-                          List<Reaccion> reacciones, Cita respuestaA, List<Mencion> menciones, boolean meMenciona) { }
+                          List<Reaccion> reacciones, Cita respuestaA, List<Mencion> menciones, boolean meMenciona,
+                          VotacionRapida votacion) { }
+
+    public record OpcionVotacion(int id, String etiqueta, int votos) { }
+
+    /**
+     * {@code miVoto} null en la forma neutra que se difunde por el socket: el
+     * cliente conserva el suyo (un voto no se retira; editar la votacion cambia
+     * {@code cierraEn} y reinicia los votos).
+     */
+    public record VotacionRapida(String pregunta, String tipo, int minutos, String cierraEn,
+                                 List<OpcionVotacion> opciones, Integer miVoto) { }
+
+    public record Borrador(long id, long conversacionId, String conversacionNombre, String texto, String estado,
+                           String fecha) { }
+
+    public record ArchivoCompartido(long id, long archivoId, long mensajeId, String nombre, String formato, Long peso,
+                                    String compartidoPor, boolean esPropio, String fecha, long conversacionId,
+                                    String conversacionNombre, boolean enMiCanal, boolean editable) { }
 
     public record Miembro(long id, String nombre, String rol, boolean enLinea, boolean bloqueado) { }
 
