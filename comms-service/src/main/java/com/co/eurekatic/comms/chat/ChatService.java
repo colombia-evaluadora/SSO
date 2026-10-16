@@ -243,6 +243,7 @@ public class ChatService {
      */
     public Mensaje enviar(Usuario u, long canal, String texto, Long archivoId, Long respuesta, UUID clientId) {
         Membresia mem = exigirMiembro(u, canal);
+        exigirComentarios(u, canal);
         var previo = repo.mensajePorClientId(u.id(), clientId);
         if (previo.isPresent()) return uno(previo.get(), u);
         String t = texto == null ? "" : texto.trim();
@@ -341,6 +342,21 @@ public class ChatService {
                 .orElseThrow(() -> new ApiError(404, "La conversacion no existe."));
         if (m.bloqueado()) throw new ApiError(403, "Te bloquearon en este canal.");
         return m;
+    }
+
+    /**
+     * Mismo criterio que {@code soloLectura} del front: elecciones, encuestas y
+     * evaluaciones no tienen comentarios; en un comunicado el estudiante solo lee.
+     */
+    private void exigirComentarios(Usuario u, long canal) {
+        String categoria = repo.actividad(canal);
+        if (categoria == null) return;
+        if (Set.of("VOTACION", "ENCUESTA", "EXAMEN").contains(categoria)) {
+            throw new ApiError(403, "Este canal no admite mensajes.");
+        }
+        if ("ANUNCIO".equals(categoria) && "ESTUDIANTE".equals(politica.perfil(u.roles()))) {
+            throw new ApiError(403, "Este comunicado es de solo lectura.");
+        }
     }
 
     void exigirAdmin(Usuario u, long canal) {
