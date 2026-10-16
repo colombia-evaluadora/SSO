@@ -1,32 +1,8 @@
--- =============================================================================
--- V115 — fn_delete_menu: baja de un menu y de toda su descendencia.
---
--- Un menu solo se da de baja si ya nadie lo ve: ninguno de la rama puede estar
--- visible ni asignado a un rol activo (23503 -> 409). Si pasa, desactiva la rama
--- entera y las trol_menu de roles inactivos que queden.
---
--- Viven en otras migraciones: fn_list_available_menus (V498). La reparacion de
--- huerfanos que corria aqui ya se aplico en todos los ambientes.
+-- V115 - fn_delete_menu: baja de un menu y de toda su descendencia. Ningun menu
+-- de la rama puede estar asignado a un rol activo (23503 -> 409).
 -- Depende de: V113 (fn_assert_superadmin).
--- =============================================================================
 
-CREATE OR REPLACE FUNCTION academico_test.fn_menu_validar_rama_no_visible(p_rama BIGINT[])
-RETURNS VOID
-LANGUAGE plpgsql
-STABLE
-AS $$
-DECLARE
-    v_menus TEXT;
-BEGIN
-    SELECT string_agg(format('"%s"', m.nombre), ', ' ORDER BY m.nombre) INTO v_menus
-      FROM academico_test.tmenu m
-     WHERE m.pk_tmenu = ANY (p_rama) AND m.active = TRUE AND m.visible = 'S';
-    IF v_menus IS NOT NULL THEN
-        RAISE EXCEPTION 'No se puede eliminar: el menu es visible (%). Ocultelo antes de eliminarlo', v_menus
-            USING ERRCODE = '23503';
-    END IF;
-END;
-$$;
+DROP FUNCTION IF EXISTS academico_test.fn_menu_validar_rama_no_visible(BIGINT[]);
 
 CREATE OR REPLACE FUNCTION academico_test.fn_menu_validar_rama_sin_roles(p_rama BIGINT[])
 RETURNS VOID
@@ -72,16 +48,10 @@ BEGIN
         SELECT 1 FROM academico_test.tmenu m
          WHERE m.pk_tmenu = p_pk_tmenu AND m.active = TRUE
     ) THEN
-        -- 404 (no_data_found). P0002 es el unico SQLSTATE que
-        -- PostgresErrorMapper traduce a 404 en esta rama; mismo tratamiento
-        -- que fn_upsert_menu (MODO EDITAR) y fn_associate_menus_to_rol.
         RAISE EXCEPTION 'El menu pk=% no existe o no esta activo', p_pk_tmenu
             USING ERRCODE = 'P0002';
     END IF;
 
-    -- La rama completa: el menu pedido y TODA su descendencia. Antes esto era
-    -- "el menu y sus hijos directos", y por eso un nieto sobrevivia al borrado
-    -- de la raiz y quedaba huerfano (ver cabecera).
     WITH RECURSIVE rama AS (
         SELECT m.pk_tmenu
         FROM academico_test.tmenu m
@@ -94,11 +64,9 @@ BEGIN
     CYCLE pk_tmenu SET es_ciclo USING ruta
     SELECT array_agg(rama.pk_tmenu) INTO v_rama FROM rama;
 
-    PERFORM academico_test.fn_menu_validar_rama_no_visible(v_rama);
     PERFORM academico_test.fn_menu_validar_rama_sin_roles(v_rama);
 
-    -- 1. Desactivar las asignaciones (trol_menu) de toda la rama; solo pueden
-    --    quedar las de roles inactivos.
+    -- Solo quedan las asignaciones de roles inactivos.
     UPDATE academico_test.trol_menu tm
        SET active      = FALSE,
            modified_by = CURRENT_USER,
@@ -106,7 +74,6 @@ BEGIN
      WHERE tm.active = TRUE
        AND tm.fk_tmenu = ANY (v_rama);
 
-    -- 2. Desactivar la descendencia (todo menos el menu pedido).
     UPDATE academico_test.tmenu m
        SET active      = FALSE,
            modified_by = CURRENT_USER,
@@ -115,8 +82,7 @@ BEGIN
        AND m.pk_tmenu <> p_pk_tmenu
        AND m.active   = TRUE;
 
-    -- 3. Desactivar el menu en si. El ROW_COUNT de ESTE update es el que
-    --    alimenta was_deleted, igual que antes.
+    -- Va aparte: su ROW_COUNT da was_deleted.
     UPDATE academico_test.tmenu m
        SET active      = FALSE,
            modified_by = CURRENT_USER,
@@ -145,7 +111,7 @@ VOLATILE
 AS $$
 BEGIN
     PERFORM academico_test.fn_assert_superadmin(p_user_pk);
-    -- Actor NULL: el CTE de auditoria de query-service ya lo fijo (p_user_pk es public.users).
+    -- Actor NULL: lo fija el CTE de auditoria de query-service.
     PERFORM academico_test.fn_audit_declarar(NULL,
         format('Eliminación del menú %s', (SELECT m.nombre FROM academico_test.tmenu m WHERE m.pk_tmenu = p_pk_tmenu)));
     RETURN QUERY SELECT * FROM academico_test.fn_menu_eliminar_interno(p_pk_tmenu);
@@ -153,11 +119,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_menu_eliminar_interno(BIGINT)
-    IS 'INTERNO: soft-delete de un TMENU y toda su descendencia, sin gate; lo llama fn_delete_menu. Rechaza con 23503 si algun menu de la rama es visible o esta asignado a un rol activo.';
+    IS 'INTERNO: soft-delete de un TMENU y toda su descendencia, sin gate; lo llama fn_delete_menu. Rechaza con 23503 si algun menu de la rama esta asignado a un rol activo.';
 
-
--- ---------------------------------------------------------------------------
--- Comentarios actualizados.
--- ---------------------------------------------------------------------------
 COMMENT ON FUNCTION academico_test.fn_delete_menu(BIGINT, BIGINT) IS
-    'PUT /menus/{id}/eliminar (el catalogo QUERY no admite HTTP_METHOD=DELETE). Wrapper: gate de super admin y delega en fn_menu_eliminar_interno. 409 (23503) si el menu o algun submenu es visible o esta asignado a un rol activo.';
+    'PUT /menus/{id}/eliminar (el catalogo QUERY no admite HTTP_METHOD=DELETE). Wrapper: gate de super admin y delega en fn_menu_eliminar_interno. 409 (23503) si el menu o algun submenu esta asignado a un rol activo.';
