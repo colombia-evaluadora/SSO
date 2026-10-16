@@ -97,8 +97,11 @@ class CommsIntegrationTest {
         try (var c = ds.getConnection(); var st = c.createStatement()) {
             st.execute(new String(CommsIntegrationTest.class.getResourceAsStream("/esquema-base.sql").readAllBytes()));
             st.execute(Files.readString(Path.of("../postgres/migrations/V560__comunicaciones_chat_ddl.sql")));
-            // Correr la migracion dos veces: debe ser idempotente.
+            st.execute(Files.readString(Path.of("../postgres/migrations/V561__comunicaciones_outbox_eventos.sql")));
+            st.execute(Files.readString(Path.of("../postgres/migrations/V561.1__comunicaciones_outbox_registrar.sql")));
+            // Re-aplicar (como hace el deploy al editar) debe ser idempotente.
             st.execute(Files.readString(Path.of("../postgres/migrations/V560__comunicaciones_chat_ddl.sql")));
+            st.execute(Files.readString(Path.of("../postgres/migrations/V561__comunicaciones_outbox_eventos.sql")));
         }
         ana = usuario(j, "ana@colegio.edu.co", "Ana Rios", "CEVAL-DOCENTE");
         luis = usuario(j, "luis@colegio.edu.co", "Luis Paz", "CEVAL-DOCENTE");
@@ -173,6 +176,10 @@ class CommsIntegrationTest {
         assertThat(evento.get("tipo").asText()).isEqualTo("CHAT_MENCION");
         assertThat(evento.get("destinatarios").get(0).asText()).isEqualTo("luis@colegio.edu.co");
         assertThat(evento.get("deepLink").asText()).startsWith("/app/comunicaciones/chat?canal=" + id);
+        // Llego por el outbox: la fila queda marcada como publicada.
+        org.awaitility.Awaitility.await().atMost(5, TimeUnit.SECONDS).until(() -> jdbc.sql(
+                "SELECT COUNT(*) FROM comunicaciones.toutbox_evento WHERE publicado_en IS NOT NULL")
+                .query(Long.class).single() > 0);
 
         // Luis ve el no leido y la mencion, reacciona y lee.
         JsonNode conv = rows(get("/comunicaciones/conversaciones", tLuis)).get(0);
