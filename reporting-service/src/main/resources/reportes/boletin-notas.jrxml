@@ -841,7 +841,17 @@
 			<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "banda")]]></propertyExpression>
 			<expression><![CDATA[($F{ciudad} + ("".equals($F{departamento}) ? "" : " - " + $F{departamento})).toUpperCase()]]></expression>
 		</element>
-		<element kind="textField" x="409" y="37" width="180" height="12" fontName="DejaVu Sans" fontSize="8.5" forecolor="#16305C" hTextAlign="Right" vTextAlign="Middle" bold="true" blankWhenNull="true">
+				<element kind="rectangle" x="521" y="0" width="35" height="35" backcolor="#FFFFFF" mode="Opaque" radius="2">
+			<printWhenExpression><![CDATA[!"".equals($F{url_verificacion})]]></printWhenExpression>
+			<pen lineWidth="0.0"/>
+		</element>
+		<element kind="component" x="522" y="1" width="33" height="33">
+			<printWhenExpression><![CDATA[!"".equals($F{url_verificacion})]]></printWhenExpression>
+			<component kind="barcode4j:QRCode" margin="0" errorCorrectionLevel="M">
+				<codeExpression><![CDATA[$F{url_verificacion}]]></codeExpression>
+			</component>
+		</element>
+		<element kind="textField" x="488" y="35" width="101" height="11" fontName="DejaVu Sans" fontSize="8" forecolor="#16305C" hTextAlign="Center" vTextAlign="Middle" bold="true" blankWhenNull="true">
 			<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "texto")]]></propertyExpression>
 			<expression><![CDATA[$P{GENERADO}.replace(" a las ", " ").replaceFirst(" 0(\\d:)", " $1")]]></expression>
 		</element>
@@ -969,29 +979,7 @@
 		</band>
 	</detail>
 	<pageFooter height="60" splitType="Prevent">
-			<element kind="rectangle" x="22" y="3" width="54" height="54" backcolor="#FFFFFF" mode="Opaque" radius="3">
-			<printWhenExpression><![CDATA[!"".equals($F{url_verificacion})]]></printWhenExpression>
-			<pen lineWidth="0.0"/>
-		</element>
-		<element kind="component" x="25" y="6" width="48" height="48">
-			<printWhenExpression><![CDATA[!"".equals($F{url_verificacion})]]></printWhenExpression>
-			<component kind="barcode4j:QRCode" margin="0" errorCorrectionLevel="M">
-				<codeExpression><![CDATA[$F{url_verificacion}]]></codeExpression>
-			</component>
-		</element>
-		<element kind="rectangle" x="80" y="17" width="190" height="28" backcolor="#FFFFFF" mode="Opaque" radius="3">
-			<printWhenExpression><![CDATA[!"".equals($F{url_verificacion})]]></printWhenExpression>
-			<pen lineWidth="0.0"/>
-		</element>
-		<element kind="staticText" x="84" y="19" width="182" height="11" fontName="DejaVu Sans" fontSize="7" forecolor="#5A6B85" hTextAlign="Left" vTextAlign="Middle">
-			<printWhenExpression><![CDATA[!"".equals($F{url_verificacion})]]></printWhenExpression>
-			<text><![CDATA[Verifique este boletin escaneando el QR]]></text>
-		</element>
-		<element kind="textField" x="84" y="31" width="182" height="12" fontName="DejaVu Sans" fontSize="7.5" forecolor="#16305C" hTextAlign="Left" vTextAlign="Middle" bold="true" blankWhenNull="true">
-			<printWhenExpression><![CDATA[!"".equals($F{url_verificacion})]]></printWhenExpression>
-			<expression><![CDATA["Codigo: " + $F{codigo_verificacion}]]></expression>
-		</element>
-		<element kind="textField" x="557" y="38" width="16" height="12" fontName="DejaVu Sans" fontSize="7.5" forecolor="#FFFFFF" hTextAlign="Right" vTextAlign="Middle" bold="true" blankWhenNull="true">
+			<element kind="textField" x="557" y="38" width="16" height="12" fontName="DejaVu Sans" fontSize="7.5" forecolor="#FFFFFF" hTextAlign="Right" vTextAlign="Middle" bold="true" blankWhenNull="true">
 			<expression><![CDATA["" + $V{PAGE_NUMBER}]]></expression>
 		</element>
 		<element kind="textField" x="573" y="38" width="30" height="12" fontName="DejaVu Sans" fontSize="7.5" forecolor="#FFFFFF" hTextAlign="Left" vTextAlign="Middle" bold="true" blankWhenNull="true" evaluationTime="Group" evaluationGroup="boletin">

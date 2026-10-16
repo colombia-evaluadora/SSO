@@ -322,7 +322,7 @@ class BoletinNotasTest {
         return n;
     }
 
-    /** El QR y el codigo van en el pie; la copia publica lleva marca de agua. */
+    /** El QR (que ya lleva el codigo) va en el encabezado; la copia publica lleva marca de agua. */
     @Test
     void conVerificacionLlevaQrYMarcaDeAgua() throws Exception {
         List<Map<String, Object>> sin = estudiante(11, "ESTUDIANTE CON QR", 2, 1, 1);

@@ -315,7 +315,7 @@ class BoletinPreescolarTest {
         return n;
     }
 
-    /** El QR y el codigo van en el pie; la copia publica lleva marca de agua. */
+    /** El QR (que ya lleva el codigo) va en el encabezado; la copia publica lleva marca de agua. */
     @Test
     void conVerificacionLlevaQrYMarcaDeAgua() throws Exception {
         List<Map<String, Object>> rows = new java.util.ArrayList<>();
