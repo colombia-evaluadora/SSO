@@ -15,12 +15,28 @@ public class DataAccessErrorException extends ResponseStatusException {
 
     private final String code;
 
+    /**
+     * DETAIL del RAISE, solo para los códigos que el esquema emite a propósito
+     * para el cliente (conflicto offline: JSON con el valor actual). Null en el
+     * resto: el DETAIL del motor trae valores reales y nunca se publica.
+     */
+    private final String detail;
+
     public DataAccessErrorException(HttpStatus status, String code, String message) {
+        this(status, code, message, null);
+    }
+
+    public DataAccessErrorException(HttpStatus status, String code, String message, String detail) {
         super(status, message);
         this.code = code;
+        this.detail = detail;
     }
 
     public String code() {
         return code;
+    }
+
+    public String detail() {
+        return detail;
     }
 }
