@@ -2058,6 +2058,61 @@ services:
       retries: 10
       start_period: 40s
 
+  comms-service:
+    # Tiempo real (WebSocket propio + Redis pub/sub) y chat. Perfil propio
+    # (opt-in): no arranca en los deploys hasta activar COMPOSE_PROFILES=comms.
+    profiles: ["comms"]
+    build:
+      context: .
+      dockerfile: comms-service/Dockerfile
+    image: ${IMAGE_PREFIX:-eurekatic}/comms-service:${IMAGE_TAG:-1.0.0-SNAPSHOT}
+    container_name: sso-comms-service
+    restart: unless-stopped
+    stop_grace_period: ${JAVA_STOP_GRACE_PERIOD:-40s}
+    logging: *default-logging
+    init: true
+    mem_limit: 512m
+    mem_reservation: 256m
+    depends_on:
+      # Schema comunicaciones (V560) migrado antes de arrancar.
+      flyway:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      eurekaserver:
+        condition: service_started
+    environment:
+      EUREKA_URL: "http://eurekaserver:8761/eureka"
+      DB_URL: ${DB_URL}
+      DB_NAME: ${DB_NAME}
+      DB_USER: ${DB_USER}
+      DB_PASSWORD: ${DB_PASSWORD}
+      DB_SSLMODE: "${DB_SSLMODE:-require}"
+      DB_CHANNEL_BINDING: "${DB_CHANNEL_BINDING:-prefer}"
+      COMMS_DB_POOL_MAX: "${COMMS_DB_POOL_MAX:-8}"
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: "5672"
+      RABBITMQ_USER: ${RABBITMQ_USER}
+      RABBITMQ_PASS: ${RABBITMQ_PASS}
+      JWT_PUBLIC_KEY: ${JWT_PUBLIC_KEY}
+      COMMS_WS_ALLOWED_ORIGINS: "${COMMS_WS_ALLOWED_ORIGINS:-*}"
+      OTEL_EXPORTER_OTLP_ENDPOINT: "${OTEL_EXPORTER_OTLP_ENDPOINT:-http://alloy:4318}"
+      MANAGEMENT_TRACING_EXPORT_ENABLED: "${SSO_TELEMETRY_ENABLED:-false}"
+      OTEL_TRACING_SAMPLE_RATE: "${OTEL_TRACING_SAMPLE_RATE:-0.1}"
+      MANAGEMENT_OTLP_METRICS_EXPORT_ENABLED: "${SSO_TELEMETRY_ENABLED:-false}"
+      MANAGEMENT_LOGGING_EXPORT_OTLP_ENABLED: "${SSO_TELEMETRY_ENABLED:-false}"
+    healthcheck:
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/localhost/8092; printf 'GET /actuator/health HTTP/1.0\r\n\r\n' >&3; grep -q UP <&3"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 60s
+
 volumes:
   traefik-acme:
     # Guarda acme.json: la clave privada del certificado y el registro de
