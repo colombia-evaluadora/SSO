@@ -154,17 +154,17 @@
 			<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "banda")]]></propertyExpression>
 			<expression><![CDATA[($F{ciudad} + ("".equals($F{departamento}) ? "" : " - " + $F{departamento})).toUpperCase()]]></expression>
 		</element>
-				<element kind="rectangle" x="518" y="0" width="41" height="41" backcolor="#FFFFFF" mode="Opaque" radius="2">
+				<element kind="rectangle" x="543" y="0" width="46" height="46" backcolor="#FFFFFF" mode="Opaque" radius="2">
 			<printWhenExpression><![CDATA[!"".equals($F{url_verificacion})]]></printWhenExpression>
 			<pen lineWidth="0.0"/>
 		</element>
-		<element kind="component" x="519" y="1" width="39" height="39">
+		<element kind="component" x="544" y="1" width="44" height="44">
 			<printWhenExpression><![CDATA[!"".equals($F{url_verificacion})]]></printWhenExpression>
 			<component kind="barcode4j:QRCode" margin="0" errorCorrectionLevel="M">
 				<codeExpression><![CDATA[$F{url_verificacion}]]></codeExpression>
 			</component>
 		</element>
-		<element kind="textField" x="488" y="41" width="101" height="10" fontName="DejaVu Sans" fontSize="7.5" forecolor="#16305C" hTextAlign="Center" vTextAlign="Middle" bold="true" blankWhenNull="true">
+		<element kind="textField" x="409" y="17" width="130" height="12" fontName="DejaVu Sans" fontSize="8.5" forecolor="#16305C" hTextAlign="Right" vTextAlign="Middle" bold="true" blankWhenNull="true">
 			<propertyExpression name="net.sf.jasperreports.style.forecolor"><![CDATA[com.co.eurekatic.reporting.render.TonoFondo.color($F{fondo_archivo}, "texto")]]></propertyExpression>
 			<expression><![CDATA[$P{GENERADO}.replace(" a las ", " ").replaceFirst(" 0(\\d:)", " $1")]]></expression>
 		</element>
