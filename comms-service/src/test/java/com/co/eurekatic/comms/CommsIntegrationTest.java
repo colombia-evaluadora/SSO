@@ -351,6 +351,11 @@ class CommsIntegrationTest {
         rows(patch(pubPath + "/eliminar", tAna, Map.of()));
         assertThat(rows(get(base + "/publicaciones", tSofi)).size()).isZero();
         assertThat(get(pubPath, tSofi).statusCode()).isEqualTo(404);
+        // Sin eventos pendientes: la reaccion de arriba no debe llegarle a otro test por el outbox.
+        org.awaitility.Awaitility.await().atMost(10, TimeUnit.SECONDS).until(() -> jdbc.sql(
+                "SELECT COUNT(*) FROM comunicaciones.toutbox_evento WHERE publicado_en IS NULL")
+                .query(Long.class).single() == 0);
+        if (admin.getQueueProperties("prueba.eventos") != null) admin.purgeQueue("prueba.eventos", false);
         ws.close();
     }
 
