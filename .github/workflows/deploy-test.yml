@@ -301,7 +301,7 @@ jobs:
           fi
           echo "Ficheros cambiados:"; echo "$CAMBIADOS" | sed 's/^/  /'
 
-          TODOS='"eurekaserver","auth-center","api-gateway","sso-admin","query-service","file-service","reporting-service","ai-control-service","provisioner","notification-service","hello-service","cdc-capture","cdc-worker"'
+          TODOS='"eurekaserver","auth-center","api-gateway","sso-admin","query-service","file-service","reporting-service","ai-control-service","provisioner","notification-service","comms-service","hello-service","cdc-capture","cdc-worker"'
 
           # `common` y el pom raíz son dependencias de 7 de los 8
           # módulos, así que tocarlos obliga a reconstruir todo.
@@ -320,6 +320,7 @@ jobs:
             echo "$CAMBIADOS" | grep -q '^ai-control-service/'   && add ai-control-service
             echo "$CAMBIADOS" | grep -q '^provisioner/'          && add provisioner
             echo "$CAMBIADOS" | grep -q '^notification-service/' && add notification-service
+            echo "$CAMBIADOS" | grep -q '^comms-service/'        && add comms-service
             echo "$CAMBIADOS" | grep -q '^hello-service/'        && add hello-service
             # api-gateway compila el SPA dentro de su Dockerfile, así
             # que un cambio en admin-ui también le obliga a reconstruir.
@@ -371,7 +372,7 @@ jobs:
           }
 
           MATRIZ=""
-          for svc in eurekaserver auth-center api-gateway sso-admin notification-service hello-service file-service reporting-service ai-control-service provisioner query-service cdc-capture cdc-worker; do
+          for svc in eurekaserver auth-center api-gateway sso-admin notification-service comms-service hello-service file-service reporting-service ai-control-service provisioner query-service cdc-capture cdc-worker; do
             if echo ",$SERVICIOS," | grep -qE "(,|\")${svc}(,|\")"; then
               MATRIZ="${MATRIZ:+$MATRIZ,}$(matriz_de "$svc")"
             fi
