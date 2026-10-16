@@ -101,6 +101,7 @@ class CommsIntegrationTest {
             st.execute(Files.readString(Path.of("../postgres/migrations/V561.1__comunicaciones_outbox_registrar.sql")));
             st.execute(Files.readString(Path.of("../postgres/migrations/V575__comunicaciones_chat_borradores_votaciones_ddl.sql")));
             st.execute(Files.readString(Path.of("../postgres/migrations/V585__comunicaciones_foros_ddl.sql")));
+            st.execute(Files.readString(Path.of("../postgres/migrations/V580__comunicaciones_actividades_ddl.sql")));
             // Re-aplicar (como hace el deploy al editar) debe ser idempotente.
             st.execute(Files.readString(Path.of("../postgres/migrations/V560__comunicaciones_chat_ddl.sql")));
             st.execute(Files.readString(Path.of("../postgres/migrations/V561__comunicaciones_outbox_eventos.sql")));

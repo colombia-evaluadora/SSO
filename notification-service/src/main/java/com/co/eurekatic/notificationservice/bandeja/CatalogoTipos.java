@@ -36,6 +36,15 @@ public class CatalogoTipos {
                 "ALTA", true, false, true, false, false, SIN_AGRUPAR));
         add(new TipoNotificacion("FORO_RESPUESTA", "CHAT", "Respuestas en publicaciones que sigues",
                 "NORMAL", true, false, true, false, false, Duration.ofMinutes(10)));
+        // Actividades del chat (comms-service, V580): un aviso por actividad, sin agrupar.
+        add(new TipoNotificacion("CHAT_COMUNICADO", "CHAT", "Comunicados de la institución",
+                "ALTA", true, true, true, false, false, SIN_AGRUPAR));
+        add(new TipoNotificacion("CHAT_ELECCION", "CHAT", "Elecciones abiertas",
+                "ALTA", true, false, true, false, false, SIN_AGRUPAR));
+        add(new TipoNotificacion("CHAT_ENCUESTA", "CHAT", "Encuestas por responder",
+                "NORMAL", true, false, true, false, false, SIN_AGRUPAR));
+        add(new TipoNotificacion("CHAT_EVALUACION", "CHAT", "Evaluaciones abiertas",
+                "ALTA", true, false, true, false, false, SIN_AGRUPAR));
         add(new TipoNotificacion("PLANEADOR_APROBADA", "PLANEADOR", "Actividad aprobada o rechazada",
                 "NORMAL", true, true, true, false, false, SIN_AGRUPAR));
         add(new TipoNotificacion("PLANEADOR_VALIDACION", "PLANEADOR", "Actividad enviada a validación",

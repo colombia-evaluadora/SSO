@@ -9,7 +9,7 @@
 -- nacian sin referente. Ahora ordena: 1) lista el area, 2) sin areas (aplica a
 -- todas), 3) cualquier otro activo del nivel; dentro de cada nivel, el mas
 -- reciente. NULL solo si no hay ninguno activo para ese nivel.
--- Depende de: V216 (firma y llamadores), V212 (TREFERENTE_CURRICULAR*).
+-- Depende de: V216 (firma y llamadores), V212 (TREFERENTE_CURRICULAR*), V315 (area oficial).
 -- ===========================================================================
 
 SET search_path TO academico_test, public;
@@ -43,8 +43,10 @@ BEGIN
     END IF;
 
     -- Area de la asignatura: la FK directa es nullable, el enganche real esta en su TAREA.
+    -- Se compara por AREA OFICIAL (V315): el Plan de Estudio puede apuntar a una
+    -- asignatura del catalogo (Aritmetica) y el Referente al area (Matematicas).
     IF p_fk_tasignatura IS NOT NULL THEN
-        SELECT COALESCE(asig.FK_TAREA_ASIGNATURA, ta.FK_TAREA_ASIGNATURA) INTO v_area
+        SELECT academico_test.fn_area_oficial_de(COALESCE(asig.FK_TAREA_ASIGNATURA, ta.FK_TAREA_ASIGNATURA)) INTO v_area
           FROM academico_test.TASIGNATURA asig
           LEFT JOIN academico_test.TAREA ta ON ta.PK_TAREA = asig.FK_TAREA
          WHERE asig.PK_TASIGNATURA = p_fk_tasignatura;
@@ -62,7 +64,7 @@ BEGIN
                             AND a.ACTIVE = TRUE)                              AS tiene_areas,
                  EXISTS (SELECT 1 FROM academico_test.TREFERENTE_CURRICULAR_AREA a
                           WHERE a.FK_REFERENTE_CURRICULAR = rc.PK_REFERENTE_CURRICULAR
-                            AND a.FK_TAREA_ASIGNATURA = v_area
+                            AND academico_test.fn_area_oficial_de(a.FK_TAREA_ASIGNATURA) = v_area
                             AND a.ACTIVE = TRUE)                              AS lista_el_area
       ) ar
      WHERE rc.ACTIVE = TRUE                 -- borrado logico
@@ -83,4 +85,4 @@ END;
 $fnra$;
 
 COMMENT ON FUNCTION academico_test.fn_unidad_referente_aplicable(BIGINT, BIGINT, INT)
-    IS 'El referente curricular que le CORRESPONDE a un (grado, asignatura): unica definicion de la regla de derivacion, compartida por fn_unidad_crear, fn_unidad_actualizar, V280, fn_docente_unidad_tabs_listar y fn_actividad_configuracion_contexto. grado -> TGRADO.FK_TNIVEL_ENSENANZA -> TREFERENTE_CURRICULAR_NIVEL (N:N) y vigencia que cubra p_anio (default: anio en curso). Solo referentes ACTIVOS en los dos sentidos: ESTADO = A (estado de negocio que edita el usuario) y ACTIVE = true (borrado logico); son independientes y hay filas con uno sin el otro. Las areas del referente (TREFERENTE_CURRICULAR_AREA contra TAREA_ASIGNATURA; el area de la asignatura se resuelve con COALESCE(TASIGNATURA.FK_TAREA_ASIGNATURA, TAREA.FK_TAREA_ASIGNATURA)) son una PREFERENCIA, no una exclusion: gana 1) el que lista el area de la asignatura, 2) si no hay, el que no declara areas (aplica a todas), 3) si tampoco, cualquier otro activo del nivel; dentro de cada nivel, la vigencia mas reciente. Antes un referente acotado a otras areas quedaba EXCLUIDO y, como un nivel puede tener varios referentes, (Jardin I, SEGUIMIENTOS1) devolvia NULL y las unidades nuevas de Preescolar nacian sin referente. Sin asignatura no hay nivel 1 y decide 2) sobre 3). Devuelve NULL solo si no hay ningun referente activo para ese nivel. Sin gate: helper de lectura invocado desde funciones que ya gatearon.';
+    IS 'El referente curricular que le CORRESPONDE a un (grado, asignatura): unica definicion de la regla de derivacion, compartida por fn_unidad_crear, fn_unidad_actualizar, V280, fn_docente_unidad_tabs_listar y fn_actividad_configuracion_contexto. grado -> TGRADO.FK_TNIVEL_ENSENANZA -> TREFERENTE_CURRICULAR_NIVEL (N:N) y vigencia que cubra p_anio (default: anio en curso). Solo referentes ACTIVOS en los dos sentidos: ESTADO = A (estado de negocio que edita el usuario) y ACTIVE = true (borrado logico); son independientes y hay filas con uno sin el otro. Las areas del referente (TREFERENTE_CURRICULAR_AREA contra TAREA_ASIGNATURA; el area de la asignatura se resuelve con COALESCE(TASIGNATURA.FK_TAREA_ASIGNATURA, TAREA.FK_TAREA_ASIGNATURA), y ambos lados se comparan por AREA OFICIAL con fn_area_oficial_de, V315: una asignatura del catalogo cuenta como su area) son una PREFERENCIA, no una exclusion: gana 1) el que lista el area de la asignatura, 2) si no hay, el que no declara areas (aplica a todas), 3) si tampoco, cualquier otro activo del nivel; dentro de cada nivel, la vigencia mas reciente. Antes un referente acotado a otras areas quedaba EXCLUIDO y, como un nivel puede tener varios referentes, (Jardin I, SEGUIMIENTOS1) devolvia NULL y las unidades nuevas de Preescolar nacian sin referente. Sin asignatura no hay nivel 1 y decide 2) sobre 3). Devuelve NULL solo si no hay ningun referente activo para ese nivel. Sin gate: helper de lectura invocado desde funciones que ya gatearon.';
