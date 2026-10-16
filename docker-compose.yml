@@ -2103,7 +2103,9 @@ services:
     profiles: ["comms"]
     build:
       context: .
-      dockerfile: comms-service/Dockerfile
+      dockerfile: docker/java-service.Dockerfile
+      args:
+        MODULE: comms-service
     image: ${IMAGE_PREFIX:-eurekatic}/comms-service:${IMAGE_TAG:-1.0.0-SNAPSHOT}
     container_name: sso-comms-service
     restart: unless-stopped
