@@ -510,7 +510,7 @@ public class ChatRepository {
     public List<PersonaFila> personas(long usuario, String establecimiento, boolean todos, String q,
                                       int limite, int desde) {
         String busqueda = SIN_TILDES.formatted(
-                "concat_ws(' ', u.full_name, u.email, u.username, i.identificacion, i.nombre_academico)");
+                "concat_ws(' ', u.full_name, u.email, i.identificacion, i.nombre_academico)");
         return jdbc.sql("""
                 WITH ident AS (
                     SELECT DISTINCT ON (x.id_user) x.id_user, x.pk_tusuario, x.identificacion, x.nombre_academico
