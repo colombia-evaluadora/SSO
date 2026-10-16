@@ -1477,7 +1477,214 @@
       ]
     },
     {
-      "name": "28 - Limpieza: eliminar lista hija",
+      "name": "28 - Buscar un valor del sistema (ZONA)",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "eval-col",
+            "listas-valor"
+          ],
+          "query": [
+            {
+              "key": "CATEGORIA",
+              "value": "ZONA"
+            }
+          ],
+          "raw": "{{baseUrl}}/api/eval-col/listas-valor?CATEGORIA=ZONA"
+        },
+        "description": {
+          "content": "Toma un valor usado por el sistema y habilitado de ZONA. Guarda `sistemaId`.",
+          "type": "text/markdown"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('status 200', () => pm.response.to.have.status(200));",
+              "const res = pm.response.json().rows[0].resultado;",
+              "const v = res.find(x => x.esSistema && x.habilitado);",
+              "pm.test('hay un valor del sistema', () => pm.expect(v).to.exist);",
+              "pm.environment.set('sistemaId', v.pkListaValor);"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "29 - Inactivar un valor del sistema",
+      "request": {
+        "method": "PUT",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "eval-col",
+            "listas-valor",
+            "{{sistemaId}}",
+            "estado"
+          ],
+          "raw": "{{baseUrl}}/api/eval-col/listas-valor/{{sistemaId}}/estado"
+        },
+        "description": {
+          "content": "Reglas 2 y 3 y Anexo A: un valor usado por el sistema se puede inactivar (sale de los selectores); la lógica lo sigue encontrando por su código.",
+          "type": "text/markdown"
+        },
+        "body": {
+          "mode": "raw",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          },
+          "raw": "{\n  \"HABILITADO\": false\n}"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('status 200', () => pm.response.to.have.status(200));",
+              "const res = pm.response.json().rows[0].resultado;",
+              "pm.test('inactivo', () => pm.expect(res.habilitado).to.eql(false));",
+              "pm.test('sigue siendo del sistema', () => pm.expect(res.esSistema).to.eql(true));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "30 - Eliminar un valor del sistema → 409",
+      "request": {
+        "method": "PUT",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "eval-col",
+            "listas-valor",
+            "{{sistemaId}}",
+            "eliminar"
+          ],
+          "raw": "{{baseUrl}}/api/eval-col/listas-valor/{{sistemaId}}/eliminar"
+        },
+        "description": {
+          "content": "Un valor usado por el sistema no se elimina (23503), aunque esté inactivo.",
+          "type": "text/markdown"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('status 409', () => pm.response.to.have.status(409));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "31 - Reactivar el valor del sistema",
+      "request": {
+        "method": "PUT",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "eval-col",
+            "listas-valor",
+            "{{sistemaId}}",
+            "estado"
+          ],
+          "raw": "{{baseUrl}}/api/eval-col/listas-valor/{{sistemaId}}/estado"
+        },
+        "description": {
+          "content": "Lo deja como estaba: la corrida queda en cero.",
+          "type": "text/markdown"
+        },
+        "body": {
+          "mode": "raw",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          },
+          "raw": "{\n  \"HABILITADO\": true\n}"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('status 200', () => pm.response.to.have.status(200));",
+              "const res = pm.response.json().rows[0].resultado;",
+              "pm.test('activo', () => pm.expect(res.habilitado).to.eql(true));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "32 - Limpieza: eliminar lista hija",
       "request": {
         "method": "PUT",
         "header": [
@@ -1533,7 +1740,7 @@
       ]
     },
     {
-      "name": "29 - Limpieza: eliminar lista padre",
+      "name": "33 - Limpieza: eliminar lista padre",
       "request": {
         "method": "PUT",
         "header": [
