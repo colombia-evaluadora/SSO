@@ -15,6 +15,9 @@ server:
 # @Value (gateway.catalog-url) — not part of Spring Cloud
 # Gateway's schema.
 gateway:
+  # Versión mínima del front (X-Min-Client-Version, MinClientVersionGlobalFilter).
+  # Vacío = no se exige ninguna.
+  min-client-version: ${MIN_CLIENT_VERSION:}
   # sso-admin's container port is 8083 (EXPOSE 8083 in its
   # Dockerfile; the host-side binding is parameterized via
   # SSO_ADMIN_PORT in docker-compose). The default here

@@ -935,9 +935,12 @@ public class QueryService {
      * Headers allowed into {@code :CONTEXT.HEADERS}. Deliberately no
      * {@code Authorization}/{@code Cookie}; {@code X-Forwarded-For} is
      * captured separately as {@code :CONTEXT.CLIENT_IP}.
+     * {@code X-Client-Captured-At}/{@code X-Client-Version} come from the
+     * offline outbox: {@code fn_offline_captura()} reads the first one from
+     * {@code app.headers} to apply the closed-period rules (V496.18).
      */
     private static final List<String> HEADER_WHITELIST =
-            List.of("User-Agent", "Accept-Language", "Referer");
+            List.of("User-Agent", "Accept-Language", "Referer", "X-Client-Captured-At", "X-Client-Version");
 
     /**
      * The transport-derived {@code CONTEXT.*} names. Every one of them is

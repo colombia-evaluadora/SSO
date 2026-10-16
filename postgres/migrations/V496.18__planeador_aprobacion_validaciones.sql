@@ -153,6 +153,54 @@ AS $$
 $$;
 
 -- ---------------------------------------------------------------------------
+-- Instante de captura offline (header X-Client-Captured-At vía app.headers)
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION academico_test.fn_offline_captura()
+RETURNS TIMESTAMPTZ
+LANGUAGE plpgsql
+STABLE
+AS $$
+DECLARE
+    v_raw TEXT;
+    v_ts  TIMESTAMPTZ;
+BEGIN
+    v_raw := NULLIF(current_setting('app.headers', true), '')::jsonb ->> 'x-client-captured-at';
+    IF v_raw IS NULL THEN
+        RETURN NULL;
+    END IF;
+    v_ts := v_raw::timestamptz;
+    IF v_ts > now() + interval '10 minutes' OR v_ts < now() - interval '400 days' THEN
+        RETURN NULL;
+    END IF;
+    RETURN v_ts;
+EXCEPTION WHEN others THEN
+    RETURN NULL;
+END;
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_offline_captura()
+    IS 'Instante en que el cliente offline capturó la escritura (header X-Client-Captured-At, que query-service copia a app.headers). NULL sin header, con un valor ilegible, futuro (> 10 min) o de hace más de 400 días. Lo usan las reglas de periodo cerrado.';
+
+CREATE OR REPLACE FUNCTION academico_test.fn_capturado_con_periodo_abierto(
+    p_fecha_fin   DATE,
+    p_modified_at TIMESTAMP
+)
+RETURNS BOOLEAN
+LANGUAGE sql
+STABLE
+AS $$
+    -- El cierre es un cambio de FK_TLV_ESTADO, que deja MODIFIED_AT >= cierre:
+    -- capturar antes de esa marca y dentro de las fechas implica periodo abierto.
+    SELECT COALESCE(
+             (academico_test.fn_offline_captura() AT TIME ZONE 'America/Bogota')::date <= p_fecha_fin
+             AND academico_test.fn_offline_captura() <= p_modified_at,
+             FALSE);
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_capturado_con_periodo_abierto(DATE, TIMESTAMP)
+    IS 'TRUE si la escritura offline en curso se capturó cuando el periodo (sus FECHA_FIN y MODIFIED_AT) seguía abierto. FALSE sin captura. Lo usan fn_resultado_correccion_requiere_aprobacion, fn_asistencia_fecha_requiere_aprobacion y fn_asistencia_validar_periodo_abierto.';
+
+-- ---------------------------------------------------------------------------
 -- Estado del periodo de evaluación (catálogo ESTADOPERIODOEVALUACION)
 -- ---------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION academico_test.fn_periodo_evaluacion_calificable(p_pk_tperiodo_evaluacion BIGINT)
@@ -224,11 +272,14 @@ AS $$
     SELECT COALESCE(
              n.CALIFICACION IS NOT NULL
              AND p_porcentaje IS DISTINCT FROM n.CALIFICACION
-             AND academico_test.fn_periodo_evaluacion_calificable(
-                     academico_test.fn_actividad_periodo_evaluacion(ae.FK_TACTIVIDAD, ae.FK_TMATRICULA)) = FALSE,
+             AND academico_test.fn_periodo_evaluacion_calificable(pe.PK_TPERIODO_EVALUACION) = FALSE
+             -- Offline: capturada con el periodo todavía Calificable, va directo.
+             AND NOT academico_test.fn_capturado_con_periodo_abierto(pe.FECHA_FIN, pe.MODIFIED_AT),
              FALSE)
       FROM academico_test.TACTIVIDAD_ESTUDIANTE ae
       JOIN academico_test.TACTIVIDAD a ON a.PK_TACTIVIDAD = ae.FK_TACTIVIDAD
+      LEFT JOIN academico_test.TPERIODO_EVALUACION pe
+             ON pe.PK_TPERIODO_EVALUACION = academico_test.fn_actividad_periodo_evaluacion(ae.FK_TACTIVIDAD, ae.FK_TMATRICULA)
       LEFT JOIN academico_test.TACTIVIDAD_NOTA n
              ON n.FK_TACTIVIDAD_ESTUDIANTE = ae.PK_TACTIVIDAD_ESTUDIANTE AND n.ACTIVE = TRUE
      WHERE ae.PK_TACTIVIDAD_ESTUDIANTE = p_pk_tactividad_estudiante
@@ -243,8 +294,12 @@ AS $$
     -- Regla 75: manda el periodo DE EVALUACIÓN de la fecha de la sesión. Un
     -- periodo que ya terminó por fechas también exige aprobación aunque siga
     -- Calificable. NULL si la fecha no cae en ninguno: bloqueo plano (V136).
-    SELECT NOT academico_test.fn_periodo_evaluacion_calificable(pe.PK_TPERIODO_EVALUACION)
-           OR pe.FECHA_FIN < CURRENT_DATE
+    -- Offline: lo capturado con el periodo abierto no exige aprobación.
+    SELECT (NOT academico_test.fn_periodo_evaluacion_calificable(pe.PK_TPERIODO_EVALUACION)
+            AND NOT academico_test.fn_capturado_con_periodo_abierto(pe.FECHA_FIN, pe.MODIFIED_AT))
+           OR (pe.FECHA_FIN < CURRENT_DATE
+               AND NOT COALESCE((academico_test.fn_offline_captura() AT TIME ZONE 'America/Bogota')::date
+                                <= pe.FECHA_FIN, FALSE))
       FROM academico_test.TPERIODO_EVALUACION pe
      WHERE pe.PK_TPERIODO_EVALUACION = academico_test.fn_asistencia_periodo_eval(p_fk_tgrupo, p_fecha);
 $$;
