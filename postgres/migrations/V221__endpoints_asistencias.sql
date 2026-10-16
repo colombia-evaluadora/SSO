@@ -141,8 +141,7 @@ SELECT
     p_observacion            => CAST(:BODY.OBSERVACION AS VARCHAR),
     p_fk_soporte_archivo     => CAST(:BODY.SOPORTE_ARCHIVO AS BIGINT),
     p_limpiar_archivo        => COALESCE(CAST(:BODY.LIMPIAR_ARCHIVO AS BOOLEAN), FALSE),
-    p_limpiar_observacion    => COALESCE(CAST(:BODY.LIMPIAR_OBSERVACION AS BOOLEAN), FALSE),
-    p_base_version           => CAST(:BODY.BASE_VERSION AS TEXT)
+    p_limpiar_observacion    => COALESCE(CAST(:BODY.LIMPIAR_OBSERVACION AS BOOLEAN), FALSE)
 ) AS pk_tasistencia$q$,
     'postgres', false, false, m.id_microservice,
     '/asistencias/:ID', 'SELECT', 'PATCH',
@@ -152,10 +151,9 @@ SELECT
        "BODY.OBSERVACION":          "VARCHAR",
        "BODY.SOPORTE_ARCHIVO":      "BIGINT",
        "BODY.LIMPIAR_ARCHIVO":      "BOOLEAN",
-       "BODY.LIMPIAR_OBSERVACION":  "BOOLEAN",
-       "BODY.BASE_VERSION":         "VARCHAR"
+       "BODY.LIMPIAR_OBSERVACION":  "BOOLEAN"
      }'::jsonb,
-    'V221 -- edita un registro de asistencia (estado, observacion, soporte). BASE_VERSION opcional (escritura offline): 409 OFFLINE_CONFLICT si el registro cambio. Campos ausentes = no se tocan; LIMPIAR_ARCHIVO / LIMPIAR_OBSERVACION = true los pone en NULL. TIPO_ASISTENCIA es el VALOR del catalogo (1,2,3,5,6). RECHAZA (22023) si el TPERIODO_ACADEMICO del grupo del registro esta Cerrado.'
+    'V221 -- edita un registro de asistencia (estado, observacion, soporte). Campos ausentes = no se tocan; LIMPIAR_ARCHIVO / LIMPIAR_OBSERVACION = true los pone en NULL. TIPO_ASISTENCIA es el VALOR del catalogo (1,2,3,5,6). RECHAZA (22023) si el TPERIODO_ACADEMICO del grupo del registro esta Cerrado.'
   FROM public.microservice m
  WHERE m.serviceid = 'eval-col'
 ON CONFLICT (uuid) DO UPDATE
