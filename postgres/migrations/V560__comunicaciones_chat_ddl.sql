@@ -87,6 +87,18 @@ CREATE TABLE IF NOT EXISTS comunicaciones.tmensaje_reaccion (
     PRIMARY KEY (fk_tmensaje, fk_usuario, emoji)
 );
 
+-- Adjunto real (file-service): el binario vive en TARCHIVO; aqui solo su pk y su
+-- peso. nombre/formato siguen arriba para pintar el mensaje sin otra consulta.
+-- es_bot: conversacion con el asistente. actividad_cerrada_en: fin de la
+-- votacion/encuesta/examen del canal (actividadAbierta = categoria con
+-- actividad y sin cierre). ADD COLUMN IF NOT EXISTS: una base ya creada las recibe.
+ALTER TABLE comunicaciones.tmensaje ADD COLUMN IF NOT EXISTS fk_tarchivo  BIGINT;
+ALTER TABLE comunicaciones.tmensaje ADD COLUMN IF NOT EXISTS adjunto_peso BIGINT;
+CREATE INDEX IF NOT EXISTS ix_tmensaje_tarchivo
+    ON comunicaciones.tmensaje (fk_tarchivo) WHERE fk_tarchivo IS NOT NULL;
+ALTER TABLE comunicaciones.tcanal ADD COLUMN IF NOT EXISTS es_bot BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE comunicaciones.tcanal ADD COLUMN IF NOT EXISTS actividad_cerrada_en TIMESTAMPTZ;
+
 -- Auditoria CDC de lo que moderacion necesita reconstruir (quien escribio,
 -- edito o borro y en que canal). Reacciones fuera: volumen alto, sin valor de auditoria.
 DO $$

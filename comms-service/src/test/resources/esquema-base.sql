@@ -36,3 +36,17 @@ RETURNS BIGINT LANGUAGE sql STABLE AS 'SELECT fk_testablecimiento FROM academico
 CREATE OR REPLACE FUNCTION public.fn_get_academico_usuario_id(p BIGINT)
 RETURNS BIGINT LANGUAGE sql STABLE AS
 'SELECT tu.pk_tusuario FROM academico_test.tusuario tu JOIN users u ON u.email = tu.cuenta WHERE u.id_user = p LIMIT 1';
+-- Adjuntos (file-service): TARCHIVO y su ubicacion (V1, V35).
+CREATE TABLE IF NOT EXISTS academico_test.tarchivo (
+    pk_tarchivo BIGINT PRIMARY KEY,
+    nombre      VARCHAR(255),
+    peso        BIGINT,
+    created_by  VARCHAR(200),
+    active      BOOLEAN NOT NULL DEFAULT FALSE
+);
+CREATE TABLE IF NOT EXISTS public.file_reference_location (
+    pk_tarchivo BIGINT PRIMARY KEY,
+    schema_name TEXT NOT NULL,
+    table_name  TEXT NOT NULL,
+    urls3       TEXT
+);

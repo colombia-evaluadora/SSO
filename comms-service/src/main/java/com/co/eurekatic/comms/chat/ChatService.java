@@ -32,7 +32,6 @@ import java.util.UUID;
 public class ChatService {
 
     static final Set<String> CATEGORIAS = Set.of("GENERAL", "VOTACION", "ENCUESTA", "EXAMEN", "ANUNCIO");
-    static final Set<String> FORMATOS = Set.of("WORD", "PDF", "IMAGEN", "VIDEO", "OTRO");
     private static final int MAX_TEXTO = 4000;
 
     private final ChatRepository repo;
@@ -41,9 +40,11 @@ public class ChatService {
     private final PresenciaService presencia;
     private final NotificadorChat notificador;
     private final TransactionTemplate tx;
+    private final AdjuntosChat adjuntos;
 
     public ChatService(ChatRepository repo, PoliticaChat politica, RealtimeBus bus, PresenciaService presencia,
-                       NotificadorChat notificador, TransactionTemplate tx) {
+                       NotificadorChat notificador, TransactionTemplate tx, AdjuntosChat adjuntos) {
+        this.adjuntos = adjuntos;
         this.repo = repo;
         this.politica = politica;
         this.bus = bus;
@@ -236,16 +237,18 @@ public class ChatService {
 
     // ── mensajes ───────────────────────────────────────────────────────────
 
-    public Mensaje enviar(Usuario u, long canal, String texto, String adjNombre, String adjFormato, Long respuesta,
-                          UUID clientId) {
+    /**
+     * {@code archivoId}: pk_tarchivo que reenvio file-service (campo multipart
+     * {@code ADJUNTO}); nombre y formato salen de TARCHIVO, no del cliente.
+     */
+    public Mensaje enviar(Usuario u, long canal, String texto, Long archivoId, Long respuesta, UUID clientId) {
         Membresia mem = exigirMiembro(u, canal);
         var previo = repo.mensajePorClientId(u.id(), clientId);
         if (previo.isPresent()) return uno(previo.get(), u);
         String t = texto == null ? "" : texto.trim();
         if (t.length() > MAX_TEXTO) throw new ApiError(400, "El mensaje es demasiado largo.");
-        if (adjNombre != null && adjNombre.isBlank()) adjNombre = null;
-        if (t.isEmpty() && adjNombre == null) throw new ApiError(400, "Escribe un mensaje o adjunta un archivo.");
-        String formato = adjNombre == null ? null : (adjFormato != null && FORMATOS.contains(adjFormato) ? adjFormato : "OTRO");
+        if (t.isEmpty() && archivoId == null) throw new ApiError(400, "Escribe un mensaje o adjunta un archivo.");
+        AdjuntosChat.Archivo adj = archivoId == null ? null : adjuntos.validar(archivoId, u.sub());
         MensajeBase original = null;
         if (respuesta != null) {
             original = repo.mensajeBase(respuesta).filter(m -> m.canal() == canal && !m.eliminado())
@@ -253,10 +256,13 @@ public class ChatService {
         }
         Map<Long, String> miembros = repo.miembros(canal);
         List<Mencion> menciones = Menciones.extraer(t, miembros, politica.mencionMasiva(politica.perfil(u.roles())));
-        final String nombreAdj = adjNombre;
         long id = tx.execute(s -> {
             repo.contextoAuditoria(u.sub());
-            long nuevo = repo.insertarMensaje(canal, u.id(), "NORMAL", t, nombreAdj, formato, respuesta, clientId);
+            long nuevo = repo.insertarMensaje(canal, u.id(), "NORMAL", t, adj == null ? null : adj.nombre(),
+                    adj == null ? null : adj.formato(), adj == null ? null : adj.id(), adj == null ? null : adj.peso(),
+                    respuesta, clientId);
+            // El borrador de este canal queda como enviado (pestaña "Enviados").
+            repo.marcarBorradorEnviado(canal, u.id(), nuevo, t);
             repo.guardarMenciones(nuevo, menciones);
             repo.sumarMenciones(canal, mencionados(menciones, miembros.keySet(), u.id()));
             repo.actualizarMiembro(canal, u.id(), "ultimo_leido_msg = :m, marcado_no_leido = FALSE",
@@ -265,7 +271,8 @@ public class ChatService {
         });
         difundir(canal, "mensaje.creado", id);
         refrescarListas(canal, miembros.keySet(), u.id());
-        notificarMensaje(u, canal, mem, id, t, menciones, miembros, original);
+        notificarMensaje(u, canal, mem, id, t.isEmpty() && adj != null ? "Adjunto: " + adj.nombre() : t, menciones,
+                miembros, original);
         return uno(id, u);
     }
 
@@ -329,27 +336,27 @@ public class ChatService {
 
     // ── internos ───────────────────────────────────────────────────────────
 
-    private Membresia exigirMiembro(Usuario u, long canal) {
+    Membresia exigirMiembro(Usuario u, long canal) {
         Membresia m = repo.membresia(canal, u.id())
                 .orElseThrow(() -> new ApiError(404, "La conversacion no existe."));
         if (m.bloqueado()) throw new ApiError(403, "Te bloquearon en este canal.");
         return m;
     }
 
-    private void exigirAdmin(Usuario u, long canal) {
+    void exigirAdmin(Usuario u, long canal) {
         Membresia m = exigirMiembro(u, canal);
         if ("DIRECTO".equals(m.tipoCanal())) throw new ApiError(400, "Un mensaje directo no se administra.");
         if (!"ADMIN".equals(m.rol())) throw new ApiError(403, "Solo quien administra el canal puede hacerlo.");
     }
 
-    private MensajeBase visible(Usuario u, long id) {
+    MensajeBase visible(Usuario u, long id) {
         MensajeBase m = repo.mensajeBase(id).filter(x -> !x.eliminado())
                 .orElseThrow(() -> new ApiError(404, "El mensaje ya no existe."));
         exigirMiembro(u, m.canal());
         return m;
     }
 
-    private MensajeBase propio(Usuario u, long id, String msg) {
+    MensajeBase propio(Usuario u, long id, String msg) {
         MensajeBase m = visible(u, id);
         if (m.autor() != u.id()) throw new ApiError(403, msg);
         return m;
@@ -373,12 +380,12 @@ public class ChatService {
                 .orElseThrow(() -> new ApiError(404, "La persona ya no esta en el canal."));
     }
 
-    private Mensaje uno(long id, Usuario u) {
+    Mensaje uno(long id, Usuario u) {
         return repo.mensajes(List.of(id), u.id(), Set.of()).stream().findFirst()
                 .orElseThrow(() -> new ApiError(404, "El mensaje ya no existe."));
     }
 
-    private void escribir(Usuario u, Runnable r) {
+    void escribir(Usuario u, Runnable r) {
         tx.executeWithoutResult(s -> {
             repo.contextoAuditoria(u.sub());
             r.run();
@@ -402,13 +409,13 @@ public class ChatService {
     }
 
     /** Mensaje difundido en forma neutra (sin {@code esPropio}/{@code mia}: el cliente los calcula). */
-    private void difundir(long canal, String evento, long id) {
+    void difundir(long canal, String evento, long id) {
         repo.mensajes(List.of(id), null, Set.of()).stream().findFirst()
                 .ifPresent(m -> bus.publicar("canal:" + canal, evento, m));
     }
 
     /** Contadores de no leidos en la lista: solo a miembros conectados (los demas leen por REST). */
-    private void refrescarListas(long canal, Set<Long> miembros, long autor) {
+    void refrescarListas(long canal, Set<Long> miembros, long autor) {
         Set<Long> online = presencia.enLinea(miembros);
         online.remove(autor);
         if (online.isEmpty()) return;
