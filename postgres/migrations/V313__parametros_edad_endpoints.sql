@@ -1,6 +1,6 @@
 -- V313 - Parámetros de edad, capa 5 de 5: menú y endpoints.
 -- Menú PARAMETROS_EDAD bajo ADMINISTRACION solo para el Superadministrador (y
--- SSO-ADMIN en role_query). La vista no tiene Eliminar: ADMITE_ELIMINAR = FALSE.
+-- SSO-ADMIN en role_query), con guardar y eliminar.
 -- Depende de: V312 (wrappers), V104 (ADMINISTRACION), V303 (ADMITE_*).
 
 SET search_path TO academico_test, public;
@@ -17,9 +17,9 @@ SELECT 'PARAMETROS_EDAD', 'Parámetros de edad', 'S', 'A', '/app/administracion/
  LIMIT 1;
 
 UPDATE academico_test.TMENU
-   SET ADMITE_GUARDAR = TRUE, ADMITE_ELIMINAR = FALSE
+   SET ADMITE_GUARDAR = TRUE, ADMITE_ELIMINAR = TRUE
  WHERE CODIGO = 'PARAMETROS_EDAD'
-   AND (ADMITE_GUARDAR IS DISTINCT FROM TRUE OR ADMITE_ELIMINAR IS DISTINCT FROM FALSE);
+   AND (ADMITE_GUARDAR IS DISTINCT FROM TRUE OR ADMITE_ELIMINAR IS DISTINCT FROM TRUE);
 
 INSERT INTO academico_test.TROL_MENU (FK_TROL, FK_TMENU, ACTIVE, CREATED_BY, CREATED_AT)
 SELECT r.PK_TROL, m.PK_TMENU, TRUE, 'migracion', CURRENT_TIMESTAMP
@@ -54,7 +54,19 @@ SELECT v.uuid, m.id_microservice, v.ruta, v.metodo, 'postgres', 'SELECT', NULL,
     public.fn_get_academico_usuario_id(:CONTEXT.USER_ID::BIGINT),
     CAST(:PARAM.CALENDARIO AS BIGINT),
     CAST(:BODY.MES AS INTEGER),
-    CAST(:BODY.DIA AS INTEGER)) AS resultado;$q$)
+    CAST(:BODY.DIA AS INTEGER)) AS resultado;$q$),
+    ('d5879068-34ef-49e5-a3cb-d6c15127897a', '/parametros-edad/grados/:GRADO/eliminar', 'PUT',
+     '{"PARAM.GRADO": "BIGINT"}',
+     'Quita la edad recomendada del grado :GRADO (pkListaValor de GRADOS); su situación de edad queda Sin calcular. Devuelve {pkGrado}. Errores: 404 (P0002) grado inexistente o sin edad; 403 (42501) sin ELIMINAR sobre PARAMETROS_EDAD.',
+     $q$SELECT academico_test.fn_parametroedad_grado_eliminar(
+    public.fn_get_academico_usuario_id(:CONTEXT.USER_ID::BIGINT),
+    CAST(:PARAM.GRADO AS BIGINT)) AS resultado;$q$),
+    ('7df178e2-d43e-43c6-ade7-4d6b97d56df4', '/parametros-edad/calendarios/:CALENDARIO/eliminar', 'PUT',
+     '{"PARAM.CALENDARIO": "BIGINT"}',
+     'Quita la fecha de corte del calendario :CALENDARIO (pkListaValor de CALENDARIO); su situación de edad queda Sin calcular. Devuelve {pkCalendario}. Errores: 404 (P0002) calendario inexistente o sin fecha de corte; 403 (42501) sin ELIMINAR sobre PARAMETROS_EDAD.',
+     $q$SELECT academico_test.fn_parametroedad_calendario_eliminar(
+    public.fn_get_academico_usuario_id(:CONTEXT.USER_ID::BIGINT),
+    CAST(:PARAM.CALENDARIO AS BIGINT)) AS resultado;$q$)
  ) AS v(uuid, ruta, metodo, param_types, detalle, consulta)
  WHERE m.serviceid = 'eval-col'
 ON CONFLICT (microservice_id, path_template, http_method) WHERE path_template IS NOT NULL DO UPDATE
