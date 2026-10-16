@@ -952,6 +952,14 @@ services:
       EMAILJS_PUBLIC_KEY: ${EMAILJS_PUBLIC_KEY:-}
       EMAILJS_PRIVATE_KEY: ${EMAILJS_PRIVATE_KEY:-}
       GOOGLE_APPLICATION_CREDENTIALS: ${GOOGLE_APPLICATION_CREDENTIALS:-}
+      # Bandeja (/api/notificaciones/**): verifica el Bearer con la clave
+      # publica del SSO. Sin ella esas rutas responden 503.
+      JWT_PUBLIC_KEY: ${JWT_PUBLIC_KEY}
+      # Web Push con VAPID propio (fila `webpush` de provider_config). Sin
+      # las tres, el proveedor se autodesactiva con WARN.
+      VAPID_PUBLIC_KEY: ${VAPID_PUBLIC_KEY:-}
+      VAPID_PRIVATE_KEY: ${VAPID_PRIVATE_KEY:-}
+      VAPID_SUBJECT: ${VAPID_SUBJECT:-}
     healthcheck:
       test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/localhost/8085; printf 'GET /actuator/health HTTP/1.0\r\n\r\n' >&3; grep -q UP <&3"]
       interval: 10s
