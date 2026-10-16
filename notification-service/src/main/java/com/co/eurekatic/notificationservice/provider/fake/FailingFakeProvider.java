@@ -13,9 +13,10 @@ import org.slf4j.LoggerFactory;
  * integration suite to assert failover behaviour without
  * reaching out to a real provider.
  *
- * <p>The key is {@code failing-fake}; row seed inserts it
- * for the EMAIL channel (priority 99, weight 1, enabled by
- * default in {@code @TestConfiguration}). In production
+ * <p>The key is {@code failing-fake}. No migration seeds its
+ * provider_config row: NotificationServiceIntegrationTest inserts
+ * it (EMAIL, priority 99, weight 1, disabled) before each scenario
+ * and enables it only where the scenario needs it. In production
  * this bean is <strong>not</strong> registered — see
  * {@link TestOnlyFakesConfig} for the conditional wiring.
  */
