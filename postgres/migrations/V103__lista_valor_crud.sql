@@ -312,7 +312,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_listavalor_estado(BIGINT, BIGINT, BOOLEAN)
-    IS 'PUT /listas-valor/:ID/estado: activa o inactiva el valor en los selectores (fn_listavalor_estado_interno). Orden: P0002 → 22023 (eliminado) → 42501 (EDITAR sobre LISTAS_VALOR) → 23503 (inactivar un valor del sistema o con hijos activos) → 22023 (activar con el padre inactivo).';
+    IS 'PUT /listas-valor/:ID/estado: activa o inactiva el valor en los selectores (fn_listavalor_estado_interno). Orden: P0002 → 22023 (eliminado) → 42501 (EDITAR sobre LISTAS_VALOR) → 23503 (inactivar un valor con hijos activos; los del sistema sí se inactivan) → 22023 (activar con el padre inactivo).';
 
 CREATE OR REPLACE FUNCTION academico_test.fn_listavalor_predeterminado(
     p_pk_usuario_solicitante BIGINT,

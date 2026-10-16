@@ -460,7 +460,8 @@ BEGIN
     IF COALESCE(p_habilitado, TRUE) THEN
         PERFORM academico_test.fn_listavalor_validar_padre_habilitado(p_pk_lista_valor);
     ELSE
-        PERFORM academico_test.fn_listavalor_validar_no_sistema(ARRAY[p_pk_lista_valor]);
+        -- Un valor del sistema también se inactiva (Reglas 2 y 3, Anexo A): la lógica
+        -- lo busca por CATEGORIA+VALOR sin mirar HABILITADO; eliminarlo sigue bloqueado.
         PERFORM academico_test.fn_listavalor_validar_sin_hijos_habilitados(p_pk_lista_valor);
     END IF;
 
@@ -478,7 +479,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_listavalor_estado_interno(BIGINT, BIGINT, BOOLEAN)
-    IS 'INTERNO: activa o inactiva un valor en los selectores (sigue en los registros que lo tienen). Inactivar: 23503 si es del sistema o tiene hijos activos, y deja de ser predeterminado. Activar: 22023 si su padre está inactivo. La usa fn_listavalor_estado.';
+    IS 'INTERNO: activa o inactiva un valor en los selectores (sigue en los registros que lo tienen). Inactivar: 23503 si tiene hijos activos (un valor del sistema sí se inactiva), y deja de ser predeterminado. Activar: 22023 si su padre está inactivo. La usa fn_listavalor_estado.';
 
 CREATE OR REPLACE FUNCTION academico_test.fn_listavalor_eliminar_interno(
     p_pk_usuario     BIGINT,
