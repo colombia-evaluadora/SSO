@@ -42,6 +42,10 @@ BEGIN
      ORDER BY id_user DESC
      LIMIT 1;
 
+    PERFORM pigse.fn_audit_declarar(p_pk_usuario_solicitante,
+        format('Creación del funcionario %s', TRIM(concat_ws(' ', p_primer_nombre, p_segundo_nombre, p_primer_apellido, p_segundo_apellido))),
+        p_fk_establecimiento);
+
     INSERT INTO pigse.TUSUARIO (
         CORREO_ELECTRONICO, IDENTIFICACION, FK_TLV_TIPO_DOCUMENTO,
         PRIMER_NOMBRE, SEGUNDO_NOMBRE, PRIMER_APELLIDO, SEGUNDO_APELLIDO, TELEFONO,

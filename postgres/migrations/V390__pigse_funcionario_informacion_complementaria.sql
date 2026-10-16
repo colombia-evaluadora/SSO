@@ -401,6 +401,9 @@ BEGIN
           INTO v_sedes_coord;
     END IF;
 
+    PERFORM pigse.fn_audit_declarar(p_pk_usuario_solicitante,
+        format('Actualización de permisos del funcionario %s', COALESCE(pigse.fn_resolver_actor(v_pk_usuario), p_pk_funcionario::TEXT)));
+
     FOR v_perm IN
         SELECT
             NULLIF(TRIM(elem->>'accion'), '')                       AS accion,

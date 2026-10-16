@@ -113,6 +113,12 @@ BEGIN
             USING ERRCODE = '22023';
     END IF;
 
+    PERFORM pigse.fn_audit_declarar(p_pk_usuario_solicitante,
+        format('Asignación del rol %s al funcionario %s',
+               (SELECT r.name FROM public.role r WHERE r.id_role = p_fk_id_role),
+               COALESCE(pigse.fn_resolver_actor(v_pk_usuario), p_pk_funcionario::TEXT)),
+        v_fk_establecimiento);
+
     -- Desactiva cualquier OTRO rol que ya tuviera en ESTE establecimiento
     -- (un funcionario tiene un solo rol por EE en el front actual) y limpia
     -- public.role_users si ese rol no le queda vigente por ningún otro

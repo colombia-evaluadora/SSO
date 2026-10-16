@@ -57,6 +57,10 @@ BEGIN
         RAISE EXCEPTION 'Ya existe otro usuario activo con el correo %', p_correo_electronico USING ERRCODE = '23505';
     END IF;
 
+    PERFORM pigse.fn_audit_declarar(p_pk_usuario_solicitante,
+        format('Actualización del funcionario %s', COALESCE(pigse.fn_resolver_actor(v_pk_usuario), p_pk_funcionario::TEXT)),
+        p_fk_establecimiento);
+
     UPDATE pigse.TUSUARIO
        SET CORREO_ELECTRONICO = COALESCE(TRIM(p_correo_electronico), CORREO_ELECTRONICO),
            IDENTIFICACION     = COALESCE(TRIM(p_identificacion), IDENTIFICACION),

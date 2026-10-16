@@ -113,6 +113,9 @@ BEGIN
         END IF;
     END IF;
 
+    PERFORM pigse.fn_audit_declarar(p_pk_usuario_solicitante,
+        format('Cancelación del registro pendiente del funcionario %s', COALESCE(pigse.fn_resolver_actor(v_fk_usuario), p_pk_funcionario::TEXT)));
+
     UPDATE pigse.TFUNCIONARIO
        SET ACTIVE      = FALSE,
            MODIFIED_BY = p_pk_usuario_solicitante::VARCHAR,

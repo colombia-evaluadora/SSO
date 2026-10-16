@@ -201,6 +201,9 @@ BEGIN
             USING ERRCODE = '42501';
     END IF;
 
+    PERFORM pigse.fn_audit_declarar(p_pk_usuario_solicitante,
+        format('Baja masiva de %s funcionarios', COALESCE(CARDINALITY(p_pks), 0)));
+
     FOREACH v_pk IN ARRAY COALESCE(p_pks, ARRAY[]::BIGINT[])
     LOOP
         IF NOT EXISTS (SELECT 1 FROM pigse.TFUNCIONARIO f WHERE f.PK_TFUNCIONARIO = v_pk AND f.ACTIVE = TRUE) THEN

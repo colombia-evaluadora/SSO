@@ -74,6 +74,9 @@ BEGIN
         v_apellido := '(sin apellido)';
     END IF;
 
+    PERFORM pigse.fn_audit_declarar(NULL,
+        format('Alta automática del usuario %s en PIGSE', TRIM(p_email)));
+
     INSERT INTO pigse.TUSUARIO (
         FK_ID_USER, CORREO_ELECTRONICO, PRIMER_NOMBRE, PRIMER_APELLIDO,
         CREATED_BY, CREATED_AT, ACTIVE)
@@ -150,6 +153,11 @@ BEGIN
        AND NOT EXISTS (SELECT 1 FROM public.role r WHERE r.id_role = p_fk_id_role) THEN
         RAISE EXCEPTION 'El rol (%) no existe en public.role', p_fk_id_role USING ERRCODE = '23503';
     END IF;
+
+    PERFORM pigse.fn_audit_declarar(p_pk_usuario_solicitante,
+        format('Creación del usuario %s en el ente territorial %s',
+               TRIM(concat_ws(' ', p_primer_nombre, p_segundo_nombre, p_primer_apellido, p_segundo_apellido)),
+               (SELECT e.NOMBRE FROM pigse.TENTE e WHERE e.PK_ENTE = p_fk_ente)));
 
     SELECT u.PK_TUSUARIO INTO v_pk_usuario
       FROM pigse.TUSUARIO u
