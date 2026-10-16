@@ -25,21 +25,21 @@ SELECT 'LISTAS_VALOR', 'Listas de valores', 'S', 'A', '/app/administracion/lista
 
 INSERT INTO academico_test.TROL_MENU (FK_TROL, FK_TMENU, ACTIVE, CREATED_BY, CREATED_AT)
 SELECT r.PK_TROL, m.PK_TMENU, TRUE, 'migracion', CURRENT_TIMESTAMP
-  FROM academico_test.TROL r
-  JOIN academico_test.TMENU m ON m.CODIGO = 'LISTAS_VALOR' AND m.ACTIVE = TRUE
- WHERE r.CODIGO = 'SUPER_ADMINISTRADOR'
+  FROM (SELECT PK_TMENU FROM academico_test.TMENU WHERE CODIGO = 'LISTAS_VALOR' AND ACTIVE = TRUE) m
+ CROSS JOIN academico_test.TROL r
+ WHERE academico_test.fn_rol_categoria_nivel(r.PK_TROL) = 0
    AND r.ACTIVE = TRUE
    AND NOT EXISTS (SELECT 1 FROM academico_test.TROL_MENU tm
                     WHERE tm.FK_TROL = r.PK_TROL AND tm.FK_TMENU = m.PK_TMENU);
 
--- La gestión de la Lista de Valores es exclusiva del Superadministrador.
+-- Exclusiva del Superadministrador: se resuelve por la categoría del rol (nivel 0,
+-- el mismo criterio del bypass de los gates), no por el código del dump.
 UPDATE academico_test.TROL_MENU tm
    SET ACTIVE = FALSE, MODIFIED_BY = 'migracion', MODIFIED_AT = CURRENT_TIMESTAMP
-  FROM academico_test.TMENU m, academico_test.TROL r
+  FROM academico_test.TMENU m
  WHERE m.CODIGO = 'LISTAS_VALOR'
    AND tm.FK_TMENU = m.PK_TMENU
-   AND r.PK_TROL = tm.FK_TROL
-   AND r.CODIGO <> 'SUPER_ADMINISTRADOR'
+   AND academico_test.fn_rol_categoria_nivel(tm.FK_TROL) IS DISTINCT FROM 0
    AND tm.ACTIVE = TRUE;
 
 INSERT INTO public.query (uuid, microservice_id, path_template, http_method, type, execution_mode, out_param_names,
