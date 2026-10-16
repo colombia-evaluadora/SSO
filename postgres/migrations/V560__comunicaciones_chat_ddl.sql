@@ -24,7 +24,7 @@ CREATE TABLE IF NOT EXISTS comunicaciones.tcanal (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS ux_tcanal_clave_directo
     ON comunicaciones.tcanal (clave_directo) WHERE clave_directo IS NOT NULL;
--- FORO (V563): una base ya creada recibe el CHECK y el indice nuevos al reaplicar.
+-- FORO (V585): una base ya creada recibe el CHECK y el indice nuevos al reaplicar.
 ALTER TABLE comunicaciones.tcanal DROP CONSTRAINT IF EXISTS tcanal_tipo_check;
 ALTER TABLE comunicaciones.tcanal ADD CONSTRAINT tcanal_tipo_check CHECK (tipo IN ('CANAL','DIRECTO','FORO'));
 DROP INDEX IF EXISTS comunicaciones.ux_tcanal_nombre_establecimiento;
@@ -90,6 +90,18 @@ CREATE TABLE IF NOT EXISTS comunicaciones.tmensaje_reaccion (
     created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     PRIMARY KEY (fk_tmensaje, fk_usuario, emoji)
 );
+
+-- Adjunto real (file-service): el binario vive en TARCHIVO; aqui solo su pk y su
+-- peso. nombre/formato siguen arriba para pintar el mensaje sin otra consulta.
+-- es_bot: conversacion con el asistente. actividad_cerrada_en: fin de la
+-- votacion/encuesta/examen del canal (actividadAbierta = categoria con
+-- actividad y sin cierre). ADD COLUMN IF NOT EXISTS: una base ya creada las recibe.
+ALTER TABLE comunicaciones.tmensaje ADD COLUMN IF NOT EXISTS fk_tarchivo  BIGINT;
+ALTER TABLE comunicaciones.tmensaje ADD COLUMN IF NOT EXISTS adjunto_peso BIGINT;
+CREATE INDEX IF NOT EXISTS ix_tmensaje_tarchivo
+    ON comunicaciones.tmensaje (fk_tarchivo) WHERE fk_tarchivo IS NOT NULL;
+ALTER TABLE comunicaciones.tcanal ADD COLUMN IF NOT EXISTS es_bot BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE comunicaciones.tcanal ADD COLUMN IF NOT EXISTS actividad_cerrada_en TIMESTAMPTZ;
 
 -- Auditoria CDC de lo que moderacion necesita reconstruir (quien escribio,
 -- edito o borro y en que canal). Reacciones fuera: volumen alto, sin valor de auditoria.

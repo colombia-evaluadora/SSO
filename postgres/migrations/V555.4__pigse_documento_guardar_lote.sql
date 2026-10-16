@@ -62,6 +62,9 @@ BEGIN
     PERFORM pigse.fn_documento_validar_fecha_limite(v_fk_establecimiento);
     PERFORM pigse.fn_documento_validar_tipo_aplica(v_fk_establecimiento, p_tipo);
 
+    PERFORM pigse.fn_audit_declarar(p_pk_usuario,
+        format('Guardado de los anexos del documento %s', p_tipo), v_fk_establecimiento);
+
     PERFORM pigse.fn_documento_guardar_lote_interno(v_fk_establecimiento, p_email, p_tipo, p_anexos, p_quitar);
 
     RETURN QUERY SELECT * FROM pigse.fn_documento_categorias_listar(v_fk_establecimiento, p_tipo);

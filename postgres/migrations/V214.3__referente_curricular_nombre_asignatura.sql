@@ -1285,6 +1285,8 @@ DECLARE
     v_valor       VARCHAR;
     v_id_creado   BIGINT;
 BEGIN
+    PERFORM academico_test.fn_audit_declarar(p_pk_usuario_solicitante,
+        format('Creación del nombre personalizado de asignatura %s', TRIM(p_valor)));
     PERFORM academico_test.fn_assert_permiso_seccion(
         p_pk_usuario_solicitante, 'REFERENTES_CURRICULARES', 'CREAR'
     );
@@ -1389,6 +1391,9 @@ DECLARE
     v_actual   academico_test.TLISTA_VALOR%ROWTYPE;
     v_en_uso   BIGINT;
 BEGIN
+    PERFORM academico_test.fn_audit_declarar(p_pk_usuario_solicitante,
+        format('Eliminación del nombre personalizado de asignatura %s',
+               (SELECT NOMBRE FROM academico_test.TLISTA_VALOR WHERE PK_LISTA_VALOR = p_pk_lista_valor)));
     SELECT * INTO v_actual
       FROM academico_test.TLISTA_VALOR
      WHERE PK_LISTA_VALOR = p_pk_lista_valor

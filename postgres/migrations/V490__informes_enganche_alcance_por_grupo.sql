@@ -530,6 +530,12 @@ BEGIN
 
     -- El unico es TOTAL sobre (matricula, periodo): guardar REEMPLAZA. No se
     -- versiona, la unica verdad es lo que el docente acepto por ultima vez.
+    PERFORM academico_test.fn_audit_declarar(p_pk_usuario_solicitante,
+        format('Guardado de la observación del periodo %s de %s',
+               (SELECT NOMBRE FROM academico_test.TPERIODO_EVALUACION WHERE PK_TPERIODO_EVALUACION = p_fk_tperiodo_evaluacion),
+               academico_test.fn_actividad_estudiante_nombre(p_fk_tmatricula)),
+        v_fk_ee, v_fk_sede);
+
     INSERT INTO academico_test.TESTUDIANTE_PERIODO_OBSERVACION (
         FK_TMATRICULA, FK_TPERIODO_EVALUACION, FK_TLV_ESTADO_OBSERVACION,
         OBSERVACION, OBSERVACION_IA, OBSERVACIONES_ORIGEN,
@@ -599,6 +605,12 @@ BEGIN
     -- impediria guardar un resumen nuevo. Y no hay nada que conservar -- el
     -- resumen se puede volver a generar desde las observaciones, que son las
     -- que si son el dato original.
+    PERFORM academico_test.fn_audit_declarar(p_pk_usuario_solicitante,
+        format('Eliminación de la observación del periodo %s de %s',
+               (SELECT NOMBRE FROM academico_test.TPERIODO_EVALUACION WHERE PK_TPERIODO_EVALUACION = p_fk_tperiodo_evaluacion),
+               academico_test.fn_actividad_estudiante_nombre(p_fk_tmatricula)),
+        v_fk_ee, v_fk_sede);
+
     DELETE FROM academico_test.TESTUDIANTE_PERIODO_OBSERVACION
      WHERE PK_TESTUDIANTE_PERIODO_OBSERVACION = v_pk;
 
@@ -767,6 +779,10 @@ BEGIN
             USING ERRCODE = 'P0002';
     END IF;
 
+    PERFORM academico_test.fn_audit_declarar(p_pk_usuario_solicitante,
+        format('Guardado del comentario del año de %s', academico_test.fn_actividad_estudiante_nombre(p_fk_tmatricula)),
+        v_fk_ee, v_fk_sede);
+
     INSERT INTO academico_test.TESTUDIANTE_ANIO_OBSERVACION (
         FK_TMATRICULA, FK_TLV_ESTADO_OBSERVACION,
         OBSERVACION, OBSERVACION_IA, PERIODOS_ORIGEN,
@@ -834,6 +850,10 @@ BEGIN
     -- ocupando el lugar e impediria guardar una nueva. Y no hay nada que
     -- conservar: el texto se vuelve a generar desde los resumenes de
     -- periodo, que son el dato original.
+    PERFORM academico_test.fn_audit_declarar(p_pk_usuario_solicitante,
+        format('Eliminación del comentario del año de %s', academico_test.fn_actividad_estudiante_nombre(p_fk_tmatricula)),
+        v_fk_ee, v_fk_sede);
+
     DELETE FROM academico_test.TESTUDIANTE_ANIO_OBSERVACION ao
      WHERE ao.FK_TMATRICULA = p_fk_tmatricula
     RETURNING ao.PK_TESTUDIANTE_ANIO_OBSERVACION INTO v_pk;

@@ -99,11 +99,13 @@ class CommsIntegrationTest {
             st.execute(Files.readString(Path.of("../postgres/migrations/V560__comunicaciones_chat_ddl.sql")));
             st.execute(Files.readString(Path.of("../postgres/migrations/V561__comunicaciones_outbox_eventos.sql")));
             st.execute(Files.readString(Path.of("../postgres/migrations/V561.1__comunicaciones_outbox_registrar.sql")));
-            st.execute(Files.readString(Path.of("../postgres/migrations/V563__comunicaciones_foros_ddl.sql")));
+            st.execute(Files.readString(Path.of("../postgres/migrations/V575__comunicaciones_chat_borradores_votaciones_ddl.sql")));
+            st.execute(Files.readString(Path.of("../postgres/migrations/V585__comunicaciones_foros_ddl.sql")));
             // Re-aplicar (como hace el deploy al editar) debe ser idempotente.
             st.execute(Files.readString(Path.of("../postgres/migrations/V560__comunicaciones_chat_ddl.sql")));
             st.execute(Files.readString(Path.of("../postgres/migrations/V561__comunicaciones_outbox_eventos.sql")));
-            st.execute(Files.readString(Path.of("../postgres/migrations/V563__comunicaciones_foros_ddl.sql")));
+            st.execute(Files.readString(Path.of("../postgres/migrations/V575__comunicaciones_chat_borradores_votaciones_ddl.sql")));
+            st.execute(Files.readString(Path.of("../postgres/migrations/V585__comunicaciones_foros_ddl.sql")));
         }
         ana = usuario(j, "ana@colegio.edu.co", "Ana Rios", "CEVAL-DOCENTE");
         luis = usuario(j, "luis@colegio.edu.co", "Luis Paz", "CEVAL-DOCENTE");
@@ -350,6 +352,115 @@ class CommsIntegrationTest {
         assertThat(rows(get(base + "/publicaciones", tSofi)).size()).isZero();
         assertThat(get(pubPath, tSofi).statusCode()).isEqualTo(404);
         ws.close();
+    }
+
+    @Test
+    void buscarPersonasPorAlcanceSinTildesYPorDocumento() throws Exception {
+        long rector = usuario(jdbc, "rector@a.edu.co", "Rector Dos Colegios", "CEVAL-DOCENTE");
+        long natalia = usuario(jdbc, "natalia@b.edu.co", "Natalia Carpintero", "CEVAL-DOCENTE");
+        long otro = usuario(jdbc, "otro@c.edu.co", "Ramón Ajeno", "CEVAL-DOCENTE");
+        long root = usuario(jdbc, "root@sed.gov.co", "Super", "CEVAL-SUPER_ADMINISTRADOR");
+        // El rector trabaja en los colegios 10 y 20; Natalia en el 20; Ramon en el 30.
+        for (var f : List.of(List.of("rector@a.edu.co", "1", "10"), List.of("rector@a.edu.co", "1", "20"),
+                List.of("natalia@b.edu.co", "555123", "20"), List.of("otro@c.edu.co", "9", "30"))) {
+            long tu = jdbc.sql("""
+                    INSERT INTO academico_test.tusuario (cuenta, identificacion, primer_nombre, primer_apellido)
+                    VALUES (:c, :d, 'X', 'Y') ON CONFLICT DO NOTHING RETURNING pk_tusuario""")
+                    .param("c", f.get(0)).param("d", f.get(1)).query(Long.class).optional()
+                    .orElseGet(() -> jdbc.sql("SELECT pk_tusuario FROM academico_test.tusuario WHERE cuenta = :c")
+                            .param("c", f.get(0)).query(Long.class).single());
+            long sede = jdbc.sql("INSERT INTO academico_test.tsede (fk_testablecimiento) VALUES (:e) RETURNING pk_tsede")
+                    .param("e", Long.parseLong(f.get(2))).query(Long.class).single();
+            jdbc.sql("INSERT INTO academico_test.tsede_usuario (fk_tsede, fk_tusuario) VALUES (:s, :t)")
+                    .param("s", sede).param("t", tu).update();
+        }
+        String tRector = JWT.issueAccessToken("rector@a.edu.co", rector, null, Set.of("CEVAL-DOCENTE"), null, "rect");
+        String tRoot = JWT.issueAccessToken("root@sed.gov.co", root, null,
+                Set.of("CEVAL-SUPER_ADMINISTRADOR"), null, "root");
+
+        // Multi-colegio: encuentra por correo, sin tildes ni mayusculas, y por documento.
+        assertThat(rows(get("/comunicaciones/personas?q=NATALIA%40B.EDU", tRector)).findValuesAsText("id"))
+                .containsExactly(String.valueOf(natalia));
+        assertThat(rows(get("/comunicaciones/personas?q=555123", tRector)).findValuesAsText("id"))
+                .containsExactly(String.valueOf(natalia));
+        assertThat(rows(get("/comunicaciones/personas?q=ramon", tRector))).isEmpty();
+        // Super administrador: todos los colegios, con paginacion.
+        assertThat(rows(get("/comunicaciones/personas?q=ram%C3%B3n", tRoot)).findValuesAsText("id"))
+                .containsExactly(String.valueOf(otro));
+        assertThat(rows(get("/comunicaciones/personas?limite=1", tRoot))).hasSize(1);
+        assertThat(rows(get("/comunicaciones/personas?limite=1&desde=1", tRoot)).get(0).get("id").asLong())
+                .isNotEqualTo(rows(get("/comunicaciones/personas?limite=1", tRoot)).get(0).get("id").asLong());
+    }
+
+    @Test
+    void adjuntosBorradoresDuplicarYVotacionRapida() throws Exception {
+        String tAna = token("ana@colegio.edu.co", ana, "CEVAL-DOCENTE");
+        String tSofi = token("sofi@colegio.edu.co", sofi, "CEVAL-ESTUDIANTE");
+        JsonNode canal = rows(post("/comunicaciones/conversaciones", tAna,
+                Map.of("NOMBRE", "Extras " + System.nanoTime(), "CATEGORIA", "VOTACION", "MIEMBROS", List.of(sofi)))).get(0);
+        long id = canal.get("id").asLong();
+        String base = "/comunicaciones/conversaciones/" + id;
+        assertThat(canal.get("actividadAbierta").asBoolean()).isTrue();
+        assertThat(canal.get("esBot").asBoolean()).isFalse();
+
+        // Adjunto: el pk que reenvia file-service; nombre y formato salen de TARCHIVO.
+        jdbc.sql("INSERT INTO academico_test.tarchivo (pk_tarchivo, nombre, peso, created_by) VALUES "
+                + "(9001, 'acta.pdf', 2048, 'ana@colegio.edu.co'), (9002, 'virus.exe', 10, 'ana@colegio.edu.co'), "
+                + "(9003, 'ajeno.pdf', 10, 'sofi@colegio.edu.co')").update();
+        JsonNode conAdjunto = rows(post(base + "/mensajes", tAna, Map.of("TEXTO", "", "ADJUNTO", "9001"))).get(0);
+        assertThat(conAdjunto.get("adjunto").get("archivoId").asLong()).isEqualTo(9001);
+        assertThat(conAdjunto.get("adjunto").get("formato").asText()).isEqualTo("PDF");
+        assertThat(post(base + "/mensajes", tAna, Map.of("ADJUNTO", 9001)).statusCode()).isEqualTo(409);
+        assertThat(post(base + "/mensajes", tAna, Map.of("ADJUNTO", 9002)).statusCode()).isEqualTo(400);
+        assertThat(post(base + "/mensajes", tAna, Map.of("ADJUNTO", 9003)).statusCode()).isEqualTo(403);
+        JsonNode archivos = rows(get("/comunicaciones/archivos", tSofi));
+        assertThat(archivos.get(0).get("id").asLong()).isEqualTo(9001);
+        assertThat(archivos.get(0).get("esPropio").asBoolean()).isFalse();
+        assertThat(patch("/comunicaciones/archivos/9001/eliminar", tSofi, Map.of()).statusCode()).isEqualTo(403);
+        rows(patch("/comunicaciones/archivos/9001/eliminar", tAna, Map.of()));
+        assertThat(rows(get("/comunicaciones/archivos", tSofi)).size()).isZero();
+        assertThat(get("/comunicaciones/archivos/9001/contenido", tAna).statusCode()).isEqualTo(404);
+
+        // Borrador: uno por canal; al enviar pasa a ENVIADO.
+        JsonNode b = rows(send("PUT", base + "/borrador", tAna, Map.of("TEXTO", "a medias"))).get(0);
+        long idB = rows(send("PUT", base + "/borrador", tAna, Map.of("TEXTO", "a medias 2"))).get(0).get("id").asLong();
+        assertThat(idB).isEqualTo(b.get("id").asLong());
+        assertThat(rows(get("/comunicaciones/borradores", tAna)).get(0).get("texto").asText()).isEqualTo("a medias 2");
+        assertThat(patch("/comunicaciones/borradores/" + idB + "/enviar", tSofi, Map.of()).statusCode()).isEqualTo(404);
+        JsonNode enviado = rows(patch("/comunicaciones/borradores/" + idB + "/enviar", tAna, Map.of())).get(0);
+        assertThat(enviado.get("estado").asText()).isEqualTo("ENVIADO");
+        assertThat(rows(send("PUT", base + "/borrador", tAna, Map.of("TEXTO", "  "))).size()).isZero();
+        long otro = rows(send("PUT", base + "/borrador", tAna, Map.of("TEXTO", "otro"))).get(0).get("id").asLong();
+        rows(patch("/comunicaciones/borradores/" + otro + "/eliminar", tAna, Map.of()));
+        assertThat(rows(get("/comunicaciones/borradores", tAna)).size()).isEqualTo(1);
+
+        // Votacion rapida: solo quien administra la crea; un voto por persona.
+        var votacion = Map.of("PREGUNTA", "¿Salida el viernes?", "TIPO", "SI_NO", "MINUTOS", 5);
+        assertThat(post(base + "/votaciones-rapidas", tSofi, votacion).statusCode()).isEqualTo(403);
+        JsonNode v = rows(post(base + "/votaciones-rapidas", tAna, votacion)).get(0);
+        long idV = v.get("id").asLong();
+        assertThat(v.get("votacion").get("opciones").get(0).get("etiqueta").asText()).isEqualTo("Sí");
+        JsonNode votado = rows(post("/comunicaciones/mensajes/" + idV + "/votacion/votar", tSofi,
+                Map.of("FK_OPCION", 2))).get(0).get("votacion");
+        assertThat(votado.get("miVoto").asInt()).isEqualTo(2);
+        assertThat(votado.get("opciones").get(1).get("votos").asInt()).isEqualTo(1);
+        assertThat(post("/comunicaciones/mensajes/" + idV + "/votacion/votar", tSofi, Map.of("FK_OPCION", 1))
+                .statusCode()).isEqualTo(409);
+        JsonNode editada = rows(patch("/comunicaciones/mensajes/" + idV + "/votacion", tAna,
+                Map.of("PREGUNTA", "¿Salida el sabado?", "TIPO", "VERDADERO_FALSO", "MINUTOS", 1))).get(0);
+        assertThat(editada.get("votacion").get("opciones").get(1).get("votos").asInt()).isZero();
+        jdbc.sql("UPDATE comunicaciones.tvotacion_rapida SET cierra_en = NOW() - INTERVAL '1 minute' WHERE fk_tmensaje = :m")
+                .param("m", idV).update();
+        assertThat(post("/comunicaciones/mensajes/" + idV + "/votacion/votar", tSofi, Map.of("FK_OPCION", 1))
+                .statusCode()).isEqualTo(409);
+
+        // Duplicar: copia con los mismos miembros, administrada por quien la pide.
+        assertThat(post(base + "/duplicar", tSofi, Map.of()).statusCode()).isEqualTo(403);
+        JsonNode copia = rows(post(base + "/duplicar", tAna, Map.of())).get(0);
+        assertThat(copia.get("nombre").asText()).isEqualTo(canal.get("nombre").asText() + " (copia)");
+        assertThat(copia.get("totalMiembros").asInt()).isEqualTo(2);
+        assertThat(rows(post(base + "/duplicar", tAna, Map.of())).get(0).get("nombre").asText())
+                .endsWith("(copia 2)");
     }
 
     @Test

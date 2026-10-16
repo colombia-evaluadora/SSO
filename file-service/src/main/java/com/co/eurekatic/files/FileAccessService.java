@@ -87,7 +87,8 @@ public class FileAccessService {
         return esPropietario(archivoId, email)
                 || esSoporteDeAsistenciaVisible(archivoId, email)
                 || esSoporteDeObservacionVisible(archivoId, email)
-                || esMaterialOAdaptacionDeActividadVisible(archivoId, email);
+                || esMaterialOAdaptacionDeActividadVisible(archivoId, email)
+                || esAdjuntoDeChatVisible(archivoId, email);
     }
 
     /**
@@ -296,6 +297,46 @@ public class FileAccessService {
      * nombres al PLANIFICAR, así que en un entorno sin el módulo del
      * Planeador esta rama se pierde sola en vez de tumbar las demás.
      */
+    /**
+     * ¿Es este archivo el adjunto de un mensaje del chat de comunicaciones
+     * ({@code comunicaciones.tmensaje.fk_tarchivo}, V560) en una conversación
+     * de la que el llamante es miembro activo y no bloqueado? Cualquier perfil
+     * lo sube por {@code POST /files/eval-col/comunicaciones/conversaciones/{id}/mensajes};
+     * sin este camino solo un rol privilegiado podía verlo. Un adjunto quitado
+     * por su autor, o un mensaje eliminado, deja de verse.
+     */
+    private boolean esAdjuntoDeChatVisible(long archivoId, String email) {
+        if (email == null || email.isBlank()) {
+            return false;
+        }
+        try {
+            Integer encontrado = jdbc.queryForObject("""
+                    SELECT count(*)
+                      FROM comunicaciones.tmensaje m
+                      JOIN comunicaciones.tcanal c ON c.pk_tcanal = m.fk_tcanal
+                      JOIN comunicaciones.tcanal_miembro cm ON cm.fk_tcanal = m.fk_tcanal
+                      JOIN public.users u ON u.id_user = cm.fk_usuario
+                     WHERE m.fk_tarchivo = :archivoId
+                       AND m.eliminado_en IS NULL
+                       AND m.adjunto_eliminado_en IS NULL
+                       AND c.eliminado_en IS NULL
+                       AND cm.salio_en IS NULL
+                       AND NOT cm.bloqueado
+                       AND lower(u.email) = lower(:email)
+                    """,
+                    new MapSqlParameterSource()
+                            .addValue("archivoId", archivoId)
+                            .addValue("email", email),
+                    Integer.class);
+            return encontrado != null && encontrado > 0;
+        } catch (DataAccessException e) {
+            // Entorno sin el schema de comunicaciones: se pierde este camino, no el resto.
+            log.debug("no se pudo evaluar el adjunto de chat para el archivo id={}: {}",
+                    archivoId, e.getMessage());
+            return false;
+        }
+    }
+
     private boolean esSoporteDeObservacionVisible(long archivoId, String email) {
         if (email == null || email.isBlank()) {
             return false;

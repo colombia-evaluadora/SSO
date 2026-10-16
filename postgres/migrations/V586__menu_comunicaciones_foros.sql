@@ -1,4 +1,4 @@
--- V564 -- Menu FOROS: el item del sidebar para /app/comunicaciones/foros
+-- V586 -- Menu FOROS: el item del sidebar para /app/comunicaciones/foros
 -- Que hace: agrega una fila a TMENU (codigo FOROS) y la concede a todo rol que ya tenga
 --   el menu COMUNICACIONES (V562).
 -- Por que: el front solo abre una ruta de /app si su URL viene en GET /eval-col/my-menus;
@@ -11,11 +11,11 @@ INSERT INTO academico_test.tmenu
     (codigo, fk_tmenu, nombre, url, icono, visible, orden, estado,
      active, created_by, created_at)
 SELECT 'FOROS', NULL, 'Foros', '/app/comunicaciones/foros', 'fas fa-comments',
-       'S', 91, 'A', TRUE, 'V564', CURRENT_TIMESTAMP
+       'S', 91, 'A', TRUE, 'V586', CURRENT_TIMESTAMP
  WHERE NOT EXISTS (SELECT 1 FROM academico_test.tmenu m WHERE m.codigo = 'FOROS');
 
 INSERT INTO academico_test.trol_menu (fk_trol, fk_tmenu, active, created_by, created_at)
-SELECT r.fk_trol, f.pk_tmenu, TRUE, 'V564', CURRENT_TIMESTAMP
+SELECT r.fk_trol, f.pk_tmenu, TRUE, 'V586', CURRENT_TIMESTAMP
   FROM (SELECT DISTINCT tm.fk_trol
           FROM academico_test.trol_menu tm
           JOIN academico_test.tmenu c ON c.pk_tmenu = tm.fk_tmenu

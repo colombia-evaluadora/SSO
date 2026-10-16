@@ -98,6 +98,8 @@ DECLARE
     v_nuevo  BIGINT;
     v_total  BIGINT;
 BEGIN
+    PERFORM academico_test.fn_audit_declarar(p_pk_usuario_solicitante,
+        format('Carga de un documento adicional a la matrícula de %s', academico_test.fn_actividad_estudiante_nombre(p_fk_tmatricula)));
     IF p_fk_tarchivo IS NULL THEN
         RAISE EXCEPTION 'No llego ningun archivo'
             USING ERRCODE = '22023',

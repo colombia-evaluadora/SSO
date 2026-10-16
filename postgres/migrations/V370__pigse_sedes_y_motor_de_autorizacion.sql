@@ -656,6 +656,9 @@ BEGIN
       FROM pigse.TSEDE
      WHERE FK_TESTABLECIMIENTO = p_fk_establecimiento AND ACTIVE = TRUE;
 
+    PERFORM pigse.fn_audit_declarar(p_pk_usuario_solicitante,
+        format('Creación de la sede %s (código %s)', p_nombre, p_codigo), p_fk_establecimiento);
+
     INSERT INTO pigse.TSEDE (
         CODIGO, NOMBRE, CONSECUTIVO, FK_TLV_ZONA, LOCALIDAD, COMUNA, BARRIO, DIRECCION, TELEFONO,
         FK_TESTABLECIMIENTO, GEOREFERENCIACION, CREATED_BY, CREATED_AT, ACTIVE
@@ -767,6 +770,9 @@ BEGIN
         RAISE EXCEPTION 'Ya existe otra sede activa con NOMBRE % en este establecimiento', p_nombre USING ERRCODE = '23505';
     END IF;
 
+    PERFORM pigse.fn_audit_declarar(p_pk_usuario_solicitante,
+        format('Actualización de la sede %s', COALESCE(p_nombre, (SELECT NOMBRE FROM pigse.TSEDE WHERE PK_TSEDE = p_pk_sede))), v_fk_ee);
+
     UPDATE pigse.TSEDE
        SET CODIGO            = COALESCE(p_codigo, CODIGO),
            NOMBRE            = COALESCE(p_nombre, NOMBRE),
@@ -814,6 +820,9 @@ BEGIN
         RAISE EXCEPTION 'La sede ya se encuentra inactiva' USING ERRCODE = '22023';
     END IF;
 
+    PERFORM pigse.fn_audit_declarar(p_pk_usuario_solicitante,
+        format('Eliminación de la sede %s', (SELECT NOMBRE FROM pigse.TSEDE WHERE PK_TSEDE = p_pk_sede)), v_fk_ee);
+
     UPDATE pigse.TSEDE
        SET ACTIVE = FALSE, MODIFIED_BY = p_pk_usuario_solicitante::VARCHAR, MODIFIED_AT = CURRENT_TIMESTAMP
      WHERE PK_TSEDE = p_pk_sede;
@@ -843,6 +852,9 @@ BEGIN
     IF p_pks IS NULL OR CARDINALITY(p_pks) = 0 THEN
         RAISE EXCEPTION 'p_pks es obligatorio y debe contener al menos un PK_TSEDE' USING ERRCODE = '22023';
     END IF;
+
+    PERFORM pigse.fn_audit_declarar(p_pk_usuario_solicitante,
+        format('Eliminación masiva de %s sedes', CARDINALITY(p_pks)));
 
     FOREACH v_pk IN ARRAY p_pks LOOP
         BEGIN
@@ -920,6 +932,9 @@ BEGIN
     IF v_active = FALSE THEN
         RAISE EXCEPTION 'El funcionario (%) ya se encuentra inactivo', p_pk_funcionario USING ERRCODE = '22023';
     END IF;
+
+    PERFORM pigse.fn_audit_declarar(p_pk_usuario_solicitante,
+        format('Eliminación del funcionario %s', COALESCE(pigse.fn_resolver_actor(v_pk_usuario), p_pk_funcionario::TEXT)));
 
     UPDATE pigse.TFUNCIONARIO
        SET ACTIVE = FALSE, MODIFIED_BY = p_pk_usuario_solicitante::VARCHAR, MODIFIED_AT = CURRENT_TIMESTAMP

@@ -41,8 +41,8 @@ public class ChatController {
 
     public record SilencioIn(@JsonProperty("DURACION") String duracion) { }
 
-    public record MensajeIn(@JsonProperty("TEXTO") String texto, @JsonProperty("ADJUNTO_NOMBRE") String adjuntoNombre,
-                            @JsonProperty("ADJUNTO_FORMATO") String adjuntoFormato,
+    /** {@code ADJUNTO}: pk_tarchivo que pone file-service al reenviar el multipart. */
+    public record MensajeIn(@JsonProperty("TEXTO") String texto, @JsonProperty("ADJUNTO") Long adjunto,
                             @JsonProperty("FK_MENSAJE_RESPUESTA") Long respuesta,
                             @JsonProperty("CLIENT_MESSAGE_ID") UUID clientMessageId) { }
 
@@ -69,8 +69,10 @@ public class ChatController {
     }
 
     @GetMapping("/personas")
-    public Filas<Persona> personas(HttpServletRequest r, @RequestParam(required = false) String q) {
-        return new Filas<>(chat.personas(Usuario.de(r), q));
+    public Filas<Persona> personas(HttpServletRequest r, @RequestParam(required = false) String q,
+                                   @RequestParam(required = false) Integer limite,
+                                   @RequestParam(required = false) Integer desde) {
+        return new Filas<>(chat.personas(Usuario.de(r), q, limite, desde));
     }
 
     @PostMapping("/conversaciones")
@@ -118,8 +120,8 @@ public class ChatController {
 
     @PostMapping("/conversaciones/{id}/mensajes")
     public Filas<Mensaje> enviar(HttpServletRequest r, @PathVariable long id, @RequestBody MensajeIn in) {
-        return Filas.de(chat.enviar(Usuario.de(r), id, in.texto(), in.adjuntoNombre(), in.adjuntoFormato(),
-                in.respuesta(), in.clientMessageId()));
+        return Filas.de(chat.enviar(Usuario.de(r), id, in.texto(), in.adjunto(), in.respuesta(),
+                in.clientMessageId()));
     }
 
     @PatchMapping("/conversaciones/{id}/silenciar")

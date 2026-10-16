@@ -6,7 +6,9 @@ import com.co.eurekatic.comms.chat.ChatDtos.Cita;
 import com.co.eurekatic.comms.chat.ChatDtos.Conversacion;
 import com.co.eurekatic.comms.chat.ChatDtos.Mencion;
 import com.co.eurekatic.comms.chat.ChatDtos.Mensaje;
+import com.co.eurekatic.comms.chat.ChatDtos.OpcionVotacion;
 import com.co.eurekatic.comms.chat.ChatDtos.Reaccion;
+import com.co.eurekatic.comms.chat.ChatDtos.VotacionRapida;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Repository;
 
@@ -172,7 +174,9 @@ public class ChatRepository {
     }
 
     private static final String SQL_CONVERSACIONES = """
-            SELECT c.pk_tcanal, c.tipo, c.categoria, c.nombre, c.creado_por,
+            SELECT c.pk_tcanal, c.tipo, c.categoria, c.nombre, c.creado_por, c.es_bot,
+                   (c.categoria IN ('VOTACION', 'ENCUESTA', 'EXAMEN') AND c.actividad_cerrada_en IS NULL)
+                       AS actividad_abierta,
                    COALESCE(NULLIF(cr.full_name, ''), cr.email) AS creador,
                    m.silenciado_hasta, m.archivado, m.marcado_no_leido, m.menciones_pendientes,
                    (SELECT COUNT(*) FROM comunicaciones.tmensaje x
@@ -210,7 +214,8 @@ public class ChatRepository {
         boolean silenciado = silencio != null && silencio.isAfter(OffsetDateTime.now());
         return new Conversacion(rs.getLong("pk_tcanal"),
                 directo && !nombres.isEmpty() ? nombres.get(0) : rs.getString("nombre"),
-                rs.getString("tipo"), rs.getString("categoria"), noLeidos, false, false, rs.getInt("total"),
+                rs.getString("tipo"), rs.getString("categoria"), noLeidos, rs.getBoolean("actividad_abierta"),
+                rs.getBoolean("es_bot"), rs.getInt("total"),
                 nombres, silenciado ? silencio.toInstant().toString() : null, rs.getBoolean("archivado"),
                 directo ? null : rs.getString("creador"), rs.getLong("creado_por") == usuario,
                 rs.getInt("menciones_pendientes"));
@@ -227,12 +232,19 @@ public class ChatRepository {
 
     public long insertarMensaje(long canal, long autor, String tipo, String texto, String adjNombre, String adjFormato,
                                 Long respuesta, UUID clientId) {
+        return insertarMensaje(canal, autor, tipo, texto, adjNombre, adjFormato, null, null, respuesta, clientId);
+    }
+
+    public long insertarMensaje(long canal, long autor, String tipo, String texto, String adjNombre, String adjFormato,
+                                Long archivo, Long peso, Long respuesta, UUID clientId) {
         return jdbc.sql("""
                 INSERT INTO comunicaciones.tmensaje
-                    (fk_tcanal, fk_autor, tipo, texto, adjunto_nombre, adjunto_formato, fk_respuesta, client_msg_id)
-                VALUES (:canal, :autor, :tipo, :texto, :an, :af, :resp, :cid) RETURNING pk_tmensaje""")
+                    (fk_tcanal, fk_autor, tipo, texto, adjunto_nombre, adjunto_formato, fk_tarchivo, adjunto_peso,
+                     fk_respuesta, client_msg_id)
+                VALUES (:canal, :autor, :tipo, :texto, :an, :af, :arch, :peso, :resp, :cid) RETURNING pk_tmensaje""")
                 .param("canal", canal).param("autor", autor).param("tipo", tipo).param("texto", texto)
-                .param("an", adjNombre).param("af", adjFormato).param("resp", respuesta).param("cid", clientId)
+                .param("an", adjNombre).param("af", adjFormato).param("arch", archivo).param("peso", peso)
+                .param("resp", respuesta).param("cid", clientId)
                 .query(Long.class).single();
     }
 
@@ -292,7 +304,7 @@ public class ChatRepository {
         return true;
     }
 
-    /** El mensaje es el cuerpo de una publicacion de foro (V563). */
+    /** El mensaje es el cuerpo de una publicacion de foro (V585). */
     public boolean esRaizDeHilo(long mensaje) {
         return jdbc.sql("SELECT EXISTS (SELECT 1 FROM comunicaciones.thilo WHERE fk_tmensaje_raiz = :m)")
                 .param("m", mensaje).query(Boolean.class).single();
@@ -346,9 +358,11 @@ public class ChatRepository {
                         .computeIfAbsent(rs.getString(2), k -> new ArrayList<>())
                         .add(new Object[] {rs.getLong(3), rs.getString(4)}))
                 .list();
+        Map<Long, VotacionRapida> votaciones = votaciones(ids, visor);
         List<Mensaje> out = jdbc.sql("""
                 SELECT m.pk_tmensaje, m.fk_tcanal, m.fk_autor, COALESCE(NULLIF(a.full_name, ''), a.email) AS autor,
                        m.texto, m.created_at, m.tipo, m.adjunto_nombre, m.adjunto_formato, m.adjunto_eliminado_en,
+                       m.fk_tarchivo, m.adjunto_peso,
                        m.editado_en, m.fijado, m.fk_respuesta, r.texto AS r_texto, r.eliminado_en AS r_elim,
                        COALESCE(NULLIF(ra.full_name, ''), ra.email) AS r_autor
                   FROM comunicaciones.tmensaje m
@@ -380,40 +394,161 @@ public class ChatRepository {
                             visor != null && autor == visor, rs.getString("texto"),
                             rs.getObject("created_at", OffsetDateTime.class).toInstant().toString(),
                             adjNombre == null ? null : new Adjunto(adjNombre, rs.getString("adjunto_formato"),
-                                    adjElim == null ? null : adjElim.toInstant().toString()),
+                                    adjElim == null ? null : adjElim.toInstant().toString(),
+                                    rs.getObject("fk_tarchivo", Long.class), rs.getObject("adjunto_peso", Long.class)),
                             rs.getObject("editado_en") != null, rs.getBoolean("fijado"),
-                            "SISTEMA".equals(rs.getString("tipo")), rs2, cita, ms, meMenciona);
+                            "SISTEMA".equals(rs.getString("tipo")), rs2, cita, ms, meMenciona, votaciones.get(id));
                 })
                 .list();
         return out;
+    }
+
+    /** Etiquetas de las dos opciones; el id es la posicion (1, 2). */
+    static final Map<String, List<String>> ETIQUETAS_VOTACION = Map.of(
+            "SI_NO", List.of("Sí", "No"), "VERDADERO_FALSO", List.of("Verdadero", "Falso"));
+
+    /** Votaciones rapidas de los mensajes {@code ids}; {@code miVoto} solo con visor. */
+    Map<Long, VotacionRapida> votaciones(Collection<Long> ids, Long visor) {
+        Map<Long, int[]> conteos = new LinkedHashMap<>();
+        Map<Long, Integer> mios = new LinkedHashMap<>();
+        jdbc.sql("""
+                SELECT fk_tmensaje, opcion, COUNT(*), BOOL_OR(fk_usuario = CAST(:visor AS BIGINT))
+                  FROM comunicaciones.tvotacion_rapida_voto WHERE fk_tmensaje IN (:ids)
+                 GROUP BY fk_tmensaje, opcion""")
+                .param("ids", ids).param("visor", visor)
+                .query((rs, n) -> {
+                    int op = rs.getInt(2);
+                    if (op >= 1 && op <= 2) conteos.computeIfAbsent(rs.getLong(1), k -> new int[2])[op - 1] = rs.getInt(3);
+                    if (rs.getBoolean(4)) mios.put(rs.getLong(1), op);
+                    return 1;
+                }).list();
+        Map<Long, VotacionRapida> out = new LinkedHashMap<>();
+        jdbc.sql("""
+                SELECT fk_tmensaje, pregunta, tipo, minutos, cierra_en
+                  FROM comunicaciones.tvotacion_rapida WHERE fk_tmensaje IN (:ids)""")
+                .param("ids", ids)
+                .query((rs, n) -> {
+                    long id = rs.getLong(1);
+                    String tipo = rs.getString(3);
+                    List<String> etiquetas = ETIQUETAS_VOTACION.getOrDefault(tipo, List.of("Sí", "No"));
+                    int[] c = conteos.getOrDefault(id, new int[2]);
+                    List<OpcionVotacion> opciones = List.of(new OpcionVotacion(1, etiquetas.get(0), c[0]),
+                            new OpcionVotacion(2, etiquetas.get(1), c[1]));
+                    return out.put(id, new VotacionRapida(rs.getString(2), tipo, rs.getInt(4),
+                            rs.getObject(5, OffsetDateTime.class).toInstant().toString(), opciones, mios.get(id)));
+                }).list();
+        return out;
+    }
+
+    /** Al enviar: el borrador vivo del canal pasa a ENVIADO con el texto que salio. */
+    public void marcarBorradorEnviado(long canal, long usuario, long mensaje, String texto) {
+        jdbc.sql("""
+                UPDATE comunicaciones.tborrador
+                   SET estado = 'ENVIADO', fk_tmensaje = :m, texto = :t, modified_at = NOW()
+                 WHERE fk_tcanal = :c AND fk_usuario = :u AND estado = 'BORRADOR' AND eliminado_en IS NULL""")
+                .param("m", mensaje).param("t", texto).param("c", canal).param("u", usuario).update();
     }
 
     // ── personas ───────────────────────────────────────────────────────────
 
     public record PersonaFila(long id, String nombre, String correo, List<String> roles) { }
 
+    /** Minusculas y sin tildes (unaccent no esta instalada; mismo translate que fn_menu_codigo_canonico). */
+    private static final String SIN_TILDES =
+            "lower(translate(%s, 'ÁÀÄÂáàäâÉÈËÊéèëêÍÌÏÎíìïîÓÒÖÔóòöôÚÙÜÛúùüûÑñÇç',"
+            + " 'AAAAaaaaEEEEeeeeIIIIiiiiOOOOooooUUUUuuuuNnCc'))";
+
+    static String normalizar(String q) {
+        if (q == null || q.isBlank()) return null;
+        String s = java.text.Normalizer.normalize(q.trim(), java.text.Normalizer.Form.NFD)
+                .replaceAll("\\p{M}", "").toLowerCase(java.util.Locale.ROOT);
+        return "%" + s.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%";
+    }
+
     /**
-     * Personas del mismo establecimiento que el usuario (resuelto con la misma
-     * funcion que el claim {@code est} del login). Sin establecimiento unico,
-     * solo quienes ya comparten algun canal con el.
+     * Personas que el usuario puede buscar, por nombre, correo, usuario o
+     * documento (sin distinguir mayusculas ni tildes).
+     * <p>
+     * Alcance: con {@code todos} (super administrador) cualquiera. Si no, la
+     * union de: quienes ya comparten un canal con el; quienes estan en alguno
+     * de SUS establecimientos (varios si trabaja en varios colegios), por
+     * TSEDE_USUARIO (funcionarios), matricula activa (estudiantes) o acudiente
+     * de una matricula activa; y, por compatibilidad, el mismo establecimiento
+     * del claim {@code est}. Antes solo se usaba {@code est}, que es NULL para
+     * docentes, estudiantes y usuarios de 2+ colegios, y comparaba contra la
+     * misma funcion para el otro usuario (que tambien es NULL para docentes),
+     * asi que la busqueda casi nunca encontraba a nadie.
      */
-    public List<PersonaFila> personas(long usuario, String establecimiento, String q, int limite) {
-        String filtro = establecimiento == null
-                ? """
-                  u.id_user IN (SELECT t2.fk_usuario FROM comunicaciones.tcanal_miembro t1
-                                  JOIN comunicaciones.tcanal_miembro t2 ON t2.fk_tcanal = t1.fk_tcanal
-                                 WHERE t1.fk_usuario = :u AND t1.salio_en IS NULL AND t2.salio_en IS NULL)"""
-                : "academico_test.fn_mi_establecimiento_para_auditoria(u.id_user) = :est";
+    public List<PersonaFila> personas(long usuario, String establecimiento, boolean todos, String q,
+                                      int limite, int desde) {
+        String busqueda = SIN_TILDES.formatted(
+                "concat_ws(' ', u.full_name, u.email, u.username, i.identificacion, i.nombre_academico)");
         return jdbc.sql("""
+                WITH ident AS (
+                    SELECT DISTINCT ON (x.id_user) x.id_user, x.pk_tusuario, x.identificacion, x.nombre_academico
+                      FROM (SELECT u.id_user, tu.pk_tusuario, tu.identificacion, 0 AS prio,
+                                   concat_ws(' ', tu.primer_nombre, tu.segundo_nombre,
+                                             tu.primer_apellido, tu.segundo_apellido) AS nombre_academico
+                              FROM public.users u JOIN academico_test.tusuario tu ON tu.cuenta = u.email
+                            UNION ALL
+                            SELECT u.id_user, tu.pk_tusuario, tu.identificacion, 1,
+                                   concat_ws(' ', tu.primer_nombre, tu.segundo_nombre,
+                                             tu.primer_apellido, tu.segundo_apellido)
+                              FROM public.users u JOIN academico_test.tusuario tu
+                                ON upper(tu.correo_electronico) = upper(u.email) AND tu.active) x
+                     ORDER BY x.id_user, x.prio, x.pk_tusuario),
+                mio AS (SELECT public.fn_get_academico_usuario_id(:u) AS tu),
+                mis_ee AS (
+                    SELECT s.fk_testablecimiento AS ee
+                      FROM academico_test.tsede_usuario su
+                      JOIN academico_test.tsede s ON s.pk_tsede = su.fk_tsede
+                     WHERE su.fk_tusuario = (SELECT tu FROM mio) AND su.active
+                    UNION
+                    SELECT academico_test.fn_grupo_establecimiento(m.fk_tgrupo)
+                      FROM academico_test.tmatricula m
+                      JOIN academico_test.testudiante e ON e.pk_testudiante = m.fk_testudiante
+                     WHERE e.fk_tusuario = (SELECT tu FROM mio) AND m.active
+                    UNION
+                    SELECT academico_test.fn_grupo_establecimiento(m.fk_tgrupo)
+                      FROM academico_test.tmatricula m
+                      JOIN academico_test.tpadre p ON p.pk_tpadre = m.fk_tpadre
+                     WHERE p.fk_tusuario = (SELECT tu FROM mio) AND m.active),
+                grupos AS (
+                    SELECT g.pk_tgrupo FROM academico_test.tgrupo g
+                     WHERE NOT :todos AND g.active
+                       AND academico_test.fn_grupo_establecimiento(g.pk_tgrupo) IN (SELECT ee FROM mis_ee)),
+                alcance AS (
+                    SELECT su.fk_tusuario AS tu
+                      FROM academico_test.tsede_usuario su
+                      JOIN academico_test.tsede s ON s.pk_tsede = su.fk_tsede
+                     WHERE NOT :todos AND su.active AND s.fk_testablecimiento IN (SELECT ee FROM mis_ee)
+                    UNION
+                    SELECT e.fk_tusuario FROM academico_test.tmatricula m
+                      JOIN academico_test.testudiante e ON e.pk_testudiante = m.fk_testudiante
+                     WHERE m.active AND m.fk_tgrupo IN (SELECT pk_tgrupo FROM grupos)
+                    UNION
+                    SELECT p.fk_tusuario FROM academico_test.tmatricula m
+                      JOIN academico_test.tpadre p ON p.pk_tpadre = m.fk_tpadre
+                     WHERE m.active AND m.fk_tgrupo IN (SELECT pk_tgrupo FROM grupos))
                 SELECT u.id_user, COALESCE(NULLIF(u.full_name, ''), u.email) AS nombre, u.email,
                        COALESCE((SELECT string_agg(r.name, ',') FROM public.role_users ur
                                    JOIN public.role r ON r.id_role = ur.role_id WHERE ur.user_id = u.id_user), '')
                   FROM public.users u
+                  LEFT JOIN ident i ON i.id_user = u.id_user
                  WHERE u.active AND u.enabled AND u.id_user <> :u
-                   AND (CAST(:q AS VARCHAR) IS NULL OR u.full_name ILIKE :q OR u.email ILIKE :q)
-                   AND """ + filtro + " ORDER BY nombre LIMIT :lim")
-                .param("u", usuario).param("est", establecimiento)
-                .param("q", q == null || q.isBlank() ? null : "%" + q.trim() + "%").param("lim", limite)
+                   AND (CAST(:q AS VARCHAR) IS NULL OR\s""" + busqueda + """
+                         LIKE CAST(:q AS VARCHAR))
+                   AND (:todos
+                        OR i.pk_tusuario IN (SELECT tu FROM alcance)
+                        OR u.id_user IN (SELECT t2.fk_usuario FROM comunicaciones.tcanal_miembro t1
+                                           JOIN comunicaciones.tcanal_miembro t2 ON t2.fk_tcanal = t1.fk_tcanal
+                                          WHERE t1.fk_usuario = :u AND t1.salio_en IS NULL AND t2.salio_en IS NULL)
+                        OR (CAST(:est AS VARCHAR) IS NOT NULL
+                            AND academico_test.fn_mi_establecimiento_para_auditoria(u.id_user) = :est))
+                 ORDER BY nombre, u.id_user
+                 LIMIT :lim OFFSET :off""")
+                .param("u", usuario).param("est", establecimiento).param("todos", todos)
+                .param("q", normalizar(q)).param("lim", limite).param("off", desde)
                 .query((rs, n) -> new PersonaFila(rs.getLong(1), rs.getString(2), rs.getString(3),
                         rs.getString(4).isEmpty() ? List.of() : List.of(rs.getString(4).split(","))))
                 .list();

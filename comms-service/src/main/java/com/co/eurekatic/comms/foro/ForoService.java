@@ -30,7 +30,7 @@ import java.util.Set;
 import java.util.UUID;
 
 /**
- * Foros estilo Discord sobre un canal {@code FORO} (V560/V563). Cada publicacion es
+ * Foros estilo Discord sobre un canal {@code FORO} (V560/V585). Cada publicacion es
  * un hilo con titulo, etiquetas y estados fijada/cerrada/resuelta; su cuerpo y sus
  * respuestas son mensajes del chat. Quien publica, responde o modera lo decide
  * {@link PoliticaChat} (configurable por institucion por los menores); el

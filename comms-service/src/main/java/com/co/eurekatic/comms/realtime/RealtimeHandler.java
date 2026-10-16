@@ -158,7 +158,7 @@ public class RealtimeHandler extends TextWebSocketHandler {
     boolean puede(Usuario u, String topic) {
         if (topic.equals("presencia")) return true;
         if (topic.startsWith("user:")) return topic.equals("user:" + u.sub());
-        // foro:<id> (V563): eventos de publicaciones del canal FORO; solo sus miembros.
+        // foro:<id> (V585): eventos de publicaciones del canal FORO; solo sus miembros.
         if (topic.startsWith("canal:") || topic.startsWith("foro:")) {
             try {
                 return chat.esMiembroActivo(Long.parseLong(topic.substring(topic.indexOf(':') + 1)), u.id());

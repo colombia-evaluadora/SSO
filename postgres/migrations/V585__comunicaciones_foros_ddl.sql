@@ -1,4 +1,4 @@
--- V563 -- Foros de comunicaciones: publicaciones, etiquetas, respuestas y seguidores (capa 0, DDL)
+-- V585 -- Foros de comunicaciones: publicaciones, etiquetas, respuestas y seguidores (capa 0, DDL)
 -- Que hace: un canal FORO (V560) agrupa publicaciones (thilo) con titulo, etiquetas,
 --   fijada/cerrada/resuelta y busqueda FTS en espanol. El cuerpo y las respuestas son
 --   filas de tmensaje (reacciones, menciones y adjuntos del chat); thilo_mensaje las ata.

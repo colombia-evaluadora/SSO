@@ -78,6 +78,9 @@ DECLARE
     v_cuenta         VARCHAR(150);
     v_grado_codigo   VARCHAR;
 BEGIN
+    PERFORM academico_test.fn_audit_declarar(p_pk_usuario_solicitante,
+        format('Creación del estudiante %s (documento %s)',
+               TRIM(concat_ws(' ', p_primer_nombre, p_segundo_nombre, p_primer_apellido, p_segundo_apellido)), p_identificacion));
     -- -------------------------------------------------------------------
     -- 0. Gate de autorizacion (identico a fn_usu_crear / fn_estudiante_crear).
     -- -------------------------------------------------------------------

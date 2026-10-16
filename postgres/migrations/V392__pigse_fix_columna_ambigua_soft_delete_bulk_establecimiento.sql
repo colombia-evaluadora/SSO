@@ -27,6 +27,9 @@ BEGIN
             USING ERRCODE = '42501';
     END IF;
 
+    PERFORM pigse.fn_audit_declarar(p_pk_usuario_solicitante,
+        format('Eliminación masiva de %s establecimientos', COALESCE(CARDINALITY(p_pks), 0)));
+
     FOREACH v_pk IN ARRAY COALESCE(p_pks, ARRAY[]::BIGINT[])
     LOOP
         IF NOT EXISTS (SELECT 1 FROM pigse.TESTABLECIMIENTO e WHERE e.PK_ESTABLECIMIENTO = v_pk AND e.ACTIVE = TRUE) THEN

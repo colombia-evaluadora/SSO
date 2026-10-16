@@ -674,6 +674,9 @@ RETURNS JSONB
 LANGUAGE plpgsql
 AS $function$
 BEGIN
+    PERFORM academico_test.fn_audit_declarar(p_pk_usuario_solicitante,
+        format('Promoción de %s matrículas al grupo %s', CARDINALITY(p_pk_tmatriculas),
+               (SELECT NOMBRE FROM academico_test.TGRUPO WHERE PK_TGRUPO = p_fk_tgrupo_destino)));
     RETURN academico_test.fn_matricula_mover_lote(
         p_pk_usuario_solicitante := p_pk_usuario_solicitante,
         p_pk_tmatriculas         := p_pk_tmatriculas,
@@ -705,6 +708,9 @@ RETURNS JSONB
 LANGUAGE plpgsql
 AS $function$
 BEGIN
+    PERFORM academico_test.fn_audit_declarar(p_pk_usuario_solicitante,
+        format('Reubicación de %s matrículas al grupo %s', CARDINALITY(p_pk_tmatriculas),
+               (SELECT NOMBRE FROM academico_test.TGRUPO WHERE PK_TGRUPO = p_fk_tgrupo_destino)));
     RETURN academico_test.fn_matricula_mover_lote(
         p_pk_usuario_solicitante := p_pk_usuario_solicitante,
         p_pk_tmatriculas         := p_pk_tmatriculas,
@@ -742,6 +748,9 @@ RETURNS JSONB
 LANGUAGE plpgsql
 AS $function$
 BEGIN
+    PERFORM academico_test.fn_audit_declarar(p_pk_usuario_solicitante,
+        format('Corrección de grupo de %s matrículas al grupo %s', CARDINALITY(p_pk_tmatriculas),
+               (SELECT NOMBRE FROM academico_test.TGRUPO WHERE PK_TGRUPO = p_fk_tgrupo_destino)));
     RETURN academico_test.fn_matricula_mover_lote(
         p_pk_usuario_solicitante := p_pk_usuario_solicitante,
         p_pk_tmatriculas         := p_pk_tmatriculas,

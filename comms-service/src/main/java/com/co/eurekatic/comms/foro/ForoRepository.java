@@ -17,7 +17,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 
-/** SQL de los foros sobre el schema {@code comunicaciones} (V563). */
+/** SQL de los foros sobre el schema {@code comunicaciones} (V585). */
 @Repository
 public class ForoRepository {
 
