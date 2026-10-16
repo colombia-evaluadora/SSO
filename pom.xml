@@ -168,5 +168,6 @@
         <module>reporting-service</module>
         <module>ai-control-service</module>
         <module>scheduler-service</module>
+        <module>comms-service</module>
     </modules>
 </project>
