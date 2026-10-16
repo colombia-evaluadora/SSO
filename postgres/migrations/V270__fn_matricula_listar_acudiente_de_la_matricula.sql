@@ -7,8 +7,8 @@
 --   * Nombres completos (primer + segundo); la busqueda libre los cubre.
 --   * Alcance una vez por periodo; pagina sobre ids y une textos, acudiente
 --     y has_grades solo para la pagina.
---
--- Depende de: V22 (tablas), V37 (fn_periodo_usuario_periodos). Idempotente.
+--   * Establecimiento (nivel 2): solo Cursando de periodos activos, sin historico.
+-- Depende de: V22, V29 (nivel de rol), V37 (fn_periodo_usuario_periodos).
 -- =============================================================================
 
 -- Acudiente de una matricula: el que senala TMATRICULA.FK_TPADRE, y de esa
@@ -68,10 +68,31 @@ DECLARE
     v_expr TEXT;   -- la misma columna, sobre b y lo que haga falta unirle
     v_join TEXT;
     v_per  BIGINT[];
+    v_vig  BOOLEAN;
+    v_cur  BIGINT;   -- pk de Cursando; NULL = sin filtro de estado
 BEGIN
     -- Periodos visibles como arreglo: el plan ve cuantos son y elige indice
     -- para una sede o recorrido completo para un global.
-    v_per := ARRAY(SELECT periodo_id FROM academico_test.fn_periodo_usuario_periodos(p_pk_usuario));
+    -- Establecimiento no ve historico: periodo activo y no Cerrado ('C').
+    v_vig := COALESCE(academico_test.fn_usuario_categoria_rol_nivel(p_pk_usuario) = 2, FALSE);
+    v_per := ARRAY(
+        SELECT up.periodo_id
+          FROM academico_test.fn_periodo_usuario_periodos(p_pk_usuario) up
+         WHERE NOT v_vig
+            OR EXISTS (SELECT 1
+                         FROM academico_test.TPERIODO_ACADEMICO pa
+                         LEFT JOIN academico_test.TLISTA_VALOR lv
+                                ON lv.PK_LISTA_VALOR = pa.FK_TLV_ESTADO
+                               AND lv.CATEGORIA = 'ESTADOPERIODO'
+                        WHERE pa.PK_TPERIODO_ACADEMICO = up.periodo_id
+                          AND pa.ACTIVE = TRUE
+                          AND lv.VALOR IS DISTINCT FROM 'C'));
+    IF v_vig THEN
+        SELECT PK_LISTA_VALOR INTO v_cur
+          FROM academico_test.TLISTA_VALOR
+         WHERE CATEGORIA = 'ESTADO_MATRICULA' AND VALOR = '1' AND ACTIVE = TRUE;
+        v_cur := COALESCE(v_cur, -1);  -- sin catalogo: nada, no todo
+    END IF;
     -- Los valores son alias del SELECT final, no nombres de RETURNS TABLE.
     v_col := CASE lower(coalesce(p_sort_by, ''))
         WHEN 'documentnumber' THEN 'document_number'
@@ -163,6 +184,8 @@ BEGIN
           LEFT JOIN academico_test.TUSUARIO u ON u.PK_TUSUARIO = es.FK_TUSUARIO
           JOIN academico_test.TLISTA_VALOR est_m ON est_m.PK_LISTA_VALOR = m.FK_TLV_ESTADO_MATRICULA
          WHERE ($2 IS NULL OR CARDINALITY($2) = 0 OR est_m.NOMBRE = ANY($2))
+           -- Establecimiento: solo Cursando, por pk ya resuelto.
+           AND ($11::BIGINT IS NULL OR m.FK_TLV_ESTADO_MATRICULA = $11)
            AND ($1 IS NULL OR
                 u.IDENTIFICACION ILIKE '%%' || $1 || '%%' OR
                 gr.institution   ILIKE '%%' || $1 || '%%' OR
@@ -221,6 +244,6 @@ BEGIN
        ORDER BY %1$s %2$s, pg.id
     $q$, v_col, v_dir, v_join, v_expr)
     USING NULLIF(TRIM(p_search), ''), p_statuses, NULLIF(TRIM(p_campus), ''), NULLIF(TRIM(p_shift), ''),
-          p_grade, NULLIF(TRIM(p_group), ''), p_page_index, p_page_size, p_pk_usuario, v_per;
+          p_grade, NULLIF(TRIM(p_group), ''), p_page_index, p_page_size, p_pk_usuario, v_per, v_cur;
 END;
 $function$;
