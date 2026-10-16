@@ -129,7 +129,7 @@ SELECT v.uuid, m.id_microservice, v.ruta, v.metodo, 'postgres', 'SELECT', NULL,
     CAST(:BODY.ORDEN AS INTEGER)) AS resultado;$q$),
     ('3495c555-9d18-4ee4-85a1-7189f98b0314', '/listas-valor/:ID/estado', 'PUT',
      '{"PARAM.ID": "BIGINT", "BODY.HABILITADO": "BOOLEAN"}',
-     'Activa (BODY.HABILITADO=true) o inactiva (false) el valor :ID: inactivo, no aparece en GET /select/:CATEGORIA pero sigue en los registros que ya lo tienen; al inactivarlo deja de ser predeterminado. Devuelve el valor. Errores: 404 (P0002); 400 (22023) eliminado, o activar con el valor padre inactivo; 403 (42501) sin EDITAR; 409 (23503) inactivar un valor usado por el sistema o con valores hijos activos.',
+     'Activa (BODY.HABILITADO=true) o inactiva (false) el valor :ID: inactivo, no aparece en GET /select/:CATEGORIA pero sigue en los registros que ya lo tienen; al inactivarlo deja de ser predeterminado. Devuelve el valor. Errores: 404 (P0002); 400 (22023) eliminado, o activar con el valor padre inactivo; 403 (42501) sin EDITAR; 409 (23503) inactivar un valor con valores hijos activos. Un valor usado por el sistema sí se inactiva y activa; solo no se elimina.',
      $q$SELECT academico_test.fn_listavalor_estado(
     public.fn_get_academico_usuario_id(:CONTEXT.USER_ID::BIGINT),
     CAST(:PARAM.ID AS BIGINT),

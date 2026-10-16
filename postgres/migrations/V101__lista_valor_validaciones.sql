@@ -52,7 +52,7 @@ UPDATE academico_test.TLISTA_VALOR lv
 ALTER TABLE academico_test.TLISTA_VALOR ALTER COLUMN ORDEN SET NOT NULL;
 
 COMMENT ON COLUMN academico_test.TLISTA_VALOR.ES_SISTEMA
-    IS 'TRUE si el valor lo sembró una migración (el código puede buscarlo por CATEGORIA+VALOR): se renombra y reordena, pero no se deshabilita ni se elimina.';
+    IS 'TRUE si el valor lo sembró una migración (el código puede buscarlo por CATEGORIA+VALOR): se renombra, reordena y activa/inactiva, pero no se elimina ni cambia de código.';
 COMMENT ON COLUMN academico_test.TLISTA_VALOR.FK_TLISTA_VALOR_PADRE
     IS 'Valor padre (relación reflexiva): p.ej. el departamento de un municipio. Es de la lista padre de su categoría (TLISTA_CATEGORIA.FK_TLISTA_CATEGORIA_PADRE).';
 COMMENT ON COLUMN academico_test.TLISTA_VALOR.ETIQUETA
@@ -816,7 +816,7 @@ BEGIN
      LIMIT 1;
 
     IF v_pk IS NOT NULL THEN
-        RAISE EXCEPTION 'Usado por el sistema: % se puede renombrar y reordenar, pero no inactivar ni eliminar.',
+        RAISE EXCEPTION 'Usado por el sistema: % se puede renombrar, reordenar e inactivar, pero no eliminar.',
             academico_test.fn_listavalor_valor_nombre(v_pk)
             USING ERRCODE = '23503';
     END IF;
@@ -824,7 +824,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_listavalor_validar_no_sistema(BIGINT[])
-    IS '23503 si algún valor de p_pks es ES_SISTEMA: la lógica de algún módulo lo busca por su código.';
+    IS '23503 si algún valor de p_pks es ES_SISTEMA: la lógica de algún módulo lo busca por su código, así que no se elimina. Inactivarlo sí se permite: HABILITADO solo lo saca de los selectores.';
 
 CREATE OR REPLACE FUNCTION academico_test.fn_listavalor_validar_sin_hijos_habilitados(p_pk_lista_valor BIGINT)
 RETURNS VOID
