@@ -31,7 +31,7 @@ import java.util.UUID;
 public class ChatController {
 
     public record CanalIn(@JsonProperty("NOMBRE") String nombre, @JsonProperty("CATEGORIA") String categoria,
-                          @JsonProperty("MIEMBROS") List<Long> miembros) { }
+                          @JsonProperty("MIEMBROS") List<Long> miembros, @JsonProperty("TIPO") String tipo) { }
 
     public record MiembrosIn(@JsonProperty("MIEMBROS") List<Long> miembros) { }
 
