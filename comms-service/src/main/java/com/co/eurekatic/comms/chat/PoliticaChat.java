@@ -42,7 +42,22 @@ public class PoliticaChat {
         return perfil.equals("DIRECTIVO") || perfil.equals("DOCENTE");
     }
 
+    /** Foros: abrir publicaciones (perfil en {@code foros.publicar}). */
+    public boolean puedePublicarEnForo(String perfil) {
+        return politica.foros().publicar().contains(perfil);
+    }
+
+    public boolean puedeResponderEnForo(String perfil) {
+        return politica.foros().responder().contains(perfil);
+    }
+
+    /** Modera por perfil; el administrador del canal modera siempre (lo decide el servicio). */
+    public boolean moderaForos(String perfil) {
+        return politica.foros().moderar().contains(perfil);
+    }
+
     public ChatDtos.Politica dto() {
-        return new ChatDtos.Politica(politica.directos(), politica.mencionesMasivas(), politica.pendienteDeAprobacion());
+        return new ChatDtos.Politica(politica.directos(), politica.mencionesMasivas(), politica.pendienteDeAprobacion(),
+                politica.foros());
     }
 }

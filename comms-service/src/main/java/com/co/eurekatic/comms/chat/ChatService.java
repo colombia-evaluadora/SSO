@@ -99,6 +99,13 @@ public class ChatService {
     // ── canales ────────────────────────────────────────────────────────────
 
     public Conversacion crearCanal(Usuario u, String nombre, String categoria, List<Long> miembros) {
+        return crearCanal(u, nombre, categoria, miembros, "CANAL");
+    }
+
+    /** {@code tipo}: CANAL o FORO (V585); un foro se administra igual que un canal. */
+    public Conversacion crearCanal(Usuario u, String nombre, String categoria, List<Long> miembros, String tipo) {
+        String t = tipo == null ? "CANAL" : tipo;
+        if (!t.equals("CANAL") && !t.equals("FORO")) throw new ApiError(400, "Tipo de canal desconocido.");
         String n = nombre == null ? "" : nombre.trim();
         if (n.isEmpty()) throw new ApiError(400, "Escribe un nombre para el canal.");
         if (n.length() > 100) throw new ApiError(400, "El nombre del canal es demasiado largo.");
@@ -113,7 +120,7 @@ public class ChatService {
         Set<Long> invitados = permitidos(u, miembros);
         long canal = tx.execute(s -> {
             repo.contextoAuditoria(u.sub());
-            long id = repo.crearCanal("CANAL", cat, n, u.establecimiento(), null, u.id());
+            long id = repo.crearCanal(t, cat, n, u.establecimiento(), null, u.id());
             repo.agregarMiembro(id, u.id(), "ADMIN");
             for (Long m : invitados) {
                 repo.agregarMiembro(id, m, "MIEMBRO");
@@ -243,6 +250,7 @@ public class ChatService {
      */
     public Mensaje enviar(Usuario u, long canal, String texto, Long archivoId, Long respuesta, UUID clientId) {
         Membresia mem = exigirMiembro(u, canal);
+        if ("FORO".equals(mem.tipoCanal())) throw new ApiError(400, "En un foro se escribe dentro de una publicacion.");
         exigirComentarios(u, canal);
         var previo = repo.mensajePorClientId(u.id(), clientId);
         if (previo.isPresent()) return uno(previo.get(), u);
@@ -279,6 +287,7 @@ public class ChatService {
 
     public Mensaje editar(Usuario u, long id, String texto) {
         MensajeBase m = propio(u, id, "Solo puedes editar tus mensajes.");
+        if (repo.esRaizDeHilo(id)) throw new ApiError(400, "Edita la publicacion desde el foro.");
         String t = texto == null ? "" : texto.trim();
         if (t.isEmpty() && m.adjunto() == null) throw new ApiError(400, "El mensaje no puede quedar vacio.");
         if (t.length() > MAX_TEXTO) throw new ApiError(400, "El mensaje es demasiado largo.");
@@ -295,6 +304,7 @@ public class ChatService {
 
     public Mensaje eliminarMensaje(Usuario u, long id) {
         MensajeBase m = propio(u, id, "Solo puedes eliminar tus mensajes.");
+        if (repo.esRaizDeHilo(id)) throw new ApiError(400, "Elimina la publicacion desde el foro.");
         Mensaje antes = uno(id, u);
         List<Long> citan = repo.respuestasA(id);
         escribir(u, () -> repo.eliminarMensaje(id, u.id()));

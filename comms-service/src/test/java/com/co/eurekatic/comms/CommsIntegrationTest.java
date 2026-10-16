@@ -100,11 +100,13 @@ class CommsIntegrationTest {
             st.execute(Files.readString(Path.of("../postgres/migrations/V561__comunicaciones_outbox_eventos.sql")));
             st.execute(Files.readString(Path.of("../postgres/migrations/V561.1__comunicaciones_outbox_registrar.sql")));
             st.execute(Files.readString(Path.of("../postgres/migrations/V575__comunicaciones_chat_borradores_votaciones_ddl.sql")));
+            st.execute(Files.readString(Path.of("../postgres/migrations/V585__comunicaciones_foros_ddl.sql")));
             st.execute(Files.readString(Path.of("../postgres/migrations/V580__comunicaciones_actividades_ddl.sql")));
             // Re-aplicar (como hace el deploy al editar) debe ser idempotente.
             st.execute(Files.readString(Path.of("../postgres/migrations/V560__comunicaciones_chat_ddl.sql")));
             st.execute(Files.readString(Path.of("../postgres/migrations/V561__comunicaciones_outbox_eventos.sql")));
             st.execute(Files.readString(Path.of("../postgres/migrations/V575__comunicaciones_chat_borradores_votaciones_ddl.sql")));
+            st.execute(Files.readString(Path.of("../postgres/migrations/V585__comunicaciones_foros_ddl.sql")));
         }
         ana = usuario(j, "ana@colegio.edu.co", "Ana Rios", "CEVAL-DOCENTE");
         luis = usuario(j, "luis@colegio.edu.co", "Luis Paz", "CEVAL-DOCENTE");
@@ -226,6 +228,136 @@ class CommsIntegrationTest {
         new StandardWebSocketClient().execute(h, "ws://localhost:" + port + "/comms/ws?ticket=" + ticket).get(5, TimeUnit.SECONDS).close();
         new StandardWebSocketClient().execute(h, "ws://localhost:" + port + "/comms/ws?ticket=" + ticket).get(5, TimeUnit.SECONDS);
         assertThat(cierre.get(5, TimeUnit.SECONDS)).isIn(1000, 4001);
+    }
+
+    @Test
+    void foroConPublicacionesRespuestasYModeracion() throws Exception {
+        // Personas propias: el test del chat no ve este foro en su lista de conversaciones.
+        long ana = usuario(jdbc, "ana.foro@colegio.edu.co", "Ana Foro", "CEVAL-DOCENTE");
+        long luis = usuario(jdbc, "luis.foro@colegio.edu.co", "Luis Foro", "CEVAL-DOCENTE");
+        long sofi = usuario(jdbc, "sofi.foro@colegio.edu.co", "Sofia Foro", "CEVAL-ESTUDIANTE");
+        String tAna = token("ana.foro@colegio.edu.co", ana, "CEVAL-DOCENTE");
+        String tLuis = token("luis.foro@colegio.edu.co", luis, "CEVAL-DOCENTE");
+        String tSofi = token("sofi.foro@colegio.edu.co", sofi, "CEVAL-ESTUDIANTE");
+        var admin = new RabbitAdmin(rabbit.getConnectionFactory());
+        TopicExchange notif = new TopicExchange("notifications", true, false);
+        Queue cola = QueueBuilder.nonDurable("prueba.foros").build();
+        admin.declareExchange(notif);
+        admin.declareQueue(cola);
+        admin.declareBinding(BindingBuilder.bind(cola).to(notif).with("evento"));
+
+        long foro = rows(post("/comunicaciones/conversaciones", tAna, Map.of("NOMBRE", "Dudas de ciencias",
+                "TIPO", "FORO", "MIEMBROS", List.of(luis, sofi)))).get(0).get("id").asLong();
+        String base = "/comunicaciones/foros/" + foro;
+        // Un foro no recibe mensajes sueltos del chat.
+        assertThat(post("/comunicaciones/conversaciones/" + foro + "/mensajes", tAna, Map.of("TEXTO", "hola"))
+                .statusCode()).isEqualTo(400);
+        assertThat(rows(get(base, tAna)).get(0).get("puedeModerar").asBoolean()).isTrue();
+        JsonNode cabSofi = rows(get(base, tSofi)).get(0);
+        assertThat(cabSofi.get("puedeModerar").asBoolean()).isFalse();
+        assertThat(cabSofi.get("puedePublicar").asBoolean()).isTrue();
+
+        // Etiquetas: solo la moderacion las crea; "Anuncio" solo la pone la moderacion.
+        assertThat(post(base + "/etiquetas", tSofi, Map.of("NOMBRE", "Tarea")).statusCode()).isEqualTo(403);
+        long tarea = rows(post(base + "/etiquetas", tAna, Map.of("NOMBRE", "Tarea", "COLOR", "GREEN")))
+                .get(0).get("id").asLong();
+        long anuncio = rows(post(base + "/etiquetas", tAna, Map.of("NOMBRE", "Anuncio", "SOLO_MODERADORES", "S")))
+                .get(0).get("id").asLong();
+
+        BlockingQueue<JsonNode> recibidos = new LinkedBlockingQueue<>();
+        WebSocketSession ws = abrir(tLuis, recibidos);
+        ws.sendMessage(new TextMessage("{\"type\":\"subscribe\",\"topic\":\"foro:" + foro + "\"}"));
+        esperar(recibidos, "subscribed");
+
+        assertThat(post(base + "/publicaciones", tSofi, Map.of("TITULO", "x", "TEXTO", "y",
+                "ETIQUETAS", List.of(anuncio))).statusCode()).isEqualTo(403);
+        var cuerpo = Map.of("TITULO", "Como funciona la fotosintesis",
+                "TEXTO", "No entiendo que hacen las plantas con la luz", "ETIQUETAS", List.of(tarea),
+                "CLIENT_MESSAGE_ID", java.util.UUID.randomUUID().toString());
+        JsonNode pub = rows(post(base + "/publicaciones", tSofi, cuerpo)).get(0);
+        long pid = pub.get("id").asLong();
+        // Reintento idempotente.
+        assertThat(rows(post(base + "/publicaciones", tSofi, cuerpo)).get(0).get("id").asLong()).isEqualTo(pid);
+        assertThat(pub.get("siguiendo").asBoolean()).isTrue();
+        assertThat(pub.get("esPropia").asBoolean()).isTrue();
+        assertThat(pub.get("etiquetas").get(0).get("nombre").asText()).isEqualTo("Tarea");
+        assertThat(pub.get("mensaje").get("texto").asText()).contains("plantas");
+        assertThat(esperar(recibidos, "event").get("event").asText()).isEqualTo("publicacion.creada");
+
+        // FTS en espanol ("planta" encuentra "plantas"), etiqueta y orden.
+        assertThat(rows(get(base + "/publicaciones?q=planta", tLuis)).size()).isEqualTo(1);
+        assertThat(rows(get(base + "/publicaciones?q=volcanes", tLuis)).size()).isZero();
+        assertThat(rows(get(base + "/publicaciones?etiqueta=" + anuncio, tLuis)).size()).isZero();
+        assertThat(rows(get(base + "/publicaciones?orden=TOP", tLuis)).get(0).get("totalCount").asInt()).isEqualTo(1);
+        assertThat(get(base + "/publicaciones?orden=x", tLuis).statusCode()).isEqualTo(400);
+
+        // Luis responde mencionando a Sofia: un solo aviso, FORO_MENCION.
+        String pubPath = "/comunicaciones/foros/publicaciones/" + pid;
+        JsonNode r1 = rows(post(pubPath + "/respuestas", tLuis,
+                Map.of("TEXTO", "Mira el capitulo 3 <@" + sofi + ">"))).get(0);
+        JsonNode n1 = JSON.valueToTree(rabbit.receiveAndConvert("prueba.foros", 5000));
+        assertThat(n1.get("tipo").asText()).isEqualTo("FORO_MENCION");
+        assertThat(n1.get("destinatarios").get(0).asText()).isEqualTo("sofi.foro@colegio.edu.co");
+        assertThat(n1.get("deepLink").asText())
+                .startsWith("/app/comunicaciones/foros?foro=" + foro + "&publicacion=" + pid);
+
+        // Ana sigue la publicacion: la siguiente respuesta (hilada) avisa a Ana y a Sofia.
+        assertThat(rows(patch(pubPath + "/seguir", tAna, Map.of("SEGUIR", "S"))).get(0).get("siguiendo").asBoolean())
+                .isTrue();
+        JsonNode r2 = rows(post(pubPath + "/respuestas", tLuis,
+                Map.of("TEXTO", "Y tambien el 4", "FK_MENSAJE_RESPUESTA", r1.get("id").asLong()))).get(0);
+        assertThat(r2.get("respuestaA").get("id").asLong()).isEqualTo(r1.get("id").asLong());
+        JsonNode n2 = JSON.valueToTree(rabbit.receiveAndConvert("prueba.foros", 5000));
+        assertThat(n2.get("tipo").asText()).isEqualTo("FORO_RESPUESTA");
+        List<String> dest = new java.util.ArrayList<>();
+        n2.get("destinatarios").forEach(d -> dest.add(d.asText()));
+        assertThat(dest).containsExactlyInAnyOrder("ana.foro@colegio.edu.co", "sofi.foro@colegio.edu.co");
+        assertThat(rows(get(pubPath + "/respuestas", tSofi)).size()).isEqualTo(2);
+
+        // Reacciones del chat sobre el cuerpo; el cuerpo no se borra desde el chat.
+        long raiz = pub.get("mensaje").get("id").asLong();
+        assertThat(rows(post("/comunicaciones/mensajes/" + raiz + "/reacciones", tLuis, Map.of("EMOJI", "ok")))
+                .get(0).get("reacciones").get(0).get("total").asInt()).isEqualTo(1);
+        assertThat(rows(get(pubPath, tSofi)).get(0).get("reacciones").asInt()).isEqualTo(1);
+        assertThat(patch("/comunicaciones/mensajes/" + raiz + "/eliminar", tSofi, Map.of()).statusCode())
+                .isEqualTo(400);
+
+        // Moderacion: fijar y cerrar; cerrada solo responde la moderacion.
+        assertThat(patch(pubPath + "/fijar", tLuis, Map.of("FIJADA", "S")).statusCode()).isEqualTo(403);
+        assertThat(rows(patch(pubPath + "/fijar", tAna, Map.of("FIJADA", "S"))).get(0).get("fijada").asBoolean())
+                .isTrue();
+        assertThat(rows(patch(pubPath + "/cerrar", tAna, Map.of("CERRADA", "S"))).get(0).get("cerrada").asBoolean())
+                .isTrue();
+        assertThat(post(pubPath + "/respuestas", tSofi, Map.of("TEXTO", "gracias")).statusCode()).isEqualTo(409);
+        rows(post(pubPath + "/respuestas", tAna, Map.of("TEXTO", "Cierro: quedo resuelto")));
+
+        // Preguntas y respuestas: la autora marca la respuesta que la resolvio; otra persona no.
+        assertThat(patch(pubPath + "/resolver", tLuis, Map.of("RESUELTA", "S")).statusCode()).isEqualTo(403);
+        JsonNode resuelta = rows(patch(pubPath + "/resolver", tSofi,
+                Map.of("RESUELTA", "S", "FK_MENSAJE_SOLUCION", r1.get("id").asLong()))).get(0);
+        assertThat(resuelta.get("resuelta").asBoolean()).isTrue();
+        assertThat(resuelta.get("solucionId").asLong()).isEqualTo(r1.get("id").asLong());
+
+        // Mover etiqueta y borrar la respuesta de otra persona: moderacion.
+        assertThat(rows(patch(pubPath + "/etiquetas", tAna, Map.of("ETIQUETAS", List.of(anuncio)))).get(0)
+                .get("etiquetas").get(0).get("nombre").asText()).isEqualTo("Anuncio");
+        assertThat(patch("/comunicaciones/foros/respuestas/" + r2.get("id").asLong() + "/eliminar", tSofi, Map.of())
+                .statusCode()).isEqualTo(403);
+        rows(patch("/comunicaciones/foros/respuestas/" + r1.get("id").asLong() + "/eliminar", tAna, Map.of()));
+        JsonNode trasBorrar = rows(get(pubPath, tSofi)).get(0);
+        assertThat(trasBorrar.get("respuestas").asInt()).isEqualTo(2);
+        assertThat(trasBorrar.get("solucionId").isNull()).isTrue();
+
+        assertThat(patch(pubPath + "/eliminar", tLuis, Map.of()).statusCode()).isEqualTo(403);
+        rows(patch(pubPath + "/eliminar", tAna, Map.of()));
+        assertThat(rows(get(base + "/publicaciones", tSofi)).size()).isZero();
+        assertThat(get(pubPath, tSofi).statusCode()).isEqualTo(404);
+        // Sin eventos pendientes: la reaccion de arriba no debe llegarle a otro test por el outbox.
+        org.awaitility.Awaitility.await().atMost(10, TimeUnit.SECONDS).until(() -> jdbc.sql(
+                "SELECT COUNT(*) FROM comunicaciones.toutbox_evento WHERE publicado_en IS NULL")
+                .query(Long.class).single() == 0);
+        if (admin.getQueueProperties("prueba.eventos") != null) admin.purgeQueue("prueba.eventos", false);
+        ws.close();
     }
 
     @Test

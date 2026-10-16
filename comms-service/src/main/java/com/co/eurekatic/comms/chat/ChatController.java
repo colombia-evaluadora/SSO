@@ -31,7 +31,7 @@ import java.util.UUID;
 public class ChatController {
 
     public record CanalIn(@JsonProperty("NOMBRE") String nombre, @JsonProperty("CATEGORIA") String categoria,
-                          @JsonProperty("MIEMBROS") List<Long> miembros) { }
+                          @JsonProperty("MIEMBROS") List<Long> miembros, @JsonProperty("TIPO") String tipo) { }
 
     public record MiembrosIn(@JsonProperty("MIEMBROS") List<Long> miembros) { }
 
@@ -77,7 +77,7 @@ public class ChatController {
 
     @PostMapping("/conversaciones")
     public Filas<Conversacion> crear(HttpServletRequest r, @RequestBody CanalIn in) {
-        return Filas.de(chat.crearCanal(Usuario.de(r), in.nombre(), in.categoria(), in.miembros()));
+        return Filas.de(chat.crearCanal(Usuario.de(r), in.nombre(), in.categoria(), in.miembros(), in.tipo()));
     }
 
     @PatchMapping("/conversaciones/{id}")

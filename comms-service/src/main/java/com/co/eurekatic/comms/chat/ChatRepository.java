@@ -171,7 +171,7 @@ public class ChatRepository {
     public boolean existeNombre(String nombre, String establecimiento, Long excepto) {
         return jdbc.sql("""
                 SELECT EXISTS (SELECT 1 FROM comunicaciones.tcanal
-                                WHERE tipo = 'CANAL' AND eliminado_en IS NULL
+                                WHERE tipo IN ('CANAL', 'FORO') AND eliminado_en IS NULL
                                   AND COALESCE(establecimiento, '') = COALESCE(CAST(:est AS VARCHAR), '')
                                   AND lower(nombre) = lower(:nombre)
                                   AND pk_tcanal <> COALESCE(CAST(:excepto AS BIGINT), -1))""")
@@ -336,6 +336,12 @@ public class ChatRepository {
                 ON CONFLICT DO NOTHING""")
                 .param("m", mensaje).param("u", usuario).param("e", emoji).update();
         return true;
+    }
+
+    /** El mensaje es el cuerpo de una publicacion de foro (V585). */
+    public boolean esRaizDeHilo(long mensaje) {
+        return jdbc.sql("SELECT EXISTS (SELECT 1 FROM comunicaciones.thilo WHERE fk_tmensaje_raiz = :m)")
+                .param("m", mensaje).query(Boolean.class).single();
     }
 
     /** Ids de mensajes que citan a {@code id} (para avisar "Mensaje eliminado"). */
