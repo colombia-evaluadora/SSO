@@ -16,6 +16,7 @@ import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.util.Base64;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -66,18 +67,41 @@ public class ClickHouseSessionMirrorStage {
      * ReplacingMergeTree al compactar).
      */
     public void execute(CdcEvent event, long lsn) throws Exception {
-        String op = event.op() != null ? event.op().code() : "r";
-        switch (op) {
-            case "c", "u" -> upsert(event.after(), lsn);
-            case "d" -> deleteByFamilyId(familyIdOf(event.before()));
-            default -> log.debug("SessionMirrorStage: op={} no aplica (snapshot/truncate?)", op);
+        if (isDelete(event)) {
+            delete(event);
+            return;
+        }
+        Map<String, Object> row = upsertRow(event, lsn);
+        if (row != null) {
+            insertRows(List.of(row));
         }
     }
 
-    private void upsert(Map<String, Object> after, long lsn) {
+    /** true si el evento borra la sesion (se aplica con ALTER DELETE, no con INSERT). */
+    public static boolean isDelete(CdcEvent event) {
+        return event.op() != null && "d".equals(event.op().code());
+    }
+
+    /** ALTER DELETE de la familia del evento. */
+    public void delete(CdcEvent event) {
+        deleteByFamilyId(familyIdOf(event.before()));
+    }
+
+    /**
+     * Fila del mirror para un INSERT/UPDATE, o null si el evento no aplica
+     * (snapshot, truncate, after vacio). No envia nada: el llamador agrupa
+     * las filas de un lote en {@link #insertRows}.
+     */
+    public Map<String, Object> upsertRow(CdcEvent event, long lsn) {
+        String op = event.op() != null ? event.op().code() : "r";
+        if (!"c".equals(op) && !"u".equals(op)) {
+            log.debug("SessionMirrorStage: op={} no aplica (snapshot/truncate?)", op);
+            return null;
+        }
+        Map<String, Object> after = event.after();
         if (after == null || after.isEmpty()) {
             log.warn("SessionMirrorStage: upsert con after vacío, se ignora");
-            return;
+            return null;
         }
         Map<String, Object> row = new LinkedHashMap<>();
         row.put("family_id", str(after.get("family_id")));
@@ -105,7 +129,23 @@ public class ClickHouseSessionMirrorStage {
         // bien. El lsn real del evento Debezium SÍ crece monótonamente
         // por transacción, que es justo lo que argMax necesita.
         row.put("lsn", lsn);
-        send("INSERT INTO auditoria.tsesion_web FORMAT JSONEachRow", row);
+        return row;
+    }
+
+    /** Un solo INSERT (JSONEachRow, una fila por linea) para todas las filas. */
+    public void insertRows(List<Map<String, Object>> rows) {
+        if (rows.isEmpty()) {
+            return;
+        }
+        StringBuilder body = new StringBuilder();
+        for (Map<String, Object> row : rows) {
+            try {
+                body.append(mapper.writeValueAsString(row)).append('\n');
+            } catch (Exception e) {
+                throw new RuntimeException("SessionMirrorStage: no se pudo serializar la fila", e);
+            }
+        }
+        sendInternal("INSERT INTO auditoria.tsesion_web FORMAT JSONEachRow", body.toString());
     }
 
     private void deleteByFamilyId(String familyId) {
@@ -125,15 +165,6 @@ public class ClickHouseSessionMirrorStage {
         if (before == null) return null;
         Object v = before.get("family_id");
         return v == null ? null : v.toString();
-    }
-
-    private void send(String sql, Map<String, Object> row) {
-        try {
-            String body = mapper.writeValueAsString(row);
-            sendInternal(sql, body);
-        } catch (Exception e) {
-            throw new RuntimeException("SessionMirrorStage: no se pudo serializar la fila", e);
-        }
     }
 
     private void sendRaw(String sql) {
@@ -161,15 +192,23 @@ public class ClickHouseSessionMirrorStage {
                     userInfo.getBytes(StandardCharsets.UTF_8)));
         }
 
+        HttpResponse<String> resp;
         try {
-            HttpResponse<String> resp = http.send(builder.build(), HttpResponse.BodyHandlers.ofString());
-            if (resp.statusCode() != 200) {
-                throw new RuntimeException("ClickHouse mirror failed: " + resp.statusCode() + " " + resp.body());
-            }
-            log.debug("tsesion_web mirror OK family_id={}", body != null && body.contains("family_id") ? "<set>" : "<delete>");
+            resp = http.send(builder.build(), HttpResponse.BodyHandlers.ofString());
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new RuntimeException("ClickHouse mirror de tsesion_web interrumpido", e);
         } catch (Exception e) {
-            throw new RuntimeException("ClickHouse mirror send failed", e);
+            throw new RuntimeException("ClickHouse mirror de tsesion_web no respondio: " + e, e);
         }
+        // La respuesta de ClickHouse va en el mensaje: antes se envolvia en un
+        // generico "no se pudo serializar la fila" y la causa real (p. ej.
+        // MEMORY_LIMIT_EXCEEDED) no llegaba al log.
+        if (resp.statusCode() != 200) {
+            throw new RuntimeException("ClickHouse mirror de tsesion_web fallo: "
+                    + resp.statusCode() + " " + resp.body());
+        }
+        log.debug("tsesion_web mirror OK ({})", body != null ? "insert" : "delete");
     }
 
     private static String str(Object v) {

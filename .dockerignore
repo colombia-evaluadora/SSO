@@ -1,14 +1,10 @@
 # Build artifacts — Maven produces these inside each module, but we
 # don't want them baked into the build context (waste of bandwidth).
 **/target/
-# Exception: the locally-built jars are needed for the Dockerfile.local
-# pattern (host maven build + Docker-built SPA). We COPY them
-# explicitly; everything else under target/ stays excluded.
+# Exception: api-gateway/Dockerfile.local (docker-compose.local-gateway.yml)
+# empaqueta el jar compilado en el host. Es el unico Dockerfile.local que
+# queda; el resto de jars no entran al contexto.
 !api-gateway/target/api-gateway.jar
-!auth-center/target/auth-center.jar
-!sso-admin/target/sso-admin.jar
-!query-service/target/query-service.jar
-!notification-service/target/notification-service.jar
 # Node dependency dirs — installed inside the image by `npm ci`/`pnpm i`.
 # Shipping them in the build context (a) bloats the context, (b) clashes
 # with the in-image install and corrupts the BuildKit cachemount.

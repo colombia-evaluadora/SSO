@@ -30,7 +30,27 @@
     <dependencies>
         <dependency>
             <groupId>com.co.eurekatic</groupId>
-            <artifactId>common</artifactId>
+            <artifactId>common-core</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>com.co.eurekatic</groupId>
+            <artifactId>common-jwt</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>com.co.eurekatic</groupId>
+            <artifactId>common-observability</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>com.co.eurekatic</groupId>
+            <artifactId>common-openapi</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>com.co.eurekatic</groupId>
+            <artifactId>common-query</artifactId>
             <version>${project.version}</version>
         </dependency>
 

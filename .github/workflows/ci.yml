@@ -105,21 +105,21 @@ jobs:
     name: changes
     runs-on: ubuntu-latest
     outputs:
-      common:        ${{ steps.filter.outputs.common }}
-      auth-center:   ${{ steps.filter.outputs.auth-center }}
-      sso-admin:     ${{ steps.filter.outputs.sso-admin }}
-      query-service: ${{ steps.filter.outputs.query-service }}
-      file-service:  ${{ steps.filter.outputs.file-service }}
-      reporting-service: ${{ steps.filter.outputs.reporting-service }}
-      ai-control-service: ${{ steps.filter.outputs.ai-control-service }}
-      scheduler-service: ${{ steps.filter.outputs.scheduler-service }}
-      comms-service: ${{ steps.filter.outputs.comms-service }}
-      api-gateway:   ${{ steps.filter.outputs.api-gateway }}
-      cdc:           ${{ steps.filter.outputs.cdc }}
-      notification-service: ${{ steps.filter.outputs.notification-service }}
-      provisioner:   ${{ steps.filter.outputs.provisioner }}
-      eurekaserver:  ${{ steps.filter.outputs.eurekaserver }}
-      hello-service: ${{ steps.filter.outputs.hello-service }}
+      common:        ${{ steps.afectados.outputs.common }}
+      auth-center:   ${{ steps.afectados.outputs.auth-center }}
+      sso-admin:     ${{ steps.afectados.outputs.sso-admin }}
+      query-service: ${{ steps.afectados.outputs.query-service }}
+      file-service:  ${{ steps.afectados.outputs.file-service }}
+      reporting-service: ${{ steps.afectados.outputs.reporting-service }}
+      ai-control-service: ${{ steps.afectados.outputs.ai-control-service }}
+      scheduler-service: ${{ steps.afectados.outputs.scheduler-service }}
+      comms-service: ${{ steps.afectados.outputs.comms-service }}
+      api-gateway:   ${{ steps.afectados.outputs.api-gateway }}
+      cdc:           ${{ steps.afectados.outputs.cdc-capture }}
+      notification-service: ${{ steps.afectados.outputs.notification-service }}
+      provisioner:   ${{ steps.afectados.outputs.provisioner }}
+      eurekaserver:  ${{ steps.afectados.outputs.eurekaserver }}
+      hello-service: ${{ steps.afectados.outputs.hello-service }}
       admin-ui:      ${{ steps.filter.outputs.admin-ui }}
       migrations:    ${{ steps.filter.outputs.migrations }}
     steps:
@@ -146,67 +146,16 @@ jobs:
         id: filter
         with:
           base: ${{ github.event_name == 'push' && github.event.before || '' }}
+          list-files: shell
           filters: |
-            # `common` actúa de disparador global: si cambia él, el pom
-            # raíz o el propio workflow, se recompila todo.
-            common: &global
-              - 'common/**'
-              - 'pom.xml'
-              - '.github/workflows/ci.yml'
-            auth-center:
-              - *global
-              - 'auth-center/**'
-            sso-admin:
-              - *global
-              - 'sso-admin/**'
-            query-service:
-              - *global
-              - 'query-service/**'
-            file-service:
-              - *global
-              - 'file-service/**'
-            reporting-service:
-              - *global
-              - 'reporting-service/**'
-            ai-control-service:
-              - *global
-              - 'ai-control-service/**'
-            scheduler-service:
-              - *global
-              - 'scheduler-service/**'
-            comms-service:
-              - *global
-              - 'comms-service/**'
-              - 'postgres/migrations/V560__*'
-              - 'postgres/migrations/V561*'
-            # admin-ui entra aquí porque el Dockerfile del gateway lo
-            # compila dentro.
-            api-gateway:
-              - *global
-              - 'api-gateway/**'
-              - 'admin-ui/**'
-            cdc:
-              - *global
-              - 'cdc-sync/**'
-            notification-service:
-              - *global
-              - 'notification-service/**'
-            provisioner:
-              - *global
-              - 'provisioner/**'
-            eurekaserver:
-              # eurekaserver es el ÚNICO módulo que no depende de common,
-              # así que no lleva el ancla *global: sólo lo despierta su
-              # propia carpeta, el pom raíz o este workflow.
-              - 'eurekaserver/**'
-              - 'pom.xml'
-              - '.github/workflows/ci.yml'
-            hello-service:
-              - *global
-              - 'hello-service/**'
+            # Los modulos Maven no se filtran aqui: los decide el paso
+            # `afectados` a partir de los pom.xml (ver mas abajo).
+            todo:
+              - '**'
+            # Solo la UI: editar este workflow (algo que hace cada servicio
+            # nuevo) no debe lanzar los cuatro jobs de admin-ui.
             admin-ui:
               - 'admin-ui/**'
-              - '.github/workflows/ci.yml'
             migrations:
               - 'postgres/migrations/**'
               - '.github/scripts/check-flyway-migrations.sh'
@@ -214,6 +163,18 @@ jobs:
               - 'scripts/migration-reapply-set.py'
               - 'scripts/migration-analysis/**'
               - '.github/workflows/ci.yml'
+
+      # Que servicios Maven afecta el diff, leido de sus pom.xml: un cambio en
+      # common/<modulo>/ solo despierta a los servicios que dependen de ese
+      # modulo (directa o transitivamente). El pom raiz, common/pom.xml y este
+      # workflow siguen despertando a todos.
+      - id: afectados
+        env:
+          FICHEROS: ${{ steps.filter.outputs.todo_files }}
+        run: |
+          set -euo pipefail
+          set -f  # la lista no se expande como glob
+          printf '%s\n' $FICHEROS | python3 .github/scripts/servicios-afectados.py --workflow ci | tee -a "$GITHUB_OUTPUT"
 
   # ───────── Migraciones: análisis estático (sin contenedores) ─────────
   #
@@ -530,7 +491,8 @@ jobs:
           java-version: '25'
           cache: maven
       - name: Verify (common)
-        run: mvn -B -ntp -pl common -am verify -DskipITs=false
+        # common es un agregador: -f construye y prueba todos sus submodulos.
+        run: mvn -B -ntp -f common/pom.xml verify -DskipITs=false
 
   # ───────── Backend: auth-center (Testcontainers) ─────────
   maven-auth-center:

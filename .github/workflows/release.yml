@@ -155,9 +155,14 @@ jobs:
               echo 'context=cdc-sync' >> "$GITHUB_OUTPUT"
               echo 'dockerfile=cdc-sync/cdc-worker/Dockerfile' >> "$GITHUB_OUTPUT"
               echo 'extra=repo=.' >> "$GITHUB_OUTPUT" ;;
-            *)
+            api-gateway)
               echo 'context=.' >> "$GITHUB_OUTPUT"
-              echo 'dockerfile=${{ matrix.service }}/Dockerfile' >> "$GITHUB_OUTPUT"
+              echo 'dockerfile=api-gateway/Dockerfile' >> "$GITHUB_OUTPUT"
+              echo 'extra=' >> "$GITHUB_OUTPUT" ;;
+            *)
+              # El resto de servicios Java comparten Dockerfile (build-arg MODULE).
+              echo 'context=.' >> "$GITHUB_OUTPUT"
+              echo 'dockerfile=docker/java-service.Dockerfile' >> "$GITHUB_OUTPUT"
               echo 'extra=' >> "$GITHUB_OUTPUT" ;;
           esac
 
@@ -174,6 +179,7 @@ jobs:
           tags: ${{ env.IMAGE_PREFIX }}/${{ matrix.service }}:${{ needs.version.outputs.tag }}
           build-args: |
             VITE_APP_NAME=${{ vars.VITE_APP_NAME || 'SSO-ADMIN' }}
+            MODULE=${{ matrix.service }}
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}

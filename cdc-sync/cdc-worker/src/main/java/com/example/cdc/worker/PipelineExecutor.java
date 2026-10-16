@@ -12,6 +12,11 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+import java.util.Map;
+
 @Component
 public class PipelineExecutor {
 
@@ -64,84 +69,134 @@ public class PipelineExecutor {
                 oracleEnabled ? "enabled" : "DISABLED");
     }
 
-    public void execute(CdcEvent event, long lsn, long xid, int seq) throws Exception {
-        long startTs = System.currentTimeMillis();
-        long latenciaMs = startTs - (event.tsMs() != null ? event.tsMs() : startTs);
+    /** Un evento del lote, con los datos de su envelope. */
+    public record Evento(CdcEvent event, long lsn, long xid, int seq) {
+    }
 
-        // 1. ClickHouse audit (sin retry — falla rápido).
-        // Skip completo cuando cdc.destinations.clickhouse.enabled=false: no se
-        // construye AuditRecord, no se mide latencia, no se contabiliza timer.
-        if (!clickhouseEnabled) {
-            log.debug("clickhouse stage skipped (disabled) tabla={} lsn={}",
-                    event.tableName(), lsn);
-            // Si Oracle también está deshabilitado, no hay nada que hacer: el
-            // evento se considera consumido y AmqpConsumer lo ack-ea.
-            if (!oracleEnabled) {
-                log.debug("oracle stage skipped (disabled) tabla={} lsn={} — nothing to do",
-                        event.tableName(), lsn);
-                return;
+    public void execute(CdcEvent event, long lsn, long xid, int seq) throws Exception {
+        Exception fallo = executeBatch(List.of(new Evento(event, lsn, xid, seq))).get(0);
+        if (fallo != null) {
+            throw fallo;
+        }
+    }
+
+    /**
+     * Procesa un lote en orden y devuelve, por posicion, null si el evento
+     * quedo aplicado o la excepcion que lo manda a la DLQ.
+     *
+     * <p>Mismo orden que el procesamiento de a uno: primero ClickHouse y
+     * despues Oracle. Si el INSERT de audit_log falla, ningun evento del lote
+     * llega a Oracle y todos van a la DLQ, asi reprocesarlos no aplica dos
+     * veces un cambio en Oracle. audit_log y el mirror de tsesion_web van en
+     * un INSERT por lote (antes uno por evento: una parte de ClickHouse por
+     * fila).
+     */
+    public List<Exception> executeBatch(List<Evento> eventos) {
+        List<Exception> resultado = new ArrayList<>(Collections.nCopies(eventos.size(), (Exception) null));
+        if (eventos.isEmpty()) {
+            return resultado;
+        }
+        long[] latencias = new long[eventos.size()];
+        long ahora = System.currentTimeMillis();
+        for (int i = 0; i < eventos.size(); i++) {
+            Long ts = eventos.get(i).event().tsMs();
+            latencias[i] = ahora - (ts != null ? ts : ahora);
+        }
+
+        // 1. ClickHouse audit (sin retry — falla rapido). Deshabilitado: no se
+        // construye AuditRecord ni se contabiliza timer.
+        if (clickhouseEnabled) {
+            List<AuditRecord> records = new ArrayList<>(eventos.size());
+            for (int i = 0; i < eventos.size(); i++) {
+                Evento e = eventos.get(i);
+                records.add(AuditRecord.fromEvent(e.event(), e.seq(), e.lsn(), e.xid(),
+                        null, "OK", latencias[i], typedRowBuilder));
             }
-        } else {
-            AuditRecord record = AuditRecord.fromEvent(event, seq, lsn, xid,
-                    null, "OK", latenciaMs, typedRowBuilder);
             long chStart = System.nanoTime();
             try {
-                clickHouseStage.execute(record);
+                clickHouseStage.executeBatch(records);
+            } catch (Exception chEx) {
+                Collections.fill(resultado, chEx);
+                return resultado;
             } finally {
-                long chMillis = (System.nanoTime() - chStart) / 1_000_000;
-                workerMetrics.recordClickHouseInsert(chMillis);
+                workerMetrics.recordClickHouseInsert((System.nanoTime() - chStart) / 1_000_000);
             }
-            // V-audit-ctx-4 (sesiones reales): además del audit_log
-            // row, tsesion_web se espeja a su tabla ClickHouse para que
-            // /audits/* (V90) pueda consultar el estado actual de cada
-            // familia sin acoplar ClickHouse a la red de Postgres.
-            // Misma conexión lógica (mismo evento, mismo retry budget
-            // -- falla junto con el audit_log row vía el catch de
-            // arriba). Si la inserción del mirror falla, la fila de
-            // audit_log YA quedó -- aceptable: audit_log tiene la fila
-            // y tsesion_web se reconcilia en el siguiente cambio.
-            if (TSESION_WEB_TABLE.equalsIgnoreCase(event.tableName())) {
-                long mirrorStart = System.nanoTime();
-                try {
-                    sessionMirrorStage.execute(event, lsn);
-                } catch (Exception mirrorEx) {
-                    log.warn("SessionMirrorStage falló para tabla={} lsn={}: {}",
-                            event.tableName(), lsn, mirrorEx.getMessage());
-                } finally {
-                    long mirrorMillis = (System.nanoTime() - mirrorStart) / 1_000_000;
-                    workerMetrics.recordClickHouseInsert(mirrorMillis);
-                }
-            }
+            espejarSesiones(eventos);
+        } else {
+            log.debug("clickhouse stage skipped (disabled) eventos={}", eventos.size());
         }
 
-        // 2. Oracle reverse-sync (con retry). Skip completo cuando
-        // cdc.destinations.oracle.enabled=false: no se invoca oracleStage, no
-        // se gastan reintentos, no se cae al DLQ por esta vía.
+        // 2. Oracle reverse-sync (con retry), evento por evento y en orden.
         if (!oracleEnabled) {
-            log.debug("oracle stage skipped (disabled) tabla={} lsn={}",
-                    event.tableName(), lsn);
-            return;
+            log.debug("oracle stage skipped (disabled) eventos={}", eventos.size());
+            return resultado;
         }
-
-        String tablaOrigen = null;
-        try {
-            tablaOrigen = executeWithRetry(event);
-        } catch (Exception e) {
-            // Solo intentamos registrar el DLQ en ClickHouse si ClickHouse
-            // sigue habilitado; si está deshabilitado, vamos directo al DLQ
-            // del broker para que el operador vea el fallo en la cola.
-            if (clickhouseEnabled) {
-                AuditRecord dlqRecord = AuditRecord.fromEvent(event, seq, lsn, xid,
-                        tablaOrigen, "DLQ", latenciaMs, typedRowBuilder);
-                long chDlqStart = System.nanoTime();
-                try {
-                    clickHouseStage.execute(dlqRecord);
-                } finally {
-                    long chDlqMillis = (System.nanoTime() - chDlqStart) / 1_000_000;
-                    workerMetrics.recordClickHouseInsert(chDlqMillis);
+        List<AuditRecord> dlqRecords = new ArrayList<>();
+        for (int i = 0; i < eventos.size(); i++) {
+            Evento e = eventos.get(i);
+            try {
+                executeWithRetry(e.event());
+            } catch (InterruptedException ie) {
+                Thread.currentThread().interrupt();
+                for (int j = i; j < eventos.size(); j++) {
+                    resultado.set(j, ie);
+                }
+                break;
+            } catch (Exception oraEx) {
+                resultado.set(i, oraEx);
+                // Solo se registra el DLQ en ClickHouse si sigue habilitado; si
+                // no, el operador lo ve en la cola del broker.
+                if (clickhouseEnabled) {
+                    dlqRecords.add(AuditRecord.fromEvent(e.event(), e.seq(), e.lsn(), e.xid(),
+                            null, "DLQ", latencias[i], typedRowBuilder));
                 }
             }
-            throw e;
+        }
+        if (!dlqRecords.isEmpty()) {
+            long chDlqStart = System.nanoTime();
+            try {
+                clickHouseStage.executeBatch(dlqRecords);
+            } catch (Exception dlqEx) {
+                log.warn("No se pudo registrar en audit_log el DLQ de {} eventos: {}",
+                        dlqRecords.size(), dlqEx.getMessage());
+            } finally {
+                workerMetrics.recordClickHouseInsert((System.nanoTime() - chDlqStart) / 1_000_000);
+            }
+        }
+        return resultado;
+    }
+
+    /**
+     * Espejo de tsesion_web: los INSERT/UPDATE del lote van en un solo INSERT,
+     * pero un DELETE vacia antes lo pendiente para no alterar el orden. Si
+     * falla, la fila de audit_log ya quedo y tsesion_web se reconcilia en el
+     * siguiente cambio de esa familia: se registra y no manda a la DLQ.
+     */
+    private void espejarSesiones(List<Evento> eventos) {
+        List<Map<String, Object>> pendientes = new ArrayList<>();
+        long inicio = System.nanoTime();
+        try {
+            for (Evento e : eventos) {
+                if (!TSESION_WEB_TABLE.equalsIgnoreCase(e.event().tableName())) {
+                    continue;
+                }
+                if (ClickHouseSessionMirrorStage.isDelete(e.event())) {
+                    sessionMirrorStage.insertRows(List.copyOf(pendientes));
+                    pendientes.clear();
+                    sessionMirrorStage.delete(e.event());
+                } else {
+                    Map<String, Object> fila = sessionMirrorStage.upsertRow(e.event(), e.lsn());
+                    if (fila != null) {
+                        pendientes.add(fila);
+                    }
+                }
+            }
+            sessionMirrorStage.insertRows(pendientes);
+        } catch (Exception mirrorEx) {
+            log.warn("SessionMirrorStage falló para tabla={} ({} filas pendientes): {}",
+                    TSESION_WEB_TABLE, pendientes.size(), mirrorEx.getMessage());
+        } finally {
+            workerMetrics.recordClickHouseInsert((System.nanoTime() - inicio) / 1_000_000);
         }
     }
 

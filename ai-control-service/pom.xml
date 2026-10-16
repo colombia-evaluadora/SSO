@@ -27,7 +27,12 @@
     <dependencies>
         <dependency>
             <groupId>com.co.eurekatic</groupId>
-            <artifactId>common</artifactId>
+            <artifactId>common-jwt</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>com.co.eurekatic</groupId>
+            <artifactId>common-observability</artifactId>
             <version>${project.version}</version>
         </dependency>
 

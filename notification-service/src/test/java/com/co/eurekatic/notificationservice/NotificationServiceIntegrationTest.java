@@ -16,7 +16,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Import;
-import org.springframework.transaction.annotation.Transactional;
+import org.springframework.jdbc.core.JdbcTemplate;
 
 import java.time.Instant;
 import java.util.Map;
@@ -46,6 +46,7 @@ class NotificationServiceIntegrationTest extends AbstractIntegrationTest {
     @Autowired NotificationLogRepository logRepository;
     @Autowired ProviderConfigRepository providerConfigRepository;
     @Autowired ProviderRegistry providerRegistry;
+    @Autowired JdbcTemplate jdbc;
 
     @BeforeEach
     void cleanLog() {
@@ -182,22 +183,32 @@ class NotificationServiceIntegrationTest extends AbstractIntegrationTest {
                         r -> r != null);
     }
 
-    @Transactional
+    /**
+     * Linea base de cada escenario: solo los fake-* activos. Las migraciones
+     * siembran smtp-mailhog ACTIVO y los fakes inactivos; sin esto el envio
+     * sale por SMTP hacia un mailhog que en el test no existe.
+     */
     void resetProviderConfigToFakes() {
-        // Reset every row to enabled=false; per-test setup
-        // flips the ones it needs back on.
-        for (ProviderConfigRow row : providerConfigRepository.findAll()) {
-            row.setEnabled(false);
-        }
-        providerConfigRepository.flush();
+        // failing-fake es un bean solo del perfil test (TestOnlyFakesConfig);
+        // ninguna migracion le crea fila, asi que se siembra aqui.
+        jdbc.update("""
+                INSERT INTO provider_config
+                    (channel, provider_key, impl, enabled, priority, weight, policy, settings)
+                VALUES ('EMAIL', 'failing-fake', 'FAKE', FALSE, 99, 1, 'PRIORITY', '{}'::jsonb)
+                ON CONFLICT (channel, provider_key) DO NOTHING
+                """);
+        enableOnly("fake-email", "fake-sms", "fake-push");
+        providerRegistry.refresh();
     }
 
-    @Transactional
+    // Sin @Transactional: llamado desde la propia clase no abriria
+    // transaccion y los setEnabled se perdian. saveAll persiste por si solo.
     void enableOnly(String... keys) {
         java.util.Set<String> allowed = java.util.Set.of(keys);
-        for (ProviderConfigRow row : providerConfigRepository.findAll()) {
+        java.util.List<ProviderConfigRow> rows = providerConfigRepository.findAll();
+        for (ProviderConfigRow row : rows) {
             row.setEnabled(allowed.contains(row.providerKey()));
         }
-        providerConfigRepository.flush();
+        providerConfigRepository.saveAll(rows);
     }
 }

@@ -9,6 +9,12 @@ spring:
     name: reporting-service
   main:
     banner-mode: off
+  # Hilos virtuales para las peticiones: el limite de concurrencia real
+  # pasa a ser el pool de conexiones, no el de Tomcat. REPORTING_VIRTUAL_THREADS=false
+  # vuelve a los hilos de plataforma sin reconstruir la imagen.
+  threads:
+    virtual:
+      enabled: ${REPORTING_VIRTUAL_THREADS:true}
 
   # Este servicio no tiene base de datos: los datos llegan por HTTP
   # desde el query-service. Sin estas exclusiones el autoconfig de Boot

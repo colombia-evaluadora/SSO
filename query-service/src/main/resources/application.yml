@@ -9,6 +9,12 @@ spring:
     name: query-service
   main:
     banner-mode: off
+  # Hilos virtuales para las peticiones: el limite de concurrencia real
+  # pasa a ser el pool de conexiones, no el de Tomcat. QUERY_SERVICE_VIRTUAL_THREADS=false
+  # vuelve a los hilos de plataforma sin reconstruir la imagen.
+  threads:
+    virtual:
+      enabled: ${QUERY_SERVICE_VIRTUAL_THREADS:true}
 
   # Disable Spring Boot's auto-configured single
   # DataSource / JPA stack. We own the multi-DB pool

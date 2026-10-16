@@ -13,6 +13,7 @@ import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.util.Base64;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 @Component
@@ -30,15 +31,31 @@ public class ClickHouseAuditStage {
     }
 
     public void execute(AuditRecord record) throws Exception {
+        executeBatch(List.of(record));
+    }
+
+    /**
+     * Inserta todas las filas en un solo INSERT (JSONEachRow, una fila por
+     * linea). Una peticion por lote en vez de una por evento: ClickHouse
+     * crea una parte por INSERT y, con una fila por parte, los merges y la
+     * memoria crecian con cada login.
+     */
+    public void executeBatch(List<AuditRecord> records) throws Exception {
+        if (records.isEmpty()) {
+            return;
+        }
         String sql = "INSERT INTO auditoria.audit_log FORMAT JSONEachRow";
-        String body = mapper.writeValueAsString(toRow(record));
+        StringBuilder body = new StringBuilder();
+        for (AuditRecord record : records) {
+            body.append(mapper.writeValueAsString(toRow(record))).append('\n');
+        }
 
         URI uri = URI.create(clickhouseUrl + "/?query=" +
                 java.net.URLEncoder.encode(sql, StandardCharsets.UTF_8));
 
         HttpRequest.Builder request = HttpRequest.newBuilder()
                 .uri(uri)
-                .POST(HttpRequest.BodyPublishers.ofString(body))
+                .POST(HttpRequest.BodyPublishers.ofString(body.toString()))
                 .header("Content-Type", "application/json");
         URI endpoint = URI.create(clickhouseUrl);
         String userInfo = endpoint.getUserInfo();
@@ -50,9 +67,10 @@ public class ClickHouseAuditStage {
 
         HttpResponse<String> resp = http.send(req, HttpResponse.BodyHandlers.ofString());
         if (resp.statusCode() != 200) {
-            throw new RuntimeException("ClickHouse insert failed: " + resp.statusCode() + " " + resp.body());
+            throw new RuntimeException("ClickHouse insert de audit_log fallo (" + records.size() + " filas): "
+                    + resp.statusCode() + " " + resp.body());
         }
-        log.debug("audit_log insert OK tabla={} pk={}", record.tabla(), record.pk());
+        log.debug("audit_log insert OK filas={}", records.size());
     }
 
     private Map<String, Object> toRow(AuditRecord r) {

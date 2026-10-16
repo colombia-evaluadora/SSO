@@ -2,9 +2,6 @@ package com.co.eurekatic.hello;
 
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
-import org.springframework.boot.hibernate.autoconfigure.HibernateJpaAutoConfiguration;
-import org.springframework.boot.jdbc.autoconfigure.DataSourceAutoConfiguration;
-import org.springframework.boot.jdbc.autoconfigure.DataSourceTransactionManagerAutoConfiguration;
 import org.springframework.cloud.client.discovery.EnableDiscoveryClient;
 import org.springframework.context.annotation.ComponentScan;
 
@@ -28,18 +25,10 @@ import org.springframework.context.annotation.ComponentScan;
  *       authenticated user.</li>
  * </ol>
  *
- * <p>The {@code common} module brings in {@code spring-data-jpa},
- * but this service has no database, so we exclude the JPA and
- * DataSource auto-configurations — same workaround the
- * {@code api-gateway} uses. We do NOT add {@code @EnableJpaRepositories}
- * or {@code @EntityScan} on this app — neither is needed since the
- * service has no DB and the JPA infra is excluded.
+ * <p>No database: it depends only on common-jwt, common-openapi and
+ * common-observability, so JPA and DataSource are not on the classpath.
  */
-@SpringBootApplication(exclude = {
-        DataSourceAutoConfiguration.class,
-        DataSourceTransactionManagerAutoConfiguration.class,
-        HibernateJpaAutoConfiguration.class
-})
+@SpringBootApplication
 @EnableDiscoveryClient
 @ComponentScan(basePackages = {
         "com.co.eurekatic.hello",

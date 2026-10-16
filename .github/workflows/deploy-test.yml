@@ -301,33 +301,21 @@ jobs:
           fi
           echo "Ficheros cambiados:"; echo "$CAMBIADOS" | sed 's/^/  /'
 
-          TODOS='"eurekaserver","auth-center","api-gateway","sso-admin","query-service","file-service","reporting-service","ai-control-service","provisioner","notification-service","comms-service","hello-service","cdc-capture","cdc-worker"'
+          # Los que este workflow despliega (scheduler-service va en un perfil
+          # opt-in y no entra).
+          CANDIDATOS="eurekaserver,auth-center,api-gateway,sso-admin,query-service,file-service,reporting-service,ai-control-service,provisioner,notification-service,comms-service,hello-service,cdc-capture,cdc-worker"
 
-          # `common` y el pom raíz son dependencias de 7 de los 8
-          # módulos, así que tocarlos obliga a reconstruir todo.
-          if [ "$CAMBIADOS" = "TODO" ] \
-             || echo "$CAMBIADOS" | grep -qE '^(common/|pom\.xml|\.github/workflows/deploy-test\.yml)'; then
-            SERVICIOS="$TODOS"
+          # Que imagenes cambian, leido de los pom.xml
+          # (.github/scripts/servicios-afectados.py): un cambio en
+          # common/<modulo>/ solo reconstruye los servicios que dependen de
+          # ese modulo. El pom raiz, common/pom.xml y este workflow siguen
+          # reconstruyendo todo; el Dockerfile comun, todos los que lo usan.
+          if [ "$CAMBIADOS" = "TODO" ]; then
+            AFECTADOS="$(python3 .github/scripts/servicios-afectados.py --workflow deploy-test --todo --candidatos "$CANDIDATOS")"
           else
-            S=""
-            add() { case ",$S," in *,\"$1\",*) ;; *) S="${S:+$S,}\"$1\"";; esac; }
-            echo "$CAMBIADOS" | grep -q '^eurekaserver/'         && add eurekaserver
-            echo "$CAMBIADOS" | grep -q '^auth-center/'          && add auth-center
-            echo "$CAMBIADOS" | grep -q '^sso-admin/'            && add sso-admin
-            echo "$CAMBIADOS" | grep -q '^query-service/'        && add query-service
-            echo "$CAMBIADOS" | grep -q '^file-service/'         && add file-service
-            echo "$CAMBIADOS" | grep -q '^reporting-service/'    && add reporting-service
-            echo "$CAMBIADOS" | grep -q '^ai-control-service/'   && add ai-control-service
-            echo "$CAMBIADOS" | grep -q '^provisioner/'          && add provisioner
-            echo "$CAMBIADOS" | grep -q '^notification-service/' && add notification-service
-            echo "$CAMBIADOS" | grep -q '^comms-service/'        && add comms-service
-            echo "$CAMBIADOS" | grep -q '^hello-service/'        && add hello-service
-            # api-gateway compila el SPA dentro de su Dockerfile, así
-            # que un cambio en admin-ui también le obliga a reconstruir.
-            echo "$CAMBIADOS" | grep -qE '^(api-gateway/|admin-ui/)' && add api-gateway
-            echo "$CAMBIADOS" | grep -q '^cdc-sync/'             && { add cdc-capture; add cdc-worker; }
-            SERVICIOS="$S"
+            AFECTADOS="$(printf '%s\n' "$CAMBIADOS" | python3 .github/scripts/servicios-afectados.py --workflow deploy-test --candidatos "$CANDIDATOS")"
           fi
+          SERVICIOS="$(echo "$AFECTADOS" | sed -n 's/^servicios_lista=//p')"
 
           if [ -z "$SERVICIOS" ]; then
             echo "Ninguna imagen que reconstruir (cambios de compose, migraciones o docs)."
@@ -367,7 +355,9 @@ jobs:
             case "$1" in
               cdc-capture) echo '{"service":"cdc-capture","context":"cdc-sync","dockerfile":"cdc-sync/cdc-capture/Dockerfile","extra-contexts":"repo=."}' ;;
               cdc-worker)  echo '{"service":"cdc-worker","context":"cdc-sync","dockerfile":"cdc-sync/cdc-worker/Dockerfile","extra-contexts":"repo=."}' ;;
-              *)           echo "{\"service\":\"$1\",\"context\":\".\",\"dockerfile\":\"$1/Dockerfile\",\"extra-contexts\":\"\"}" ;;
+              api-gateway) echo '{"service":"api-gateway","context":".","dockerfile":"api-gateway/Dockerfile","extra-contexts":""}' ;;
+              # El resto de servicios Java comparten Dockerfile (build-arg MODULE).
+              *)           echo "{\"service\":\"$1\",\"context\":\".\",\"dockerfile\":\"docker/java-service.Dockerfile\",\"extra-contexts\":\"\"}" ;;
             esac
           }
 
@@ -467,11 +457,13 @@ jobs:
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.event.workflow_run.head_sha || github.sha }}
-          # Solo el Dockerfile de api-gateway declara este ARG (etapa
-          # node-spa); en el resto es un warning inocuo. Scoping del
+          # VITE_APP_NAME solo lo declara api-gateway (etapa node-spa) y
+          # MODULE solo docker/java-service.Dockerfile; en el resto cada
+          # uno es un warning inocuo. VITE_APP_NAME es el scoping del
           # sidebar del SPA — mismo valor que .env.example.
           build-args: |
             VITE_APP_NAME=${{ vars.VITE_APP_NAME || 'SSO-ADMIN' }}
+            MODULE=${{ matrix.service }}
           # Build context adicional para CDC: el `repo` apunta a la
           # raíz del checkout (necesario para que `COPY --from=repo
           # postgres/migrations/V22__academic-schema.sql` resuelva).
