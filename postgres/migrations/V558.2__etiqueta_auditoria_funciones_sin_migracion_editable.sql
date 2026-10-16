@@ -1,10 +1,10 @@
--- V558.2 -- etiqueta de auditoria (app.etiqueta) en tres escrituras de
--- funcionarios PIGSE: baja masiva, asignacion de rol y permisos.
--- Por que aqui y no en su migracion duena (V366/V369/V390): esos ficheros
--- tambien definen objetos que una version posterior redefine, y editarlos
--- revive esas definiciones viejas al re-aplicar (gate `migration-analysis
--- orden`). Solo agrega PERFORM pigse.fn_audit_declarar (V362); el cuerpo es
--- el vigente. Depende de V362, V366, V369, V390.
+-- V558.2 -- etiqueta de auditoria (app.etiqueta) en escrituras cuya migracion
+-- duena no se puede editar sin efectos: PIGSE baja masiva, rol y permisos de
+-- funcionarios (V366/V369/V390) y CE fn_usu_actualizar (V179).
+-- Por que aqui: esos ficheros tambien definen objetos que una version
+-- posterior redefine (gate `migration-analysis orden`) o filas de
+-- public.query que re-aplicarlos dejaria viejas (V179). Solo agrega el
+-- PERFORM fn_audit_declarar (V66/V362); el cuerpo es el vigente.
 
 CREATE OR REPLACE FUNCTION pigse.fn_fun_baja_bulk(p_pk_usuario_solicitante bigint, p_pks bigint[])
  RETURNS TABLE(pk_funcionario character varying, status character varying)
@@ -267,3 +267,182 @@ $function$
 
 ;
 
+CREATE OR REPLACE FUNCTION academico_test.fn_usu_actualizar(p_pk_usuario_solicitante bigint, p_pk_tusuario bigint, p_fk_tlv_tipo_documento bigint DEFAULT NULL::bigint, p_identificacion character varying DEFAULT NULL::character varying, p_primer_nombre character varying DEFAULT NULL::character varying, p_segundo_nombre character varying DEFAULT NULL::character varying, p_primer_apellido character varying DEFAULT NULL::character varying, p_segundo_apellido character varying DEFAULT NULL::character varying, p_fecha_nacimiento date DEFAULT NULL::date, p_fk_tlv_genero bigint DEFAULT NULL::bigint, p_fk_tlv_tipo_sangre bigint DEFAULT NULL::bigint, p_telefono character varying DEFAULT NULL::character varying, p_correo_electronico character varying DEFAULT NULL::character varying, p_fk_tmunicipio_nacimiento bigint DEFAULT NULL::bigint, p_fk_tlv_zona_residencia bigint DEFAULT NULL::bigint, p_localidad_residencia character varying DEFAULT NULL::character varying, p_comuna_residencia character varying DEFAULT NULL::character varying, p_barrio_residencia character varying DEFAULT NULL::character varying, p_fk_tarchivo bigint DEFAULT NULL::bigint)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+AS $function$
+DECLARE
+    v_tipo_actual  BIGINT;
+    v_ident_actual VARCHAR;
+    v_tipo_nuevo   BIGINT;
+    v_ident_nueva  VARCHAR;
+    v_tiene_sede   BOOLEAN;
+    v_nivel        INT;
+BEGIN
+    PERFORM academico_test.fn_audit_declarar(p_pk_usuario_solicitante,
+        format('Actualización de los datos del usuario %s', COALESCE(academico_test.fn_resolver_actor(p_pk_tusuario), p_pk_tusuario::TEXT)));
+    -- -----------------------------------------------------------------
+    -- 1. La persona debe existir y estar activa.
+    -- -----------------------------------------------------------------
+    SELECT FK_TLV_TIPO_DOCUMENTO, IDENTIFICACION
+      INTO v_tipo_actual, v_ident_actual
+      FROM academico_test.TUSUARIO
+     WHERE PK_TUSUARIO = p_pk_tusuario AND ACTIVE = TRUE;
+
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'No se encontro un usuario activo con el identificador %',
+            p_pk_tusuario
+            USING ERRCODE = '23503';
+    END IF;
+
+    -- -----------------------------------------------------------------
+    -- 2. Gate -- REV: modelo dinamico (CU-86e2zenhr).
+    --
+    -- Antes esto colgaba de fn_matricula_puede_cambiar_estado, que es el
+    -- gate de MATRICULA. Era un error mio y tenia una consecuencia visible:
+    -- ese gate excluye al super-admin a proposito (decision de negocio del
+    -- modulo de matricula), asi que el super-admin NO podia editar los
+    -- datos de una persona. Medido antes del cambio: denegado para el
+    -- super-admin, para el jefe de sistema del ente territorial y para un
+    -- rector sin TSEDE_USUARIO. Editar una persona pertenece a
+    -- FUNCIONARIOS, no a MATRICULA, y aqui no aplica esa exclusion.
+    --
+    -- Se mantiene la forma en dos ramas: si la persona tiene sedes, el
+    -- alcance se comprueba contra ellas; si no tiene ninguna, gate amplio
+    -- con el mismo criterio que el autocompletado del alta.
+    -- -----------------------------------------------------------------
+    v_nivel := academico_test.fn_usuario_categoria_rol_nivel(p_pk_usuario_solicitante);
+
+    SELECT EXISTS (
+        SELECT 1 FROM academico_test.TSEDE_USUARIO su
+          JOIN academico_test.TSEDE s ON s.PK_TSEDE = su.FK_TSEDE
+         WHERE su.FK_TUSUARIO = p_pk_tusuario AND su.ACTIVE = TRUE AND s.ACTIVE = TRUE
+    ) INTO v_tiene_sede;
+
+    IF v_tiene_sede THEN
+        IF v_nivel IS DISTINCT FROM 0
+           AND NOT (
+                (
+                    academico_test.fn_usuario_puede_en_menu(
+                        p_pk_usuario_solicitante, 'FUNCIONARIOS', 'EDITAR')
+                    AND (
+                        -- Los territoriales (nivel 0 y 1) alcanzan a
+                        -- cualquiera; el resto, solo a las personas de un
+                        -- establecimiento que tengan a su alcance.
+                        COALESCE(v_nivel <= 1, FALSE)
+                        OR EXISTS (
+                            SELECT 1
+                              FROM academico_test.TSEDE_USUARIO su
+                              JOIN academico_test.TSEDE s ON s.PK_TSEDE = su.FK_TSEDE
+                              JOIN academico_test.fn_usuario_ee_accesibles(p_pk_usuario_solicitante) ee
+                                ON ee.establecimiento_id = s.FK_TESTABLECIMIENTO
+                             WHERE su.FK_TUSUARIO = p_pk_tusuario
+                               AND su.ACTIVE = TRUE AND s.ACTIVE = TRUE
+                        )
+                    )
+                )
+                OR
+                (
+                    -- Fallback de rector/secretaria, igual que en el alta:
+                    -- sin TSEDE_USUARIO el nivel sale NULL.
+                    EXISTS (
+                        SELECT 1
+                          FROM academico_test.TESTABLECIMIENTO e
+                          JOIN academico_test.TFUNCIONARIO f
+                            ON f.PK_TFUNCIONARIO IN (e.FK_TFUNCIONARIO_RECTOR, e.FK_TFUNCIONARIO_SECRETARIA)
+                          JOIN academico_test.TSEDE s2
+                            ON s2.FK_TESTABLECIMIENTO = e.PK_ESTABLECIMIENTO AND s2.ACTIVE = TRUE
+                          JOIN academico_test.TSEDE_USUARIO su2
+                            ON su2.FK_TSEDE = s2.PK_TSEDE AND su2.ACTIVE = TRUE
+                         WHERE e.ACTIVE = TRUE AND f.ACTIVE = TRUE
+                           AND f.FK_TUSUARIO = p_pk_usuario_solicitante
+                           AND su2.FK_TUSUARIO = p_pk_tusuario
+                    )
+                )
+           ) THEN
+            RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para editar los datos de esta persona'
+                USING ERRCODE = '42501',
+                      HINT    = 'Hace falta permiso en el modulo FUNCIONARIOS y alcance sobre un establecimiento al que la persona pertenezca';
+        END IF;
+    ELSE
+        -- Sin vinculos: gate amplio, mismo criterio que el alta.
+        IF v_nivel IS DISTINCT FROM 0
+           AND NOT (
+                (
+                    COALESCE(v_nivel <= 2, FALSE)
+                    AND academico_test.fn_usuario_puede_en_menu(
+                            p_pk_usuario_solicitante, 'FUNCIONARIOS', 'EDITAR')
+                )
+                OR EXISTS (
+                    SELECT 1
+                      FROM academico_test.TESTABLECIMIENTO e
+                      JOIN academico_test.TFUNCIONARIO f
+                        ON f.PK_TFUNCIONARIO IN (e.FK_TFUNCIONARIO_RECTOR, e.FK_TFUNCIONARIO_SECRETARIA)
+                     WHERE e.ACTIVE = TRUE AND f.ACTIVE = TRUE
+                       AND f.FK_TUSUARIO = p_pk_usuario_solicitante
+                )
+           ) THEN
+            RAISE EXCEPTION 'El usuario no tiene el nivel de permisos necesario para editar los datos de esta persona'
+                USING ERRCODE = '42501';
+        END IF;
+    END IF;
+
+    -- -----------------------------------------------------------------
+    -- 3. Documento: si cambia, no puede chocar con otra persona activa.
+    --    Existe el indice unico u_tusuario_2 (fk_tlv_tipo_documento,
+    --    identificacion) WHERE active; se valida antes para dar un error
+    --    legible en vez del de la base.
+    -- -----------------------------------------------------------------
+    v_tipo_nuevo  := COALESCE(p_fk_tlv_tipo_documento, v_tipo_actual);
+    v_ident_nueva := COALESCE(NULLIF(TRIM(p_identificacion), ''), v_ident_actual);
+
+    IF v_tipo_nuevo IS DISTINCT FROM v_tipo_actual
+       OR v_ident_nueva IS DISTINCT FROM v_ident_actual THEN
+        IF EXISTS (
+            SELECT 1 FROM academico_test.TUSUARIO
+             WHERE FK_TLV_TIPO_DOCUMENTO = v_tipo_nuevo
+               AND IDENTIFICACION        = v_ident_nueva
+               AND ACTIVE                = TRUE
+               AND PK_TUSUARIO          <> p_pk_tusuario
+        ) THEN
+            RAISE EXCEPTION 'Ya existe otra persona activa con ese tipo y numero de documento'
+                USING ERRCODE = '23505',
+                      HINT    = 'Verifique el documento: no puede repetirse entre usuarios activos';
+        END IF;
+    END IF;
+
+    -- -----------------------------------------------------------------
+    -- 4. Guardar.
+    -- -----------------------------------------------------------------
+    UPDATE academico_test.TUSUARIO
+       SET FK_TLV_TIPO_DOCUMENTO    = v_tipo_nuevo,
+           IDENTIFICACION           = v_ident_nueva,
+           PRIMER_NOMBRE            = COALESCE(NULLIF(TRIM(p_primer_nombre), ''), PRIMER_NOMBRE),
+           SEGUNDO_NOMBRE           = COALESCE(NULLIF(TRIM(p_segundo_nombre), ''), SEGUNDO_NOMBRE),
+           PRIMER_APELLIDO          = COALESCE(NULLIF(TRIM(p_primer_apellido), ''), PRIMER_APELLIDO),
+           SEGUNDO_APELLIDO         = COALESCE(NULLIF(TRIM(p_segundo_apellido), ''), SEGUNDO_APELLIDO),
+           FECHA_NACIMIENTO         = COALESCE(p_fecha_nacimiento, FECHA_NACIMIENTO),
+           FK_TLV_GENERO            = COALESCE(p_fk_tlv_genero, FK_TLV_GENERO),
+           FK_TLV_TIPO_SANGRE       = COALESCE(p_fk_tlv_tipo_sangre, FK_TLV_TIPO_SANGRE),
+           TELEFONO                 = COALESCE(NULLIF(TRIM(p_telefono), ''), TELEFONO),
+           CORREO_ELECTRONICO       = COALESCE(NULLIF(TRIM(p_correo_electronico), ''), CORREO_ELECTRONICO),
+           FK_TMUNICIPIO_NACIMIENTO = COALESCE(p_fk_tmunicipio_nacimiento, FK_TMUNICIPIO_NACIMIENTO),
+           FK_TLV_ZONA_RESIDENCIA   = COALESCE(p_fk_tlv_zona_residencia, FK_TLV_ZONA_RESIDENCIA),
+           LOCALIDAD_RESIDENCIA     = COALESCE(NULLIF(TRIM(p_localidad_residencia), ''), LOCALIDAD_RESIDENCIA),
+           COMUNA_RESIDENCIA        = COALESCE(NULLIF(TRIM(p_comuna_residencia), ''), COMUNA_RESIDENCIA),
+           BARRIO_RESIDENCIA        = COALESCE(NULLIF(TRIM(p_barrio_residencia), ''), BARRIO_RESIDENCIA),
+           FK_TARCHIVO              = COALESCE(p_fk_tarchivo, FK_TARCHIVO),
+           MODIFIED_BY              = p_pk_usuario_solicitante::VARCHAR,
+           MODIFIED_AT              = CURRENT_TIMESTAMP
+     WHERE PK_TUSUARIO = p_pk_tusuario;
+
+    RETURN jsonb_build_object(
+        'mensaje',      'Datos de la persona actualizados',
+        'pkTusuario',   p_pk_tusuario,
+        'documento',    v_ident_nueva,
+        'responsable',  p_pk_usuario_solicitante
+    );
+END;
+$function$
+
+;
