@@ -179,6 +179,7 @@ jobs:
               - 'comms-service/**'
               - 'postgres/migrations/V560__*'
               - 'postgres/migrations/V561*'
+              - 'postgres/migrations/V580__*'
             # admin-ui entra aquí porque el Dockerfile del gateway lo
             # compila dentro.
             api-gateway:

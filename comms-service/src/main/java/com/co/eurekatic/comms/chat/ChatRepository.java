@@ -145,6 +145,22 @@ public class ChatRepository {
                 .param("clave", claveDirecto).param("creador", creador).query(Long.class).single();
     }
 
+    /**
+     * Categoria del canal solo si tiene una actividad propia (V580: comunicado,
+     * encuesta, eleccion o evaluacion); un canal VOTACION creado a mano (con
+     * votaciones rapidas) devuelve null y admite mensajes.
+     */
+    public String actividad(long canal) {
+        return jdbc.sql("""
+                SELECT CASE
+                         WHEN EXISTS (SELECT 1 FROM comunicaciones.tcomunicado WHERE fk_tcanal = :c) THEN 'ANUNCIO'
+                         WHEN EXISTS (SELECT 1 FROM comunicaciones.tencuesta WHERE fk_tcanal = :c) THEN 'ENCUESTA'
+                         WHEN EXISTS (SELECT 1 FROM comunicaciones.televeccion WHERE fk_tcanal = :c) THEN 'VOTACION'
+                         WHEN EXISTS (SELECT 1 FROM comunicaciones.tevaluacion WHERE fk_tcanal = :c) THEN 'EXAMEN'
+                       END""")
+                .param("c", canal).query(String.class).optional().orElse(null);
+    }
+
     public Optional<Long> directoExistente(String clave) {
         return jdbc.sql("""
                 SELECT pk_tcanal FROM comunicaciones.tcanal
@@ -175,8 +191,6 @@ public class ChatRepository {
 
     private static final String SQL_CONVERSACIONES = """
             SELECT c.pk_tcanal, c.tipo, c.categoria, c.nombre, c.creado_por, c.es_bot,
-                   (c.categoria IN ('VOTACION', 'ENCUESTA', 'EXAMEN') AND c.actividad_cerrada_en IS NULL)
-                       AS actividad_abierta,
                    COALESCE(NULLIF(cr.full_name, ''), cr.email) AS creador,
                    m.silenciado_hasta, m.archivado, m.marcado_no_leido, m.menciones_pendientes,
                    (SELECT COUNT(*) FROM comunicaciones.tmensaje x
@@ -188,7 +202,27 @@ public class ChatRepository {
                         SELECT COALESCE(NULLIF(u2.full_name, ''), u2.email) AS nombre
                           FROM comunicaciones.tcanal_miembro t2 JOIN public.users u2 ON u2.id_user = t2.fk_usuario
                          WHERE t2.fk_tcanal = c.pk_tcanal AND t2.salio_en IS NULL AND t2.fk_usuario <> :u
-                         ORDER BY t2.unido_en LIMIT 3) d) AS destacados
+                         ORDER BY t2.unido_en LIMIT 3) d) AS destacados,
+                   -- Eleccion, encuesta o evaluacion en curso (V580); sin actividad propia,
+                   -- un canal VOTACION/ENCUESTA/EXAMEN sigue abierto hasta actividad_cerrada_en.
+                   CASE
+                       WHEN EXISTS (SELECT 1 FROM comunicaciones.televeccion a WHERE a.fk_tcanal = c.pk_tcanal)
+                       THEN EXISTS (SELECT 1 FROM comunicaciones.televeccion a
+                            WHERE a.fk_tcanal = c.pk_tcanal AND a.cerrada_en IS NULL
+                              AND (a.fecha_inicio IS NULL OR a.fecha_inicio <= NOW())
+                              AND (a.fecha_cierre IS NULL OR a.fecha_cierre > NOW()))
+                       WHEN EXISTS (SELECT 1 FROM comunicaciones.tencuesta a WHERE a.fk_tcanal = c.pk_tcanal)
+                       THEN EXISTS (SELECT 1 FROM comunicaciones.tencuesta a
+                            WHERE a.fk_tcanal = c.pk_tcanal
+                              AND (a.fecha_inicio IS NULL OR a.fecha_inicio <= NOW())
+                              AND (a.fecha_cierre IS NULL OR a.fecha_cierre > NOW()))
+                       WHEN EXISTS (SELECT 1 FROM comunicaciones.tevaluacion a WHERE a.fk_tcanal = c.pk_tcanal)
+                       THEN EXISTS (SELECT 1 FROM comunicaciones.tevaluacion a
+                            WHERE a.fk_tcanal = c.pk_tcanal
+                              AND (a.fecha_inicio IS NULL OR a.fecha_inicio <= NOW())
+                              AND (a.fecha_cierre IS NULL OR a.fecha_cierre > NOW()))
+                       ELSE c.categoria IN ('VOTACION', 'ENCUESTA', 'EXAMEN') AND c.actividad_cerrada_en IS NULL
+                   END AS actividad_abierta
               FROM comunicaciones.tcanal c
               JOIN comunicaciones.tcanal_miembro m ON m.fk_tcanal = c.pk_tcanal AND m.fk_usuario = :u
               JOIN public.users cr ON cr.id_user = c.creado_por
