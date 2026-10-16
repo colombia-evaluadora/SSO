@@ -1703,7 +1703,7 @@ services:
         condition: service_healthy
     environment:
       CDC_LOG_LEVEL: ${CDC_LOG_LEVEL:-INFO}
-      CDC_WORKER_PREFETCH: ${CDC_WORKER_PREFETCH:-10}
+      CDC_WORKER_PREFETCH: ${CDC_WORKER_PREFETCH:-100}
       SPRING_PROFILES_ACTIVE: docker
       CDC_AMQP_HOST: ${CDC_AMQP_HOST:-rabbitmq}
       CDC_AMQP_PORT: ${CDC_AMQP_PORT:-5672}

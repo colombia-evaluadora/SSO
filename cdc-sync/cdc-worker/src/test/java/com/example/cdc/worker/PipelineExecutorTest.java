@@ -12,10 +12,13 @@ import com.example.cdc.worker.pipeline.OracleReverseStage;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import java.util.List;
 import java.util.Map;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
@@ -86,7 +89,7 @@ class PipelineExecutorTest {
 
         executor.execute(sampleEvent(), 100L, 1L, 0);
 
-        verify(clickHouseStage, times(1)).execute(any(AuditRecord.class));
+        verify(clickHouseStage, times(1)).executeBatch(anyList());
         verify(oracleStage, times(1)).execute(any(CdcEvent.class));
     }
 
@@ -98,7 +101,7 @@ class PipelineExecutorTest {
 
         executor.execute(sampleEvent(), 100L, 1L, 0);
 
-        verify(clickHouseStage, times(1)).execute(any(AuditRecord.class));
+        verify(clickHouseStage, times(1)).executeBatch(anyList());
         verify(oracleStage, never()).execute(any(CdcEvent.class));
     }
 
@@ -109,7 +112,7 @@ class PipelineExecutorTest {
 
         executor.execute(sampleEvent(), 100L, 1L, 0);
 
-        verify(clickHouseStage, never()).execute(any(AuditRecord.class));
+        verify(clickHouseStage, never()).executeBatch(anyList());
         verify(oracleStage, times(1)).execute(any(CdcEvent.class));
     }
 
@@ -120,7 +123,7 @@ class PipelineExecutorTest {
         // Neither stage should be invoked, and the call should return cleanly.
         executor.execute(sampleEvent(), 100L, 1L, 0);
 
-        verify(clickHouseStage, never()).execute(any(AuditRecord.class));
+        verify(clickHouseStage, never()).executeBatch(anyList());
         verify(oracleStage, never()).execute(any(CdcEvent.class));
     }
 
@@ -134,7 +137,7 @@ class PipelineExecutorTest {
                 .hasMessageContaining("Oracle stage agotó reintentos");
 
         // First call: the "OK" record. Second call: the "DLQ" record after retries.
-        verify(clickHouseStage, times(2)).execute(any(AuditRecord.class));
+        verify(clickHouseStage, times(2)).executeBatch(anyList());
     }
 
     @Test
@@ -146,7 +149,7 @@ class PipelineExecutorTest {
                 .isInstanceOf(RuntimeException.class);
 
         // ClickHouse disabled → no audit insert, no DLQ record.
-        verify(clickHouseStage, never()).execute(any(AuditRecord.class));
+        verify(clickHouseStage, never()).executeBatch(anyList());
     }
 
     /* ====================== V-audit-ctx-4 (sesiones reales) ====================== */
@@ -161,8 +164,8 @@ class PipelineExecutorTest {
 
         executor.execute(sampleTsesionWebEvent(), 100L, 1L, 0);
 
-        verify(clickHouseStage, times(1)).execute(any(AuditRecord.class));
-        verify(sessionMirrorStage, times(1)).execute(any(CdcEvent.class), anyLong());
+        verify(clickHouseStage, times(1)).executeBatch(anyList());
+        verify(sessionMirrorStage, times(1)).upsertRow(any(CdcEvent.class), anyLong());
         verify(oracleStage, never()).execute(any(CdcEvent.class));
     }
 
@@ -175,8 +178,8 @@ class PipelineExecutorTest {
 
         executor.execute(sampleEvent(), 100L, 1L, 0);
 
-        verify(clickHouseStage, times(1)).execute(any(AuditRecord.class));
-        verify(sessionMirrorStage, never()).execute(any(CdcEvent.class), anyLong());
+        verify(clickHouseStage, times(1)).executeBatch(anyList());
+        verify(sessionMirrorStage, never()).upsertRow(any(CdcEvent.class), anyLong());
         verify(oracleStage, times(1)).execute(any(CdcEvent.class));
     }
 
@@ -187,13 +190,92 @@ class PipelineExecutorTest {
         // Un fallo del mirror NO debe terminar en DLQ.
         PipelineExecutor executor = build(true, true);
         when(oracleStage.execute(any())).thenReturn("tsesion_web");
+        when(sessionMirrorStage.upsertRow(any(CdcEvent.class), anyLong())).thenReturn(Map.of("family_id", "f"));
         org.mockito.Mockito.doThrow(new RuntimeException("ClickHouse mirror send failed"))
-                .when(sessionMirrorStage).execute(any(CdcEvent.class), anyLong());
+                .when(sessionMirrorStage).insertRows(anyList());
 
         executor.execute(sampleTsesionWebEvent(), 100L, 1L, 0);
 
-        verify(clickHouseStage, times(1)).execute(any(AuditRecord.class));
-        verify(sessionMirrorStage, times(1)).execute(any(CdcEvent.class), anyLong());
+        verify(clickHouseStage, times(1)).executeBatch(anyList());
+        verify(sessionMirrorStage, times(1)).upsertRow(any(CdcEvent.class), anyLong());
         verify(oracleStage, times(1)).execute(any(CdcEvent.class));
+    }
+
+    /* ====================== Consumo por lotes ====================== */
+
+    private static CdcEvent tsesionWeb(Operation op, String familyId) {
+        Source src = new Source("academico", "academico_test", "tsesion_web", 1L, 100L, "false");
+        Map<String, Object> fila = Map.of("family_id", familyId, "pk_tsesion_web", 1L, "fk_tusuario", 42L);
+        return new CdcEvent(op, op == Operation.DELETE ? fila : null, op == Operation.DELETE ? null : fila,
+                src, System.currentTimeMillis(), "academico_test.tsesion_web", null, null);
+    }
+
+    @Test
+    void batch_inserts_audit_log_once_for_the_whole_batch() throws Exception {
+        PipelineExecutor executor = build(true, true);
+        when(oracleStage.execute(any())).thenReturn("tdepartamento");
+
+        List<Exception> fallos = executor.executeBatch(List.of(
+                new PipelineExecutor.Evento(sampleEvent(), 1L, 1L, 0),
+                new PipelineExecutor.Evento(sampleEvent(), 2L, 1L, 1),
+                new PipelineExecutor.Evento(sampleEvent(), 3L, 1L, 2)));
+
+        assertThat(fallos).containsOnlyNulls();
+        org.mockito.ArgumentCaptor<List<AuditRecord>> lote = org.mockito.ArgumentCaptor.forClass(List.class);
+        verify(clickHouseStage, times(1)).executeBatch(lote.capture());
+        assertThat(lote.getValue()).hasSize(3);
+        verify(oracleStage, times(3)).execute(any(CdcEvent.class));
+    }
+
+    @Test
+    void audit_log_failure_fails_the_whole_batch_before_oracle() throws Exception {
+        // Mismo orden que de a uno: si ClickHouse falla, nada llega a Oracle y
+        // reprocesar la DLQ no aplica dos veces un cambio en Oracle.
+        PipelineExecutor executor = build(true, true);
+        org.mockito.Mockito.doThrow(new RuntimeException("MEMORY_LIMIT_EXCEEDED"))
+                .when(clickHouseStage).executeBatch(anyList());
+
+        List<Exception> fallos = executor.executeBatch(List.of(
+                new PipelineExecutor.Evento(sampleEvent(), 1L, 1L, 0),
+                new PipelineExecutor.Evento(sampleEvent(), 2L, 1L, 1)));
+
+        assertThat(fallos).hasSize(2).allSatisfy(e -> assertThat(e).hasMessageContaining("MEMORY_LIMIT_EXCEEDED"));
+        verify(oracleStage, never()).execute(any(CdcEvent.class));
+    }
+
+    @Test
+    void oracle_failure_only_fails_its_own_event() throws Exception {
+        PipelineExecutor executor = build(true, true);
+        CdcEvent malo = sampleEvent();
+        when(oracleStage.execute(any())).thenReturn("tdepartamento");
+        when(oracleStage.execute(org.mockito.ArgumentMatchers.same(malo))).thenThrow(new RuntimeException("ORA-00904"));
+
+        List<Exception> fallos = executor.executeBatch(List.of(
+                new PipelineExecutor.Evento(sampleEvent(), 1L, 1L, 0),
+                new PipelineExecutor.Evento(malo, 2L, 1L, 1),
+                new PipelineExecutor.Evento(sampleEvent(), 3L, 1L, 2)));
+
+        assertThat(fallos.get(0)).isNull();
+        assertThat(fallos.get(1)).hasMessageContaining("Oracle stage agotó reintentos");
+        assertThat(fallos.get(2)).isNull();
+        // Lote OK + lote con el registro DLQ del evento fallido.
+        verify(clickHouseStage, times(2)).executeBatch(anyList());
+    }
+
+    @Test
+    void session_delete_flushes_pending_upserts_first() throws Exception {
+        PipelineExecutor executor = build(true, false);
+        when(sessionMirrorStage.upsertRow(any(CdcEvent.class), anyLong()))
+                .thenAnswer(inv -> Map.<String, Object>of("family_id", "f", "lsn", (Object) inv.getArgument(1)));
+
+        executor.executeBatch(List.of(
+                new PipelineExecutor.Evento(tsesionWeb(Operation.INSERT, "a"), 1L, 1L, 0),
+                new PipelineExecutor.Evento(tsesionWeb(Operation.DELETE, "a"), 2L, 1L, 1),
+                new PipelineExecutor.Evento(tsesionWeb(Operation.INSERT, "b"), 3L, 1L, 2)));
+
+        org.mockito.InOrder orden = org.mockito.Mockito.inOrder(sessionMirrorStage);
+        orden.verify(sessionMirrorStage).insertRows(org.mockito.ArgumentMatchers.argThat(l -> l.size() == 1));
+        orden.verify(sessionMirrorStage).delete(any(CdcEvent.class));
+        orden.verify(sessionMirrorStage).insertRows(org.mockito.ArgumentMatchers.argThat(l -> l.size() == 1));
     }
 }

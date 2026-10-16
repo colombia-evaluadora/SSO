@@ -8,8 +8,10 @@ spring:
     password: ${CDC_AMQP_PASSWORD:demopass}
     listener:
       simple:
-        # Prefetch bajo: el backoff de PipelineExecutor (Thread.sleep) bloquea al consumidor y retiene los mensajes ya entregados sin ack.
-        prefetch: ${CDC_WORKER_PREFETCH:10}
+        # Prefetch >= cdc.worker.batch-size: el lote no puede ser mayor que lo
+        # que el broker entrega sin ack. El backoff de Oracle (Thread.sleep)
+        # retiene el lote entero mientras reintenta.
+        prefetch: ${CDC_WORKER_PREFETCH:100}
         acknowledge-mode: manual
         # Number of concurrent consumer threads processing the cdc.worker queue.
         # Both default to 1 to preserve the historical behavior; bump them on busy
@@ -30,6 +32,11 @@ spring:
       minimum-idle: 2
 
 cdc:
+  worker:
+    # Lote por llamada al listener: un INSERT a ClickHouse por lote.
+    batch-size: ${CDC_WORKER_BATCH_SIZE:100}
+    # Espera maxima para llenar un lote (latencia extra con trafico bajo).
+    batch-wait-ms: ${CDC_WORKER_BATCH_WAIT_MS:200}
   rabbitmq:
     queue: cdc.worker
     dlq: cdc.worker.dlq
