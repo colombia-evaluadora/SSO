@@ -10,7 +10,7 @@ public abstract sealed class ErrorAgente extends RuntimeException
         permits ErrorAgente.ConversacionNoEncontrada, ErrorAgente.ConversacionCerrada,
         ErrorAgente.AccionNoEncontrada, ErrorAgente.AccionNoPendiente, ErrorAgente.AccionExpirada,
         ErrorAgente.AccionAlterada, ErrorAgente.LimiteExcedido, ErrorAgente.SinIdentidad,
-        ErrorAgente.PeticionInvalida, ErrorAgente.TurnoEnCurso {
+        ErrorAgente.PeticionInvalida, ErrorAgente.TurnoEnCurso, ErrorAgente.TurnoCancelado {
 
     protected ErrorAgente(String mensaje) {
         super(mensaje);
@@ -86,6 +86,13 @@ public abstract sealed class ErrorAgente extends RuntimeException
     public static final class TurnoEnCurso extends ErrorAgente {
         public TurnoEnCurso() {
             super("Todavía estoy respondiendo tu mensaje anterior. Espera a que termine.");
+        }
+    }
+
+    /** La persona corto el turno (boton o conexion cerrada) mientras el agente trabajaba. */
+    public static final class TurnoCancelado extends ErrorAgente {
+        public TurnoCancelado() {
+            super("Cancelaste la petición.");
         }
     }
 }

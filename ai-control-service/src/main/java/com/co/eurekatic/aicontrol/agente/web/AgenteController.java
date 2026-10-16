@@ -104,6 +104,16 @@ public class AgenteController {
         return transmisor.transmitir(id, usuario, peticion.texto(), contextoUi(peticion));
     }
 
+    /**
+     * Corta el turno en curso de la conversacion (sincrono o por streaming) y libera el turno del usuario.
+     * {@code cancelado} es false si no habia ninguno en marcha. El turno cortado termina con una respuesta
+     * "Cancelaste la petición." que queda en el historial.
+     */
+    @PostMapping("/conversaciones/{id}/cancelar")
+    public ConversacionesDto.Cancelacion cancelarTurno(@PathVariable UUID id, Authentication autenticacion) {
+        return new ConversacionesDto.Cancelacion(agente.cancelar(id, UsuarioActual.de(autenticacion)));
+    }
+
     private void validarLongitud(MensajeRequest peticion) {
         if (peticion.texto().length() > props.limites().textoMaxCaracteres()) {
             throw new ErrorAgente.PeticionInvalida("El mensaje supera el máximo de "

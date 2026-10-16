@@ -5,18 +5,20 @@ import tools.jackson.core.type.TypeReference;
 import tools.jackson.databind.json.JsonMapper;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.regex.Pattern;
 
 /**
  * Lee el {@code contextoUi} que manda el front. Tolerante: lo que no tiene la forma esperada se ignora
  * y un JSON roto da un contexto vacio, porque es un dato opcional y no confiable. Acota tamanos para que
  * un contexto enorme no infle el prompt ni la validacion.
  *
- * <p>Forma admitida: {@code {ruta, formulario | formularios[], filtros[]}}, y en cada formulario
+ * <p>Forma admitida: {@code {ruta, formulario | formularios[], filtros[], parametros{clave: valor}}}, y en cada formulario
  * {@code {codigo, entidad, campos[{nombre, etiqueta, tipo, obligatorio, opciones[{valor, etiqueta}], valor}]}}.
  */
 public final class LectorContextoUi {
@@ -26,6 +28,9 @@ public final class LectorContextoUi {
     static final int MAX_OPCIONES = 100;
     static final int MAX_FILTROS = 30;
     static final int MAX_TEXTO = 200;
+    static final int MAX_RUTA = 1000;
+    static final int MAX_PARAMETROS = 30;
+    private static final Pattern CLAVE_PARAMETRO = Pattern.compile("[A-Za-z][A-Za-z0-9_.-]{0,59}");
 
     private static final JsonMapper JSON = JsonMapper.builder().build();
     private static final TypeReference<Map<String, Object>> MAPA = new TypeReference<>() {
@@ -61,7 +66,8 @@ public final class LectorContextoUi {
                 .filter(s -> !s.isBlank())
                 .limit(MAX_FILTROS)
                 .forEach(filtros::add);
-        return new ContextoUi(texto(raiz.get("ruta")), formularios.stream().limit(MAX_FORMULARIOS).toList(), filtros);
+        return new ContextoUi(ruta(raiz.get("ruta")), formularios.stream().limit(MAX_FORMULARIOS).toList(), filtros,
+                parametros(raiz.get("parametros")));
     }
 
     private static Optional<FormularioUi> formulario(Map<String, Object> crudo) {
@@ -106,6 +112,30 @@ public final class LectorContextoUi {
         }
         String valor = texto(crudo);
         return valor.isBlank() ? Optional.empty() : Optional.of(new CampoUi.Opcion(valor, valor));
+    }
+
+    /** La ruta admite mas que un texto corto: lleva la query de los listados ({@code ?sede=..&page=..}). */
+    private static String ruta(Object crudo) {
+        if (!(crudo instanceof String s)) {
+            return "";
+        }
+        String limpia = s.strip();
+        return limpia.length() > MAX_RUTA ? limpia.substring(0, MAX_RUTA) : limpia;
+    }
+
+    /**
+     * Parametros de la pantalla, clave a valor escalar. Una clave rara o un valor que no es escalar se
+     * ignoran; como mucho {@value #MAX_PARAMETROS}.
+     */
+    static Map<String, String> parametros(Object crudo) {
+        Map<String, String> parametros = new LinkedHashMap<>();
+        mapa(crudo).ifPresent(m -> m.forEach((clave, valor) -> {
+            if (parametros.size() < MAX_PARAMETROS && clave != null && CLAVE_PARAMETRO.matcher(clave).matches()
+                    && (valor instanceof String || valor instanceof Number || valor instanceof Boolean)) {
+                parametros.put(clave, texto(valor));
+            }
+        }));
+        return parametros;
     }
 
     private static Optional<Map<String, Object>> mapa(Object crudo) {

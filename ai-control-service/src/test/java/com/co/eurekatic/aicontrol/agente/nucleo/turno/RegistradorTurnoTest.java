@@ -117,4 +117,18 @@ class RegistradorTurnoTest {
         assertThat(turno.getValue()).as("confirmar no tiene llamadas del turno").singleElement()
                 .satisfies(m -> assertThat(m.getText()).isEqualTo("[Accion ejecutada tras confirmar: Edita 7]"));
     }
+
+    @Test
+    void guardaLaRespuestaEnteraConLaAccionPendienteYLosFaltantes() {
+        UUID accion = UUID.randomUUID();
+        String confirmacion = RegistradorTurno.respuestaJson(new RespuestaAgente.Confirmacion("Confirma",
+                new com.co.eurekatic.aicontrol.agente.nucleo.AccionPropuesta(accion, "Editar a Persona_1",
+                        LocalDateTime.of(2026, 10, 16, 10, 0, 5))), null);
+        assertThat(confirmacion).contains("\"tipo\":\"CONFIRMACION\"", "\"id\":\"" + accion + "\"",
+                "\"resumen\":\"Editar a Persona_1\"", "\"expira\":\"2026-10-16T10:00:05\"");
+
+        String pregunta = RegistradorTurno.respuestaJson(new RespuestaAgente.Pregunta("Falta un dato",
+                List.of(new Faltante("sede", "¿Qué sede?", List.of("Norte"))), Map.of()), null);
+        assertThat(pregunta).contains("\"faltantes\":[{\"campo\":\"sede\"", "\"opciones\":[\"Norte\"]");
+    }
 }

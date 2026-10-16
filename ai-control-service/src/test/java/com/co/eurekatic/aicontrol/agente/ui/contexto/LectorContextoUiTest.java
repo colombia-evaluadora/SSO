@@ -64,4 +64,18 @@ class LectorContextoUiTest {
         assertThat(TipoCampo.NUMERO.admite("4.5")).isTrue();
         assertThat(TipoCampo.BOOLEANO.admite("true")).isFalse();
     }
+
+    @Test
+    void leeParametrosEscalaresYAdmiteRutasLargas() {
+        String ruta = "/app/planeador/actividades?" + "x".repeat(600);
+        ContextoUi contexto = LectorContextoUi.leer("""
+                {"ruta":"%s","parametros":{"actividad":"42","dia":"2026-10-16","pagina":2,"activo":true,
+                 "objeto":{"a":1},"lista":[1],"con espacio":"x"}}
+                """.formatted(ruta));
+
+        assertThat(contexto.ruta()).isEqualTo(ruta);
+        assertThat(contexto.parametros()).containsExactly(java.util.Map.entry("actividad", "42"),
+                java.util.Map.entry("dia", "2026-10-16"), java.util.Map.entry("pagina", "2"),
+                java.util.Map.entry("activo", "true"));
+    }
 }

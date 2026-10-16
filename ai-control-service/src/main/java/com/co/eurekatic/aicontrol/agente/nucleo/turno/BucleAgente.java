@@ -24,7 +24,10 @@ import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.ai.model.tool.ToolCallingChatOptions;
 import org.springframework.ai.model.tool.ToolCallingManager;
 import org.springframework.ai.model.tool.ToolExecutionResult;
+import org.springframework.ai.chat.model.ToolContext;
 import org.springframework.ai.tool.ToolCallback;
+import org.springframework.ai.tool.definition.ToolDefinition;
+import org.springframework.ai.tool.metadata.ToolMetadata;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Component;
 
@@ -34,7 +37,9 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Function;
+import java.util.function.Supplier;
 import java.util.stream.Collectors;
 
 /**
@@ -89,11 +94,21 @@ public class BucleAgente {
      */
     public record Entrada(UsuarioAgente usuario, UUID conversacionId, long mensajeId, String textoUsuario,
                           List<Message> mensajes, List<ToolCallback> callbacks, TurnoContexto contexto,
-                          Function<RespuestaAgente, Optional<String>> objecion) {
+                          Function<RespuestaAgente, Optional<String>> objecion, ObservadorTurno observador,
+                          SenalCancelacion senal) {
 
         public Entrada {
             mensajes = List.copyOf(mensajes);
             callbacks = List.copyOf(callbacks);
+            observador = observador == null ? ObservadorTurno.NINGUNO : observador;
+            senal = senal == null ? new SenalCancelacion() : senal;
+        }
+
+        /** Sin streaming ni cancelacion. */
+        public Entrada(UsuarioAgente usuario, UUID conversacionId, long mensajeId, String textoUsuario,
+                       List<Message> mensajes, List<ToolCallback> callbacks, TurnoContexto contexto,
+                       Function<RespuestaAgente, Optional<String>> objecion) {
+            this(usuario, conversacionId, mensajeId, textoUsuario, mensajes, callbacks, contexto, objecion, null, null);
         }
 
         public Entrada(UsuarioAgente usuario, UUID conversacionId, long mensajeId, String textoUsuario,
@@ -110,6 +125,8 @@ public class BucleAgente {
         String modelo = modeloConfigurado;
         long limiteNanos = System.nanoTime() + limites.duracionMaximaTurno().toNanos();
         boolean objetado = false;
+        SenalCancelacion senal = entrada.senal();
+        List<ToolCallback> callbacks = conEventos(entrada.callbacks(), entrada.observador());
         Set<String> ofrecidas = entrada.callbacks().stream()
                 .map(c -> c.getToolDefinition().name())
                 .collect(Collectors.toUnmodifiableSet());
@@ -120,7 +137,7 @@ public class BucleAgente {
                 log.warn("Turno cortado por tiempo: conversacion={} vueltas={}", entrada.conversacionId(), vuelta);
                 return new ResultadoBucle.Final(new RespuestaAgente.Respuesta(MENSAJE_TIEMPO), uso, modelo);
             }
-            ChatResponse respuesta = llamar(mensajes, entrada.callbacks(), ambito);
+            ChatResponse respuesta = llamar(mensajes, callbacks, ambito, senal);
             uso = uso.sumar(Uso.de(respuesta));
             modelo = modeloDe(respuesta);
             if (!respuesta.hasToolCalls()) {
@@ -158,7 +175,8 @@ public class BucleAgente {
             }
             contador.registrar(nombres);
             ToolExecutionResult resultado = gestor.executeToolCalls(
-                    new Prompt(mensajes, opciones(entrada.callbacks(), ambito)), respuesta);
+                    new Prompt(mensajes, opciones(callbacks, ambito)), respuesta);
+            senal.comprobar();
             mensajes = resultado.conversationHistory();
             Optional<ResultadoBucle> cierre = cierre(entrada.contexto(), nombres, uso, modelo);
             if (cierre.isPresent()) {
@@ -173,14 +191,15 @@ public class BucleAgente {
      * Una llamada al modelo con las herramientas del turno y sin ejecucion automatica. {@code tools} acepta
      * la coleccion de {@link ToolCallback} tal cual y reparte cada elemento a su lista interna.
      */
-    private ChatResponse llamar(List<Message> mensajes, List<ToolCallback> callbacks, Map<String, Object> ambito) {
-        return invocador.invocar(() -> razonador.prompt()
+    private ChatResponse llamar(List<Message> mensajes, List<ToolCallback> callbacks, Map<String, Object> ambito,
+                                SenalCancelacion senal) {
+        return senal.interrumpible(() -> invocador.invocar(() -> razonador.prompt()
                 .messages(mensajes)
                 .tools(callbacks)
                 .toolContext(ambito)
                 .advisors(AdvisorParams.toolCallingAdvisorAutoRegister(false))
                 .call()
-                .chatResponse());
+                .chatResponse()));
     }
 
     private static List<Message> conObjecion(List<Message> mensajes, ChatResponse respuesta, String objecion) {
@@ -247,6 +266,67 @@ public class BucleAgente {
                 .map(ChatResponseMetadata::getModel)
                 .filter(m -> !m.isBlank())
                 .orElse(modeloConfigurado);
+    }
+
+    /**
+     * Las herramientas avisando al observador de su inicio y su fin (para el streaming). Sin observador
+     * se devuelven tal cual. Solo viaja el codigo: ni los argumentos ni el resultado salen de aqui.
+     */
+    static List<ToolCallback> conEventos(List<ToolCallback> callbacks, ObservadorTurno observador) {
+        if (observador == ObservadorTurno.NINGUNO) {
+            return callbacks;
+        }
+        AtomicInteger secuencia = new AtomicInteger();
+        return callbacks.stream()
+                .<ToolCallback>map(c -> new ConEventos(c, observador, secuencia))
+                .toList();
+    }
+
+    /** Envoltorio de una herramienta que avisa INICIO y FIN; delega todo lo demas. */
+    private record ConEventos(ToolCallback delegado, ObservadorTurno observador, AtomicInteger secuencia)
+            implements ToolCallback {
+
+        @Override
+        public ToolDefinition getToolDefinition() {
+            return delegado.getToolDefinition();
+        }
+
+        @Override
+        public ToolMetadata getToolMetadata() {
+            return delegado.getToolMetadata();
+        }
+
+        @Override
+        public String call(String toolInput) {
+            return avisando(() -> delegado.call(toolInput));
+        }
+
+        @Override
+        public String call(String toolInput, ToolContext toolContext) {
+            return avisando(() -> delegado.call(toolInput, toolContext));
+        }
+
+        private String avisando(Supplier<String> llamada) {
+            String nombre = delegado.getToolDefinition().name();
+            String id = "h" + secuencia.incrementAndGet();
+            avisar(EventoHerramienta.inicio(id, nombre));
+            boolean ok = false;
+            try {
+                String resultado = llamada.get();
+                ok = true;
+                return resultado;
+            } finally {
+                avisar(EventoHerramienta.fin(id, nombre, ok));
+            }
+        }
+
+        private void avisar(EventoHerramienta evento) {
+            try {
+                observador.alHerramienta(evento);
+            } catch (RuntimeException e) {
+                log.warn("El observador de herramientas fallo: {}", e.getClass().getSimpleName());
+            }
+        }
     }
 
     private static RespuestaAgente textoFinal(ChatResponse respuesta) {

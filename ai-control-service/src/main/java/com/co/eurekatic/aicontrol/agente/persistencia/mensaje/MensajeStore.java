@@ -11,25 +11,38 @@ import java.util.UUID;
  */
 public interface MensajeStore {
 
-    /** Fila de {@code ai.mensaje}. */
+    /** Fila de {@code ai.mensaje}. {@code respuesta} es la Respuesta completa en JSON; null si no la hay. */
     record Mensaje(long id, UUID conversacionId, int secuencia, RolMensaje rol, String contenido,
-                   String tipoRespuesta, String accionesUi, LocalDateTime createdAt) {
+                   String tipoRespuesta, String accionesUi, LocalDateTime createdAt, String respuesta) {
 
         public Mensaje {
             Objects.requireNonNull(rol, "rol");
         }
+
+        /** Sin respuesta estructurada: mensajes de la persona o anteriores a la columna. */
+        public Mensaje(long id, UUID conversacionId, int secuencia, RolMensaje rol, String contenido,
+                       String tipoRespuesta, String accionesUi, LocalDateTime createdAt) {
+            this(id, conversacionId, secuencia, rol, contenido, tipoRespuesta, accionesUi, createdAt, null);
+        }
     }
 
     /**
-     * Datos de un mensaje nuevo. {@code accionesUiJson} es JSON o null; los
+     * Datos de un mensaje nuevo. {@code accionesUiJson} y {@code respuestaJson} son JSON o null; los
      * tokens son null cuando el mensaje no vino del modelo.
      */
     record NuevoMensaje(RolMensaje rol, String contenido, String tipoRespuesta, String accionesUiJson,
                         String modelo, Integer tokensEntrada, Integer tokensSalida,
-                        Integer tokensRazonamiento, Integer latenciaMs) {
+                        Integer tokensRazonamiento, Integer latenciaMs, String respuestaJson) {
 
         public NuevoMensaje {
             Objects.requireNonNull(rol, "rol");
+        }
+
+        public NuevoMensaje(RolMensaje rol, String contenido, String tipoRespuesta, String accionesUiJson,
+                            String modelo, Integer tokensEntrada, Integer tokensSalida,
+                            Integer tokensRazonamiento, Integer latenciaMs) {
+            this(rol, contenido, tipoRespuesta, accionesUiJson, modelo, tokensEntrada, tokensSalida,
+                    tokensRazonamiento, latenciaMs, null);
         }
     }
 

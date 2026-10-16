@@ -15,7 +15,9 @@ import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.stereotype.Component;
 import tools.jackson.core.type.TypeReference;
 import tools.jackson.databind.json.JsonMapper;
+import tools.jackson.databind.node.ObjectNode;
 
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
@@ -83,7 +85,8 @@ public class RegistradorTurno {
                 uso.tokensEntrada().orElse(null),
                 uso.tokensSalida().orElse(null),
                 null,
-                conModelo ? (int) consumo.latenciaMs() : null));
+                conModelo ? (int) consumo.latenciaMs() : null,
+                respuestaJson(respuesta, accionesUi)));
         List<Message> turno = new ArrayList<>(llamadasDelTurno(conversacionId, mensajeIdUsuario));
         turno.add(new AssistantMessage(
                 NotaDeMemoria.para(respuesta.tipo().name(), textoParaMemoria(respuesta), accionesUi)));
@@ -98,6 +101,39 @@ public class RegistradorTurno {
         return respuesta instanceof RespuestaAgente.Ui ui && !ui.acciones().isEmpty()
                 ? JSON.writerFor(LISTA_ACCIONES).writeValueAsString(ui.acciones())
                 : null;
+    }
+
+    /**
+     * La respuesta entera en JSON, con la misma forma que la del endpoint, para {@code ai.mensaje.respuesta}:
+     * al reabrir la conversacion el front vuelve a ver preguntas, tablas y la accion pendiente con su boton.
+     * Se guarda ya revisada y con seudonimos, igual que el contenido.
+     */
+    static String respuestaJson(RespuestaAgente respuesta, String accionesUiJson) {
+        ObjectNode nodo = JSON.createObjectNode();
+        nodo.put("tipo", respuesta.tipo().name());
+        nodo.put("texto", respuesta.texto());
+        switch (respuesta) {
+            case RespuestaAgente.Pregunta p when !p.faltantes().isEmpty() ->
+                    nodo.set("faltantes", JSON.valueToTree(p.faltantes()));
+            case RespuestaAgente.Confirmacion c -> {
+                ObjectNode accion = nodo.putObject("accionPendiente");
+                accion.put("id", c.accion().id().toString());
+                accion.put("resumen", c.accion().resumen());
+                if (c.accion().expira() != null) {
+                    accion.put("expira", c.accion().expira().format(DateTimeFormatter.ISO_LOCAL_DATE_TIME));
+                }
+            }
+            case RespuestaAgente.Ui u when accionesUiJson != null -> nodo.set("acciones", JSON.readTree(accionesUiJson));
+            case RespuestaAgente.Datos d -> {
+                ObjectNode datos = nodo.putObject("datos");
+                datos.set("columnas", JSON.valueToTree(d.columnas()));
+                datos.set("filas", JSON.valueToTree(d.filas()));
+            }
+            default -> {
+                // RESPUESTA, BLOQUEADO y SIN_PERMISO solo llevan texto.
+            }
+        }
+        return JSON.writeValueAsString(nodo);
     }
 
     private static final JsonMapper JSON = JsonMapper.builder().build();
