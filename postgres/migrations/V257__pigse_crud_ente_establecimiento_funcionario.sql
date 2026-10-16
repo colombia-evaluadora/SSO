@@ -88,6 +88,9 @@ BEGIN
             USING ERRCODE = '23503';
     END IF;
 
+    PERFORM pigse.fn_audit_declarar(p_pk_usuario_solicitante,
+        format('Creación del ente territorial %s (NIT %s)', TRIM(p_nombre), TRIM(p_nit)));
+
     INSERT INTO pigse.TENTE (NIT, NOMBRE, FK_TMUNICIPIO, FK_TENTE_PADRE,
                              CREATED_BY, CREATED_AT, ACTIVE)
     VALUES (TRIM(p_nit), TRIM(p_nombre), p_fk_tmunicipio, p_fk_tente_padre,
@@ -161,6 +164,9 @@ BEGIN
         END IF;
     END IF;
 
+    PERFORM pigse.fn_audit_declarar(p_pk_usuario_solicitante,
+        format('Actualización del ente territorial %s', COALESCE(NULLIF(TRIM(p_nombre), ''), v_nombre_actual)));
+
     UPDATE pigse.TENTE
        SET NIT            = COALESCE(TRIM(p_nit), NIT),
            NOMBRE         = COALESCE(TRIM(p_nombre), NOMBRE),
@@ -211,6 +217,9 @@ BEGIN
         RAISE EXCEPTION 'El ente territorial "%" ya se encuentra inactivo', v_nombre_actual
             USING ERRCODE = '22023';
     END IF;
+
+    PERFORM pigse.fn_audit_declarar(p_pk_usuario_solicitante,
+        format('Eliminación del ente territorial %s', v_nombre_actual));
 
     UPDATE pigse.TENTE
        SET ACTIVE = FALSE, MODIFIED_BY = p_pk_usuario_solicitante::VARCHAR,
@@ -404,6 +413,9 @@ BEGIN
         RAISE EXCEPTION 'El establecimiento "%" ya se encuentra inactivo', v_nombre_actual
             USING ERRCODE = '22023';
     END IF;
+
+    PERFORM pigse.fn_audit_declarar(p_pk_usuario_solicitante,
+        format('Eliminación del establecimiento %s', v_nombre_actual), p_pk_establecimiento);
 
     UPDATE pigse.TESTABLECIMIENTO
        SET ACTIVE = FALSE, MODIFIED_BY = p_pk_usuario_solicitante::VARCHAR,

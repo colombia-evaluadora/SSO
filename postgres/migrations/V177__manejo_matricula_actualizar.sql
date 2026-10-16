@@ -871,6 +871,8 @@ DECLARE
     v_permisos_retirados INTEGER := 0;
     c_fk_trol_acudiente  CONSTANT BIGINT := 16;
 BEGIN
+    PERFORM academico_test.fn_audit_declarar(p_pk_usuario_solicitante,
+        format('Actualización de la matrícula de %s', academico_test.fn_actividad_estudiante_nombre(p_pk_tmatricula)));
     -- -----------------------------------------------------------------
     -- 1. Ubicar la matricula: sede, EE y estudiante.
     -- -----------------------------------------------------------------

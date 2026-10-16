@@ -297,6 +297,11 @@ DECLARE
     c_fk_trol_estudiante  CONSTANT BIGINT := 15;
     c_fk_trol_acudiente   CONSTANT BIGINT := 16;
 BEGIN
+    PERFORM academico_test.fn_audit_declarar(p_pk_usuario_solicitante,
+        format('Creación de la matrícula de %s en el grupo %s',
+               COALESCE(academico_test.fn_resolver_actor(p_pk_usuario_estudiante), 'un estudiante nuevo'),
+               (SELECT NOMBRE FROM academico_test.TGRUPO WHERE PK_TGRUPO = p_fk_tgrupo)),
+        NULL, p_fk_sede);
     -- -----------------------------------------------------------------
     -- 1. Gate temprano -- mismo patron de fn_sed_crear/V160-V165,
     --    resuelto contra la sede recibida. Falla rapido, antes de tocar

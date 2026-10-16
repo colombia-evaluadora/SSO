@@ -144,6 +144,8 @@ BEGIN
             USING ERRCODE = '23505'; -- unique_violation -> 409 Conflict
     END IF;
 
+    PERFORM academico_test.fn_audit_declarar(NULL, format('Creación del rol %s', v_nombre));
+
     INSERT INTO academico_test.trol (codigo, nombre, estado, created_by)
     VALUES (v_codigo, v_nombre, v_estado, TRIM(p_created_by))
     RETURNING academico_test.trol.pk_trol, academico_test.trol.nombre
@@ -589,6 +591,9 @@ VOLATILE
 AS $$
 BEGIN
     PERFORM academico_test.fn_assert_superadmin(p_user_pk);
+    -- Actor NULL: el CTE de auditoria de query-service ya lo fijo (p_user_pk es public.users).
+    PERFORM academico_test.fn_audit_declarar(NULL,
+        format(CASE WHEN p_pk_tmenu_editar IS NULL THEN 'Creación del menú %s' ELSE 'Actualización del menú %s' END, TRIM(p_nombre)));
     RETURN QUERY
     SELECT * FROM academico_test.fn_upsert_menu_interno(
         p_nombre, p_created_by, p_url, p_icono, p_visible, p_orden,
@@ -661,6 +666,8 @@ BEGIN
         RAISE EXCEPTION 'Ya existe un plan activo con el valor %.', v_valor
             USING ERRCODE = '23505'; -- unique_violation -> 409 Conflict
     END IF;
+
+    PERFORM academico_test.fn_audit_declarar(NULL, format('Creación del plan %s', v_nombre));
 
     INSERT INTO academico_test.tlista_valor (categoria, nombre, valor, created_by)
     VALUES ('PLAN', v_nombre, v_valor, CURRENT_USER)

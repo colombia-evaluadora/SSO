@@ -79,6 +79,9 @@ RETURNS TABLE("fechaLimite" DATE)
 LANGUAGE plpgsql
 AS $$
 BEGIN
+    PERFORM pigse.fn_audit_declarar(p_pk_usuario,
+        format('Configuración de la fecha límite de gestión documental: %s', COALESCE(p_fecha_limite::TEXT, 'sin fecha')));
+
     INSERT INTO pigse.tgestion_documental_config (pk_config, fecha_limite, modified_by, modified_at)
     VALUES (1, p_fecha_limite, p_email, CURRENT_TIMESTAMP)
     ON CONFLICT (pk_config) DO UPDATE
@@ -113,6 +116,11 @@ BEGIN
         RAISE EXCEPTION 'pigse: la fecha limite de la excepcion es obligatoria'
             USING ERRCODE = '22023';
     END IF;
+
+    PERFORM pigse.fn_audit_declarar(p_pk_usuario,
+        format('Configuración de la excepción de fecha límite de gestión documental (%s) del establecimiento %s', p_fecha_limite,
+               (SELECT NOMBRE FROM pigse.TESTABLECIMIENTO WHERE PK_ESTABLECIMIENTO = p_fk_establecimiento)),
+        p_fk_establecimiento);
 
     SELECT e.pk_excepcion INTO v_pk_excepcion
       FROM pigse.tgestion_documental_excepcion e
@@ -154,6 +162,11 @@ RETURNS TABLE("establecimientoId" BIGINT)
 LANGUAGE plpgsql
 AS $$
 BEGIN
+    PERFORM pigse.fn_audit_declarar(p_pk_usuario,
+        format('Eliminación de la excepción de fecha límite de gestión documental del establecimiento %s',
+               (SELECT NOMBRE FROM pigse.TESTABLECIMIENTO WHERE PK_ESTABLECIMIENTO = p_fk_establecimiento)),
+        p_fk_establecimiento);
+
     UPDATE pigse.tgestion_documental_excepcion
        SET active = false, modified_by = p_email, modified_at = CURRENT_TIMESTAMP
      WHERE fk_testablecimiento = p_fk_establecimiento
@@ -255,6 +268,9 @@ BEGIN
             USING ERRCODE = '23514';
     END IF;
 
+    PERFORM pigse.fn_audit_declarar(p_pk_usuario,
+        format('Carga del anexo %s del documento %s', p_categoria, p_tipo), v_fk_establecimiento);
+
     IF p_categoria = 'PLAN_ESTUDIOS' THEN
         INSERT INTO pigse.tdocumento_institucional
             (fk_testablecimiento, tipo, categoria, fk_tarchivo, created_by)
@@ -348,6 +364,9 @@ BEGIN
         RAISE EXCEPTION 'pigse: la fecha limite para Gestion Documental (%) ya paso', v_fecha_limite
             USING ERRCODE = '23514';
     END IF;
+
+    PERFORM pigse.fn_audit_declarar(p_pk_usuario,
+        format('Eliminación del anexo %s del documento %s', p_categoria, p_tipo), v_fk_establecimiento);
 
     -- Un anexo obligatorio no se borra suelto: solo se reemplaza desde el
     -- guardado completo (PUT /documentos/:TIPO/anexos). Plan de estudios sí

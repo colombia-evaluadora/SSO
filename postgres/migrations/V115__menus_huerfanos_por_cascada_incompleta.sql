@@ -145,6 +145,9 @@ VOLATILE
 AS $$
 BEGIN
     PERFORM academico_test.fn_assert_superadmin(p_user_pk);
+    -- Actor NULL: el CTE de auditoria de query-service ya lo fijo (p_user_pk es public.users).
+    PERFORM academico_test.fn_audit_declarar(NULL,
+        format('Eliminación del menú %s', (SELECT m.nombre FROM academico_test.tmenu m WHERE m.pk_tmenu = p_pk_tmenu)));
     RETURN QUERY SELECT * FROM academico_test.fn_menu_eliminar_interno(p_pk_tmenu);
 END;
 $$;

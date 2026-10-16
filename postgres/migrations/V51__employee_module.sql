@@ -681,6 +681,12 @@ BEGIN
             USING ERRCODE = 'P0002';
     END IF;
 
+    PERFORM academico_test.fn_audit_declarar(p_pk_usuario_solicitante,
+        format('Vinculación del funcionario %s al establecimiento %s',
+               COALESCE(academico_test.fn_resolver_actor((SELECT FK_TUSUARIO FROM academico_test.TFUNCIONARIO WHERE PK_TFUNCIONARIO = p_pk_funcionario)), p_pk_funcionario::TEXT),
+               (SELECT NOMBRE FROM academico_test.TESTABLECIMIENTO WHERE PK_ESTABLECIMIENTO = v_fk_establecimiento)),
+        v_fk_establecimiento);
+
     UPDATE academico_test.TFUNCIONARIO
        SET FK_ESTABLECIMIENTO = v_fk_establecimiento,
            MODIFIED_BY = p_pk_usuario_solicitante::VARCHAR,
@@ -765,6 +771,9 @@ BEGIN
         RAISE EXCEPTION 'p_pks es obligatorio y debe contener al menos un PK_TFUNCIONARIO'
             USING ERRCODE = '22023';
     END IF;
+
+    PERFORM academico_test.fn_audit_declarar(p_pk_usuario_solicitante,
+        format('Baja masiva de %s funcionarios del establecimiento', CARDINALITY(p_pks)));
 
     FOR v_pk IN SELECT DISTINCT x FROM unnest(p_pks) AS x ORDER BY x
     LOOP
@@ -890,6 +899,9 @@ BEGIN
         PERFORM academico_test.fn_assert_permiso_funcionario(
             p_pk_usuario_solicitante, 'EDITAR', NULL);
     END IF;
+
+    PERFORM academico_test.fn_audit_declarar(p_pk_usuario_solicitante,
+        format('Cancelación del registro pendiente del funcionario %s', COALESCE(academico_test.fn_resolver_actor(v_fk_usuario), p_pk_funcionario::TEXT)));
 
     UPDATE academico_test.TFUNCIONARIO
        SET ACTIVE      = FALSE,
