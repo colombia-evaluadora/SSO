@@ -1,18 +1,11 @@
--- ============================================================================
--- V558.1 — pigse.fn_fun_actualizar sincroniza el correo con public.users
--- ============================================================================
--- Editar el correo de un funcionario PIGSE solo cambiaba
--- pigse.TUSUARIO.CORREO_ELECTRONICO: la cuenta SSO enlazada (FK_ID_USER)
--- seguia con el correo viejo (en PIGSE no hay trigger equivalente a V215).
--- Efectos en produccion: reactivar-por-cambio-de-correo se rechazaba
--- ("todavia existe una cuenta con el correo anterior") y olvide contrasena /
--- reenviar activacion con el correo nuevo no encontraban cuenta (404, sin
--- envio de correo).
---
--- Va en una migracion nueva y no editando V390 (duena de la funcion) porque
--- V390 tambien define pigse.fn_fun_crear, que V393 redefine: re-aplicar V390
--- revertiria V393. Misma firma que V390: CREATE OR REPLACE sin DROP.
--- ============================================================================
+-- V558.1 — pigse.fn_fun_actualizar sincroniza el correo con public.users.
+-- Que hace: al cambiar CORREO_ELECTRONICO mueve tambien users.email de la
+--   cuenta SSO enlazada (FK_ID_USER); 23505 si otra cuenta ya usa ese correo.
+-- Por que: en PIGSE no hay trigger equivalente a V215; la cuenta quedaba con
+--   el correo viejo y reactivar/olvide contrasena/reenviar activacion no
+--   encontraban cuenta con el nuevo (404, sin envio de correo).
+-- Por que aqui y no en V390: V390 tambien define fn_fun_crear (redefinida en
+--   V393); re-aplicarla revertiria V393. Misma firma: CREATE OR REPLACE.
 
 CREATE OR REPLACE FUNCTION pigse.fn_fun_actualizar(
     p_pk_usuario_solicitante bigint,
