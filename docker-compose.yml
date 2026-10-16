@@ -1554,6 +1554,19 @@ services:
     image: ${IMAGE_PREFIX:-eurekatic}/cdc-capture:${IMAGE_TAG:-1.0.0-SNAPSHOT}
     container_name: cdc-capture
     restart: unless-stopped
+    # Endurecido: raiz de solo lectura (solo escriben /tmp y, en capture, el
+    # volumen de offsets), sin capacidades y sin escalada de privilegios.
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - SETUID
+      - SETGID
     stop_grace_period: ${JAVA_STOP_GRACE_PERIOD:-40s}
     logging: *default-logging
     mem_limit: 640m
@@ -1652,6 +1665,15 @@ services:
     image: ${IMAGE_PREFIX:-eurekatic}/cdc-worker:${IMAGE_TAG:-1.0.0-SNAPSHOT}
     container_name: cdc-worker
     restart: unless-stopped
+    # Endurecido: raiz de solo lectura (solo escriben /tmp y, en capture, el
+    # volumen de offsets), sin capacidades y sin escalada de privilegios.
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
     stop_grace_period: ${JAVA_STOP_GRACE_PERIOD:-40s}
     logging: *default-logging
     mem_limit: 768m

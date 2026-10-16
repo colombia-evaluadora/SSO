@@ -8,6 +8,19 @@
 #
 # Build context is `./cdc-sync` (see docker-compose.yml), so the
 # paths below are relative to that root.
+#
+# Runtime: misma receta que docker/java-service.Dockerfile (JRE de jlink
+# sobre debian-slim, jar extraido en capas).
+
+ARG JDK_IMAGE=eclipse-temurin:25-jdk-jammy
+ARG RUNTIME_BASE=debian:13-slim
+
+# ----- JRE recortada (java.se + los jdk.* que jdeps no ve) -----
+FROM ${JDK_IMAGE} AS jre
+RUN jlink \
+        --add-modules java.se,jdk.unsupported,jdk.jfr,jdk.management,jdk.net,jdk.localedata,jdk.charsets,jdk.crypto.cryptoki,jdk.zipfs,jdk.naming.dns,jdk.security.jgss,jdk.xml.dom,jdk.management.agent,jdk.jcmd \
+        --strip-debug --no-man-pages --no-header-files --compress=zip-6 \
+        --output /jre
 
 # ----- stage 1: build the fat jar -----
 FROM maven:3.9-eclipse-temurin-25 AS build
@@ -58,38 +71,40 @@ RUN java -jar /workspace/cdc-generator/target/app.jar \
 # the empty pre-repackage jar to `*.jar.original` and writes the
 # fat jar as `target/app.jar` (the pom pins `<finalName>app</finalName>`
 # so the COPY below resolves to a single file, not a glob).
-RUN mvn -B -ntp -Dmaven.wagon.http.retryHandler.count=5 -Daether.connector.http.retryHandler.count=5 -Daether.connector.http.retryHandler.serviceUnavailable=429,502,503,504 -pl cdc-worker -am clean package -DskipTests -q
+RUN mvn -B -ntp -Dmaven.wagon.http.retryHandler.count=5 -Daether.connector.http.retryHandler.count=5 -Daether.connector.http.retryHandler.serviceUnavailable=429,502,503,504 -pl cdc-worker -am clean package -DskipTests -q \
+    && java -Djarmode=tools -jar cdc-worker/target/app.jar \
+        extract --layers --launcher --destination /extraido
 
-# ----- stage 2: minimal JRE runtime -----
-FROM eclipse-temurin:25-jre-jammy
+# ----- stage 2: runtime -----
+FROM ${RUNTIME_BASE}
 WORKDIR /app
 
-# uid/gid 10001 mirrors the SSO reference modules (auth-center,
-# provisioner) and is guaranteed free across temurin bases — the
-# `getent` guards make this idempotent against future base-image
-# reshuffles.
-RUN set -eux ; \
-    if ! getent group 10001 >/dev/null ; then groupadd --system --gid 10001 app ; fi ; \
-    if ! getent passwd app >/dev/null ; then \
-        existing_gid=$(getent group 10001 | cut -d: -f3) ; \
-        useradd --system --uid 10001 --gid $existing_gid --home /app app ; \
-    fi
+ENV JAVA_HOME=/opt/java/openjdk \
+    LANG=C.UTF-8
+ENV PATH="${JAVA_HOME}/bin:${PATH}"
 
-# --chown sets the owner in the same step; the COPY pulls only the
-# fat jar from the build stage, leaving Maven, the JDK, and the local
-# repo behind in the build image.
-COPY --from=build --chown=app:app /workspace/cdc-worker/target/app.jar /app/app.jar
+RUN set -eux; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends ca-certificates tzdata; \
+    rm -rf /var/lib/apt/lists/*; \
+    groupadd --system --gid 10001 app; \
+    useradd --system --uid 10001 --gid app --home /app app
+
+COPY --from=jre /jre ${JAVA_HOME}
+COPY --from=build --chown=app:app /extraido/dependencies/ ./
+COPY --from=build --chown=app:app /extraido/spring-boot-loader/ ./
+COPY --from=build --chown=app:app /extraido/snapshot-dependencies/ ./
+COPY --from=build --chown=app:app /extraido/application/ ./
 
 USER app
 EXPOSE 8080
 
 # Container-aware JVM: pick a sane heap from the cgroup limit instead
 # of the host's total RAM (we don't want every replica claiming
-# 75% of the box), and use /dev/urandom via the egd hint so JWT
-# signing doesn't block on first-request entropy.
+# 75% of the box), and use /dev/urandom via the egd hint.
 ENTRYPOINT ["java", \
     "-XX:+UseContainerSupport", \
     "-XX:MaxRAMPercentage=75", \
     "-XX:+ExitOnOutOfMemoryError", \
     "-Djava.security.egd=file:/dev/./urandom", \
-    "-jar", "/app/app.jar"]
+    "org.springframework.boot.loader.launch.JarLauncher"]
