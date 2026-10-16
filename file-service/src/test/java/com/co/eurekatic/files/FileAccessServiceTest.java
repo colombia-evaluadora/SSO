@@ -231,4 +231,33 @@ class FileAccessServiceTest {
 
         assertThat(puede).isFalse();
     }
+
+    /** Adjunto de chat: lo ve un miembro activo de la conversacion, aunque no sea su dueño. */
+    @Test
+    void adjuntoDeChatVisibleParaMiembroDeLaConversacion() {
+        var jdbc = mock(NamedParameterJdbcTemplate.class);
+        when(jdbc.query(anyString(), any(SqlParameterSource.class), any(RowMapper.class)))
+                .thenReturn(List.of());
+        when(jdbc.queryForObject(anyString(), any(SqlParameterSource.class), eq(Integer.class)))
+                .thenAnswer(inv -> ((String) inv.getArgument(0)).contains("comunicaciones.tmensaje") ? 1 : 0);
+
+        assertThat(service(jdbc).puedeVer(42L, "acudiente@example.com", Set.of("CEVAL-ACUDIENTE"))).isTrue();
+    }
+
+    /** Sin el schema de comunicaciones se pierde ese camino, no los demas. */
+    @Test
+    void adjuntoDeChatSinSchemaNoRompe() {
+        var jdbc = mock(NamedParameterJdbcTemplate.class);
+        when(jdbc.query(anyString(), any(SqlParameterSource.class), any(RowMapper.class)))
+                .thenReturn(List.of());
+        when(jdbc.queryForObject(anyString(), any(SqlParameterSource.class), eq(Integer.class)))
+                .thenAnswer(inv -> {
+                    if (((String) inv.getArgument(0)).contains("comunicaciones.tmensaje")) {
+                        throw new InvalidDataAccessResourceUsageException("no existe comunicaciones");
+                    }
+                    return 0;
+                });
+
+        assertThat(service(jdbc).puedeVer(42L, "acudiente@example.com", Set.of("CEVAL-ACUDIENTE"))).isFalse();
+    }
 }
