@@ -211,6 +211,7 @@ AS $$
            (CASE WHEN m.fk_tmenu IS NULL THEN 'GROUP' ELSE 'ITEM' END)::VARCHAR,
            (m.estado = 'A'),
            EXISTS (SELECT 1 FROM academico_test.trol_menu tm
+                     JOIN academico_test.trol r ON r.pk_trol = tm.fk_trol AND r.active = TRUE
                     WHERE tm.fk_tmenu = m.pk_tmenu AND tm.active = TRUE),
            m.admite_guardar,
            m.admite_eliminar,
