@@ -1525,6 +1525,21 @@ services:
     container_name: cdc-clickhouse
     restart: unless-stopped
     logging: *default-logging
+    # Sin limite tomaba el 90 % de la RAM del host; bajo-consumo.xml se
+    # queda en el 75 % de este valor.
+    mem_limit: ${CDC_CLICKHOUSE_MEM_LIMIT:-1536m}
+    security_opt:
+      - no-new-privileges:true
+    # El entrypoint baja de root al usuario clickhouse y ajusta el dueno de
+    # /var/lib/clickhouse: solo conserva lo necesario para eso.
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - SETUID
+      - SETGID
+      - DAC_OVERRIDE
+      - FOWNER
     environment:
       CLICKHOUSE_USER: ${CDC_CLICKHOUSE_USER:-default}
       CLICKHOUSE_PASSWORD: ${CDC_CLICKHOUSE_PASSWORD:-demopass}
@@ -1532,6 +1547,8 @@ services:
       CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: ${CDC_CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT:-1}
     volumes:
       - ./docker/clickhouse/clickhouse-init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+      - ./docker/clickhouse/config.d/bajo-consumo.xml:/etc/clickhouse-server/config.d/bajo-consumo.xml:ro
+      - ./docker/clickhouse/users.d/perfil-bajo-consumo.xml:/etc/clickhouse-server/users.d/perfil-bajo-consumo.xml:ro
       - cdc-clickhouse-data:/var/lib/clickhouse
     ports:
       - "${BIND_IP:-127.0.0.1}:${CDC_CLICKHOUSE_HTTP_PORT:-58123}:8123"
