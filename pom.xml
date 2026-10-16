@@ -141,6 +141,19 @@
                 <plugin>
                     <groupId>org.springframework.boot</groupId>
                     <artifactId>spring-boot-maven-plugin</artifactId>
+                    <!--
+                        El repackage mete tambien las dependencias provided:
+                        sin esto lombok (2 MB, solo sirve al compilar) iba
+                        dentro de los 13 jars.
+                    -->
+                    <configuration>
+                        <excludes>
+                            <exclude>
+                                <groupId>org.projectlombok</groupId>
+                                <artifactId>lombok</artifactId>
+                            </exclude>
+                        </excludes>
+                    </configuration>
                 </plugin>
             </plugins>
         </pluginManagement>
