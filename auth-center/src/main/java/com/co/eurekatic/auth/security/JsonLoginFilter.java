@@ -69,6 +69,7 @@ public class JsonLoginFilter extends AbstractAuthenticationProcessingFilter {
     private final Semaphore loginPermits;
     private final long acquireTimeoutMs;
     private final Counter throttled;
+    private final LoginAttemptLimiter attemptLimiter;
 
     /** Tope del cuerpo de /login: un LoginRequest legitimo pesa unos cientos de bytes. */
     static final int MAX_BODY_BYTES = 8 * 1024;
@@ -105,7 +106,8 @@ public class JsonLoginFilter extends AbstractAuthenticationProcessingFilter {
                            Validator validator,
                            MeterRegistry meters,
                            int maxConcurrentLogins,
-                           long acquireTimeoutMs) {
+                           long acquireTimeoutMs,
+                           LoginAttemptLimiter attemptLimiter) {
         // Spring Security 7 migration: AntPathRequestMatcher (from
         // spring-security-web 6.x) was removed. The replacement is
         // PathPatternRequestMatcher, built from Spring's PathPatternParser
@@ -129,6 +131,7 @@ public class JsonLoginFilter extends AbstractAuthenticationProcessingFilter {
                         Runtime.getRuntime().maxMemory());
         this.loginPermits = new Semaphore(permits);
         this.acquireTimeoutMs = acquireTimeoutMs;
+        this.attemptLimiter = attemptLimiter;
         this.throttled = Counter.builder("auth.login.throttled")
                 .description("Logins rechazados con 429 por exceder el limite de verificaciones concurrentes")
                 .register(meters);
@@ -159,6 +162,12 @@ public class JsonLoginFilter extends AbstractAuthenticationProcessingFilter {
                 UsernamePasswordAuthenticationToken.unauthenticated(body.email(), body.password());
         token.setDetails(authenticationDetailsSource.buildDetails(request));
 
+        // Bloqueado por intentos fallidos: ni se hashea la contraseña.
+        long locked = attemptLimiter.secondsLocked(body.email());
+        if (locked > 0) {
+            throw new LoginLockedException(locked);
+        }
+
         boolean acquired;
         try {
             acquired = loginPermits.tryAcquire(acquireTimeoutMs, TimeUnit.MILLISECONDS);
@@ -172,6 +181,12 @@ public class JsonLoginFilter extends AbstractAuthenticationProcessingFilter {
         }
         try {
             return getAuthenticationManager().authenticate(token);
+        } catch (BadCredentialsException e) {
+            long lockedNow = attemptLimiter.recordFailure(body.email());
+            if (lockedNow > 0) {
+                throw new LoginLockedException(lockedNow);
+            }
+            throw e;
         } finally {
             loginPermits.release();
         }
@@ -190,6 +205,7 @@ public class JsonLoginFilter extends AbstractAuthenticationProcessingFilter {
         // entity's email field (which UserDetails.getUsername() also
         // returns — both are kept consistent).
         String email = (principal instanceof User u) ? u.getEmail() : authResult.getName();
+        attemptLimiter.reset(email);
         Long uid = (principal instanceof User u && u.getId() != null)
                 ? u.getId()
                 : null;
@@ -377,6 +393,20 @@ public class JsonLoginFilter extends AbstractAuthenticationProcessingFilter {
                                               HttpServletResponse response,
                                               AuthenticationException failed)
             throws IOException, ServletException {
+        if (failed instanceof LoginLockedException locked) {
+            response.setStatus(429);
+            response.setHeader(HttpHeaders.RETRY_AFTER, String.valueOf(locked.retryAfterSeconds()));
+            response.setContentType(MediaType.APPLICATION_JSON_VALUE);
+            response.setCharacterEncoding("UTF-8");
+            mapper.writeValue(response.getOutputStream(), Map.of(
+                    "timestamp", Instant.now().toString(),
+                    "status", 429,
+                    "error", "too_many_attempts",
+                    "retryAfterSeconds", locked.retryAfterSeconds(),
+                    "message", locked.getMessage()
+            ));
+            return;
+        }
         if (failed instanceof LoginThrottledException) {
             response.setStatus(429);
             response.setHeader(HttpHeaders.RETRY_AFTER, "1");
@@ -454,6 +484,21 @@ public class JsonLoginFilter extends AbstractAuthenticationProcessingFilter {
     public static class BadLoginRequestException extends AuthenticationException {
         public BadLoginRequestException(String msg) {
             super(msg);
+        }
+    }
+
+    /** Correo bloqueado por exceder los intentos fallidos: se responde 429 con Retry-After. */
+    public static class LoginLockedException extends AuthenticationException {
+        private final long retryAfterSeconds;
+
+        public LoginLockedException(long retryAfterSeconds) {
+            super("Demasiados intentos fallidos de inicio de sesión. Espera "
+                    + LoginAttemptLimiter.humanize(retryAfterSeconds) + " antes de volver a intentarlo");
+            this.retryAfterSeconds = retryAfterSeconds;
+        }
+
+        public long retryAfterSeconds() {
+            return retryAfterSeconds;
         }
     }
 
