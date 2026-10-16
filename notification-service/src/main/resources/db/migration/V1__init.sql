@@ -53,11 +53,19 @@ CREATE TABLE IF NOT EXISTS provider_config (
     CONSTRAINT uq_provider_config_channel_key
         UNIQUE (channel, provider_key),
     CONSTRAINT chk_provider_config_impl CHECK (
-        impl IN ('SMTP','RESEND','EMAILJS','TWILIO','VONAGE','FCM','FAKE')
+        impl IN ('SMTP','RESEND','EMAILJS','TWILIO','VONAGE','FCM','WEBPUSH','FAKE')
     ),
     CONSTRAINT chk_provider_config_policy CHECK (
         policy IN ('PRIORITY','WEIGHTED')
     )
+);
+
+-- Re-declarado para que re-aplicar este fichero sobre una base que ya tiene la
+-- tabla (el CREATE ... IF NOT EXISTS no la toca) amplie la lista de impl.
+-- WEBPUSH: proveedor Web Push con claves VAPID propias (fila sembrada en V7).
+ALTER TABLE provider_config DROP CONSTRAINT IF EXISTS chk_provider_config_impl;
+ALTER TABLE provider_config ADD CONSTRAINT chk_provider_config_impl CHECK (
+    impl IN ('SMTP','RESEND','EMAILJS','TWILIO','VONAGE','FCM','WEBPUSH','FAKE')
 );
 
 -- ---- seed: SMS -------------------------------------------------
