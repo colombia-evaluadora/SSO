@@ -33,10 +33,23 @@ gateway:
   # routing (e.g. dev setups that only hit the static
   # /api/qs/** path).
   internal-token: ${GATEWAY_INTERNAL_TOKEN:}
+  # BE-1 (escritura offline): respuestas de Idempotency-Key en el sso-redis.
+  # TTL >= ventana de 14 dias de la sesion offline; si Redis no responde el
+  # filtro deja pasar la peticion (fail open).
+  idempotency:
+    enabled: ${GATEWAY_IDEMPOTENCY_ENABLED:true}
+    ttl-days: ${GATEWAY_IDEMPOTENCY_TTL_DAYS:15}
+    max-body-bytes: ${GATEWAY_IDEMPOTENCY_MAX_BODY_BYTES:262144}
 
 spring:
   application:
     name: api-gateway
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:}
+      timeout: ${REDIS_TIMEOUT:2s}
   main:
     banner-mode: off
     web-application-type: reactive
@@ -575,6 +588,11 @@ springdoc:
         description: "Servicio externo ERP"
 
 management:
+    # Redis solo guarda respuestas idempotentes (fail open): su caida no
+    # debe marcar al gateway como DOWN.
+    health:
+      redis:
+        enabled: false
     endpoints:
       web:
         exposure:

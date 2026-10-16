@@ -443,6 +443,9 @@ services:
         condition: service_started
       auth-center:
         condition: service_healthy
+      # BE-1: respuestas de Idempotency-Key (fail open si no responde).
+      redis:
+        condition: service_healthy
     ports:
       - "${API_GATEWAY_PORT:-8080}:8080"
     environment:
@@ -476,6 +479,10 @@ services:
       # away as a 404 on catalog-backed paths (/api/eval-col/**) even
       # with a valid JWT.
       GATEWAY_INTERNAL_TOKEN: ${GATEWAY_INTERNAL_TOKEN}
+      # Shared sso-redis instance: Idempotency-Key de la escritura offline (BE-1).
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
       # Same secret, second consumer: the OpenAPI aggregator reads it
       # as springdoc.aggregator.catalog-internal-token to pull
       # partner/external specs from /internal/openapi/catalog.
