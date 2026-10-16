@@ -9,6 +9,9 @@ import org.springframework.dao.DataAccessException;
 import org.springframework.dao.InvalidDataAccessApiUsageException;
 import org.springframework.http.HttpStatus;
 
+import org.postgresql.util.PSQLException;
+import org.postgresql.util.ServerErrorMessage;
+
 import java.sql.SQLException;
 import java.util.Locale;
 import java.util.regex.Matcher;
@@ -70,10 +73,42 @@ public final class PostgresErrorMapper {
                 SqlErrorKind.INTERNAL.code(), SqlErrorKind.INTERNAL.defaultMessage());
     }
 
+    /**
+     * SQLSTATE propios del esquema para la sincronización offline (BE-2/BE-5/BE-8):
+     * códigos estables para que la outbox del front clasifique sin parsear texto.
+     * {@code CE409} = la fila cambió desde la versión que vio el cliente (DETAIL
+     * con el valor actual en JSON); {@code CE422} = el periodo ya no es calificable.
+     */
+    static final String OFFLINE_CONFLICT_STATE = "CE409";
+    static final String PERIODO_CERRADO_STATE = "CE422";
+
     public static DataAccessErrorException map(SQLException ex) {
+        DataAccessErrorException offline = mapOffline(ex);
+        if (offline != null) {
+            return offline;
+        }
         SqlErrorSanitizer.Sanitized error = SqlErrorSanitizer.sanitize(ex);
         logRaw(error, ex);
         return new DataAccessErrorException(statusFor(error.kind()), error.code(), error.message());
+    }
+
+    private static DataAccessErrorException mapOffline(SQLException ex) {
+        if (!(ex instanceof PSQLException pg) || pg.getServerErrorMessage() == null) {
+            return null;
+        }
+        ServerErrorMessage sem = pg.getServerErrorMessage();
+        String state = sem.getSQLState();
+        String message = sem.getMessage();
+        if (OFFLINE_CONFLICT_STATE.equals(state)) {
+            log.info("Conflicto offline: {}", message);
+            return new DataAccessErrorException(HttpStatus.CONFLICT, "OFFLINE_CONFLICT",
+                    message == null ? "El dato cambió en el servidor" : message, sem.getDetail());
+        }
+        if (PERIODO_CERRADO_STATE.equals(state)) {
+            return new DataAccessErrorException(HttpStatus.UNPROCESSABLE_ENTITY, "PERIODO_CERRADO",
+                    message == null ? "El periodo ya no es calificable" : message);
+        }
+        return null;
     }
 
     /**
