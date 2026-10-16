@@ -16,7 +16,7 @@ import java.util.UUID;
 public class MensajeRepository implements MensajeStore {
 
     private static final String COLUMNAS =
-            "id, conversacion_id, secuencia, rol, contenido, tipo_respuesta, acciones_ui, created_at";
+            "id, conversacion_id, secuencia, rol, contenido, tipo_respuesta, acciones_ui, created_at, respuesta";
 
     /**
      * Bloquea la conversacion antes de calcular el maximo: dos turnos simultaneos
@@ -27,11 +27,11 @@ public class MensajeRepository implements MensajeStore {
 
     private static final String SQL_INSERTAR = """
             INSERT INTO ai.mensaje (conversacion_id, secuencia, rol, contenido, tipo_respuesta,
-                                    acciones_ui, modelo, tokens_entrada, tokens_salida,
+                                    acciones_ui, respuesta, modelo, tokens_entrada, tokens_salida,
                                     tokens_razonamiento, latencia_ms, created_by)
             VALUES (:cid,
                     (SELECT COALESCE(MAX(secuencia), 0) + 1 FROM ai.mensaje WHERE conversacion_id = :cid),
-                    :rol, :contenido, :tipoRespuesta, CAST(:accionesUi AS jsonb), :modelo,
+                    :rol, :contenido, :tipoRespuesta, CAST(:accionesUi AS jsonb), CAST(:respuesta AS jsonb), :modelo,
                     :tokensEntrada, :tokensSalida, :tokensRazonamiento, :latenciaMs, :actor)
             RETURNING id
             """;
@@ -58,7 +58,8 @@ public class MensajeRepository implements MensajeStore {
             rs.getString("contenido"),
             rs.getString("tipo_respuesta"),
             rs.getString("acciones_ui"),
-            rs.getObject("created_at", LocalDateTime.class));
+            rs.getObject("created_at", LocalDateTime.class),
+            rs.getString("respuesta"));
 
     private final JdbcClient jdbc;
     private final ConversacionStore conversaciones;
@@ -82,6 +83,7 @@ public class MensajeRepository implements MensajeStore {
                 .param("contenido", m.contenido())
                 .param("tipoRespuesta", m.tipoRespuesta())
                 .param("accionesUi", m.accionesUiJson())
+                .param("respuesta", m.respuestaJson())
                 .param("modelo", m.modelo())
                 .param("tokensEntrada", m.tokensEntrada())
                 .param("tokensSalida", m.tokensSalida())

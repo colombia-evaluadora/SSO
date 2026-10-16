@@ -153,6 +153,15 @@ class AgenteControllerTest {
     }
 
     @Test
+    void cancelarElTurnoDevuelveSiHabiaUnoEnMarcha() throws Exception {
+        when(agente.cancelar(eq(conversacion), any())).thenReturn(true);
+
+        mvc.perform(post("/ai/agente/conversaciones/" + conversacion + "/cancelar").principal(usuario()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.cancelado").value(true));
+    }
+
+    @Test
     void unaSesionSinIdentidadResponde403() throws Exception {
         mvc.perform(post("/ai/agente/conversaciones"))
                 .andExpect(status().isForbidden());
