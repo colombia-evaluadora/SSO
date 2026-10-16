@@ -126,6 +126,19 @@ ON CONFLICT (microservice_id, path_template, http_method) WHERE path_template IS
        cache_ttl_seconds = EXCLUDED.cache_ttl_seconds, action = EXCLUDED.action, style = EXCLUDED.style,
        param_types = EXCLUDED.param_types, detail = EXCLUDED.detail, query = EXCLUDED.query;
 
+-- Escritura offline (CAS, V138): PATCH /asistencias/:ID acepta BASE_VERSION. Va aquí, la
+-- última que escribe la fila; el guard por BODY.BASE_VERSION lo hace idempotente.
+UPDATE public.query q
+   SET query = regexp_replace(q.query,
+                 '(p_limpiar_observacion\s*=>\s*COALESCE\(CAST\(:BODY\.LIMPIAR_OBSERVACION AS BOOLEAN\), FALSE\))',
+                 '\1' || E',\n    p_base_version           => CAST(:BODY.BASE_VERSION AS TEXT)'),
+       param_types = q.param_types || '{"BODY.BASE_VERSION": "VARCHAR"}'::jsonb,
+       detail = q.detail || ' BASE_VERSION opcional (escritura offline): 409 OFFLINE_CONFLICT si el registro cambió desde esa versión.'
+  FROM public.microservice m
+ WHERE m.id_microservice = q.microservice_id AND m.serviceid = 'eval-col'
+   AND q.http_method = 'PATCH' AND q.path_template = '/asistencias/:ID'
+   AND q.query NOT LIKE '%BODY.BASE_VERSION%';
+
 -- Registrar y editar asistencia (las filas de calificar se envuelven en V496.8, su dueña):
 -- la escritura no cambia, se le suma la solicitud que abrió. MATERIALIZED garantiza que la función ya corrió cuando
 -- se lee la lista. El guard por prefijo hace el UPDATE idempotente.

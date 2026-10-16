@@ -348,6 +348,11 @@ BEGIN
                          academico_test.fn_actividad_nota_resultado_instrumento(ae.PK_TACTIVIDAD_ESTUDIANTE),
                      'calificable',   n.CALIFICABLE,
                      'observacion',   n.OBSERVACION,
+                     -- Escritura offline (CAS de calificar, V496.7): version de la nota.
+                     'version',
+                         CASE WHEN ae.PK_TACTIVIDAD_ESTUDIANTE IS NULL THEN NULL
+                              ELSE COALESCE(to_char(COALESCE(n.MODIFIED_AT, n.CREATED_AT),
+                                                    'YYYY-MM-DD"T"HH24:MI:SS.US'), 'NONE') END,
                      'fechaAsistencia', asi.fecha,
                      'tieneAsistencia', (asi.fecha IS NOT NULL),
                      'estadoResultado',

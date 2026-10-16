@@ -1101,7 +1101,7 @@
       ]
     },
     {
-      "name": "15 - [400] periodo academico Cerrado",
+      "name": "15 - [422] periodo academico Cerrado (PERIODO_CERRADO)",
       "request": {
         "method": "POST",
         "header": [
@@ -1127,7 +1127,7 @@
           ]
         },
         "description": {
-          "content": "**No se puede crear ni editar asistencia de un grupo cuyo `TPERIODO_ACADEMICO` esta en estado `Cerrado`** (`TLISTA_VALOR` categoria `ESTADOPERIODO`, `VALOR='C'`).\n\n`fn_asistencia_registrar_bulk` y `fn_asistencia_editar` resuelven el estado del periodo por el grupo (`fn_asistencia_periodo_estado`) y lanzan **`22023`** -> HTTP **400** con `\"el periodo academico del grupo N esta Cerrado; no se puede registrar asistencia\"`.\n\nOtros estados (`Abierto`, `Nivelaciones`, `Inscripciones`, `Promociones`, o sin estado) **si** permiten escribir; solo `Cerrado` bloquea.\n\nPara probarlo, apuntar `grupoId` a un grupo de un periodo cerrado (la mayoria de los anios anteriores lo estan).",
+          "content": "**No se puede crear ni editar asistencia de un grupo cuyo `TPERIODO_ACADEMICO` esta en estado `Cerrado`** (`TLISTA_VALOR` categoria `ESTADOPERIODO`, `VALOR='C'`).\n\n`fn_asistencia_registrar_bulk` y `fn_asistencia_editar` resuelven el estado del periodo por el grupo (`fn_asistencia_periodo_estado`) y lanzan **`CE422`** -> HTTP **422** con `code: \"PERIODO_CERRADO\"` (codigo estable para la sincronizacion offline, BE-8) y `\"el periodo academico del grupo N esta Cerrado; no se puede registrar asistencia\"`.\n\nOtros estados (`Abierto`, `Nivelaciones`, `Inscripciones`, `Promociones`, o sin estado) **si** permiten escribir; solo `Cerrado` bloquea.\n\nPara probarlo, apuntar `grupoId` a un grupo de un periodo cerrado (la mayoria de los anios anteriores lo estan).",
           "type": "text/markdown"
         },
         "body": {
@@ -1146,8 +1146,9 @@
           "script": {
             "type": "text/javascript",
             "exec": [
-              "pm.test(\"400 periodo cerrado\", () => pm.response.to.have.status(400));",
-              "pm.test(\"mensaje claro\", () => pm.expect(pm.response.text()).to.include(\"Cerrado\"));"
+              "pm.test(\"422 periodo cerrado\", () => pm.response.to.have.status(422));",
+              "pm.test(\"codigo estable\", () => pm.expect(pm.response.json().code).to.eql(\"PERIODO_CERRADO\"));",
+              "pm.test(\"mensaje claro\", () => pm.expect(pm.response.text()).to.include(\"errad\"));"
             ]
           }
         }
@@ -1465,6 +1466,113 @@
             "type": "text/javascript",
             "exec": [
               "pm.test(\"400\", () => pm.response.to.have.status(400));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "22 - [409] editar con BASE_VERSION vieja (OFFLINE_CONFLICT)",
+      "request": {
+        "method": "PATCH",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/eval-col/asistencias/:ID",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "eval-col",
+            "asistencias",
+            ":ID"
+          ]
+        },
+        "description": {
+          "content": "Concurrencia optimista de la escritura offline (BE-5). `BASE_VERSION` es la `version_registro` que devolvio el padron de la sesion (`fn_asistencia_version`). Si el registro cambio desde entonces, `fn_asistencia_editar` lanza **`CE409`** -> HTTP **409** `code: \"OFFLINE_CONFLICT\"` y `detail` (JSON) con `current` (tipo actual) y `version`. Sin `BASE_VERSION` el PATCH se comporta como siempre.\n\nSustituir `:ID` por un `pk_tasistencia` existente.",
+          "type": "text/markdown"
+        },
+        "body": {
+          "mode": "raw",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          },
+          "raw": "{\n  \"TIPO_ASISTENCIA\": 2,\n  \"BASE_VERSION\": \"2000-01-01T00:00:00.000000\"\n}"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"409 conflicto\", () => pm.response.to.have.status(409));",
+              "pm.test(\"codigo estable\", () => pm.expect(pm.response.json().code).to.eql(\"OFFLINE_CONFLICT\"));",
+              "pm.test(\"detail con la version actual\", () => pm.expect(JSON.parse(pm.response.json().detail)).to.have.property(\"version\"));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "23 - [409] registrar con baseVersion vieja por estudiante (OFFLINE_CONFLICT)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/eval-col/asistencias/registrar",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "eval-col",
+            "asistencias",
+            "registrar"
+          ]
+        },
+        "description": {
+          "content": "Cada registro puede traer `baseVersion` (la `version_registro` del padron; `\"NONE\"` = el cliente no vio fila). Si la fila de la sesion ya existe o cambio, `fn_asistencia_registrar_bulk_interno` no pisa nada y responde **409** `OFFLINE_CONFLICT` con `detail` = `{ rows: [{ key, local, server, serverVersion }] }` (una por estudiante en conflicto). Requiere que el paso 3/8 ya haya registrado al estudiante A en esa sesion.",
+          "type": "text/markdown"
+        },
+        "body": {
+          "mode": "raw",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          },
+          "raw": "{\n  \"GRUPO\": \"{{grupoId}}\",\n  \"ASIGNATURA\": \"{{asignaturaId}}\",\n  \"FECHA\": \"2026-02-16\",\n  \"BLOQUE\": 1,\n  \"REGISTROS\": [\n    { \"fkMatricula\": \"{{matriculaAId}}\", \"tipoAsistencia\": 2, \"baseVersion\": \"NONE\" }\n  ]\n}"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"409 conflicto\", () => pm.response.to.have.status(409));",
+              "pm.test(\"filas por estudiante\", () => pm.expect(JSON.parse(pm.response.json().detail).rows.length).to.be.above(0));"
             ]
           }
         }
