@@ -1,5 +1,6 @@
 package com.co.eurekatic.comms.foro;
 
+import com.co.eurekatic.comms.chat.AdjuntosChat;
 import com.co.eurekatic.comms.chat.ApiError;
 import com.co.eurekatic.comms.chat.ChatDtos.Mencion;
 import com.co.eurekatic.comms.chat.ChatDtos.Mensaje;
@@ -45,7 +46,6 @@ import java.util.UUID;
 public class ForoService {
 
     static final Set<String> COLORES = Set.of("BLUE", "GREEN", "YELLOW", "RED", "PURPLE", "ORANGE", "NAVY");
-    static final Set<String> FORMATOS = Set.of("WORD", "PDF", "IMAGEN", "VIDEO", "OTRO");
     private static final int MAX_TEXTO = 4000;
     private static final int MAX_TITULO = 150;
     private static final int MAX_ETIQUETAS = 5;
@@ -58,9 +58,12 @@ public class ForoService {
     private final PresenciaService presencia;
     private final NotificadorChat notificador;
     private final TransactionTemplate tx;
+    private final AdjuntosChat adjuntos;
 
     public ForoService(ForoRepository repo, ChatRepository chat, PoliticaChat politica, RealtimeBus bus,
-                       PresenciaService presencia, NotificadorChat notificador, TransactionTemplate tx) {
+                       PresenciaService presencia, NotificadorChat notificador, TransactionTemplate tx,
+                       AdjuntosChat adjuntos) {
+        this.adjuntos = adjuntos;
         this.repo = repo;
         this.chat = chat;
         this.politica = politica;
@@ -133,8 +136,12 @@ public class ForoService {
 
     // ── publicaciones: escritura ───────────────────────────────────────────
 
+    /**
+     * {@code archivoId}: pk_tarchivo que reenvio file-service (campo multipart
+     * {@code ADJUNTO}); nombre, formato y peso salen de TARCHIVO como en el chat.
+     */
     public Publicacion publicar(Usuario u, long canal, String titulo, String texto, List<Long> etiquetas,
-                                String adjNombre, String adjFormato, UUID clientId) {
+                                Long archivoId, UUID clientId) {
         Membresia m = exigirForo(u, canal);
         if (!politica.puedePublicarEnForo(politica.perfil(u.roles()))) {
             throw new ApiError(403, "Tu perfil no puede abrir publicaciones en los foros.");
@@ -142,15 +149,14 @@ public class ForoService {
         var previo = chat.mensajePorClientId(u.id(), clientId).flatMap(repo::hiloPorRaiz);
         if (previo.isPresent()) return detalle(hilo(previo.get()), u.id());
         String ti = titulo(titulo);
-        String t = texto(texto, adjNombre);
-        String nombreAdj = adjNombre == null || adjNombre.isBlank() ? null : adjNombre;
-        String formato = formato(nombreAdj, adjFormato);
+        String t = texto(texto, archivoId != null);
         Set<Long> tags = etiquetasValidas(u, m, canal, etiquetas);
+        AdjuntosChat.Archivo adj = archivoId == null ? null : adjuntos.validar(archivoId, u.sub());
         Map<Long, String> miembros = chat.miembros(canal);
         List<Mencion> menciones = Menciones.extraer(t, miembros, politica.mencionMasiva(politica.perfil(u.roles())));
         long hilo = tx.execute(s -> {
             chat.contextoAuditoria(u.sub());
-            long raiz = chat.insertarMensaje(canal, u.id(), "NORMAL", t, nombreAdj, formato, null, clientId);
+            long raiz = insertar(canal, u.id(), t, adj, null, clientId);
             chat.guardarMenciones(raiz, menciones);
             long h = repo.crearHilo(canal, raiz, u.id(), ti, t);
             repo.reemplazarEtiquetas(h, tags);
@@ -159,7 +165,7 @@ public class ForoService {
         });
         Publicacion p = detalle(hilo(hilo), u.id());
         bus.publicar(topico(canal), "publicacion.creada", neutra(hilo));
-        notificarMenciones(u, canal, hilo, p.mensaje().id(), ti, t, menciones, miembros, Set.of());
+        notificarMenciones(u, canal, hilo, p.mensaje().id(), ti, cuerpoAviso(t, adj), menciones, miembros, Set.of());
         return p;
     }
 
@@ -170,7 +176,7 @@ public class ForoService {
         if (h.cerrado() && !esModerador(u, m)) throw new ApiError(409, "La publicacion esta cerrada.");
         MensajeBase raiz = chat.mensajeBase(h.raiz()).orElseThrow(() -> new ApiError(404, "La publicacion ya no existe."));
         String ti = titulo(titulo);
-        String t = texto(texto, raiz.adjunto());
+        String t = texto(texto, raiz.adjunto() != null && !raiz.adjunto().isBlank());
         List<Mencion> menciones = Menciones.extraer(t, chat.miembros(h.canal()),
                 politica.mencionMasiva(politica.perfil(u.roles())));
         escribir(u, () -> {
@@ -252,8 +258,7 @@ public class ForoService {
 
     // ── respuestas ─────────────────────────────────────────────────────────
 
-    public Mensaje responder(Usuario u, long id, String texto, String adjNombre, String adjFormato, Long respuesta,
-                             UUID clientId) {
+    public Mensaje responder(Usuario u, long id, String texto, Long archivoId, Long respuesta, UUID clientId) {
         HiloBase h = hilo(id);
         Membresia m = exigirForo(u, h.canal());
         if (!politica.puedeResponderEnForo(politica.perfil(u.roles()))) {
@@ -262,20 +267,19 @@ public class ForoService {
         if (h.cerrado() && !esModerador(u, m)) throw new ApiError(409, "La publicacion esta cerrada.");
         var previo = chat.mensajePorClientId(u.id(), clientId);
         if (previo.isPresent()) return uno(previo.get(), u);
-        String t = texto(texto, adjNombre);
-        String nombreAdj = adjNombre == null || adjNombre.isBlank() ? null : adjNombre;
-        String formato = formato(nombreAdj, adjFormato);
+        String t = texto(texto, archivoId != null);
         MensajeBase original = null;
         if (respuesta != null) {
             original = chat.mensajeBase(respuesta).filter(x -> !x.eliminado())
                     .filter(x -> repo.hiloDeMensaje(x.id()).filter(hh -> hh == id).isPresent())
                     .orElseThrow(() -> new ApiError(404, "El mensaje al que respondes ya no existe."));
         }
+        AdjuntosChat.Archivo adj = archivoId == null ? null : adjuntos.validar(archivoId, u.sub());
         Map<Long, String> miembros = chat.miembros(h.canal());
         List<Mencion> menciones = Menciones.extraer(t, miembros, politica.mencionMasiva(politica.perfil(u.roles())));
         long nuevo = tx.execute(s -> {
             chat.contextoAuditoria(u.sub());
-            long msg = chat.insertarMensaje(h.canal(), u.id(), "NORMAL", t, nombreAdj, formato, respuesta, clientId);
+            long msg = insertar(h.canal(), u.id(), t, adj, respuesta, clientId);
             chat.guardarMenciones(msg, menciones);
             repo.vincularRespuesta(id, msg);
             repo.seguir(id, u.id(), true);
@@ -286,9 +290,34 @@ public class ForoService {
         difundirRespuesta(h, "respuesta.creada", nuevo);
         bus.publicar(topico(h.canal()), "publicacion.actualizada", neutra(id));
         String titulo = detalle(h, null).titulo();
-        Set<Long> avisados = notificarMenciones(u, h.canal(), id, nuevo, titulo, t, menciones, miembros, Set.of());
-        notificarSeguidores(u, h, nuevo, titulo, t, original, avisados);
+        String aviso = cuerpoAviso(t, adj);
+        Set<Long> avisados = notificarMenciones(u, h.canal(), id, nuevo, titulo, aviso, menciones, miembros, Set.of());
+        notificarSeguidores(u, h, nuevo, titulo, aviso, original, avisados);
         return uno(nuevo, u);
+    }
+
+    /**
+     * Quita el archivo del cuerpo o de una respuesta con las mismas reglas que
+     * eliminar ese mensaje: su autor o la moderacion del foro (en el chat, solo el
+     * autor). El binario deja de verse en file-service ({@code adjunto_eliminado_en}).
+     */
+    public Mensaje quitarAdjunto(Usuario u, long mensaje) {
+        long id = repo.hiloDeMensaje(mensaje).orElseThrow(() -> new ApiError(404, "El mensaje ya no existe."));
+        HiloBase h = hilo(id);
+        Membresia m = exigirForo(u, h.canal());
+        MensajeBase base = chat.mensajeBase(mensaje).filter(x -> !x.eliminado())
+                .orElseThrow(() -> new ApiError(404, "El mensaje ya no existe."));
+        if (base.autor() != u.id() && !esModerador(u, m)) {
+            throw new ApiError(403, "Solo quien lo escribio o un moderador quita el archivo.");
+        }
+        if (base.adjunto() == null) throw new ApiError(404, "El mensaje no tiene archivo.");
+        escribir(u, () -> chat.quitarAdjunto(mensaje));
+        if (mensaje == h.raiz()) {
+            bus.publicar(topico(h.canal()), "publicacion.actualizada", neutra(id));
+        } else {
+            difundirRespuesta(h, "respuesta.actualizada", mensaje);
+        }
+        return uno(mensaje, u);
     }
 
     /** Quien la escribio o un moderador (en el chat solo el autor). */
@@ -388,18 +417,23 @@ public class ForoService {
         return t;
     }
 
-    private static String texto(String texto, String adjunto) {
+    private static String texto(String texto, boolean conAdjunto) {
         String t = texto == null ? "" : texto.trim();
         if (t.length() > MAX_TEXTO) throw new ApiError(400, "El mensaje es demasiado largo.");
-        if (t.isEmpty() && (adjunto == null || adjunto.isBlank())) {
-            throw new ApiError(400, "Escribe un mensaje o adjunta un archivo.");
-        }
+        if (t.isEmpty() && !conAdjunto) throw new ApiError(400, "Escribe un mensaje o adjunta un archivo.");
         return t;
     }
 
-    private static String formato(String adjNombre, String adjFormato) {
-        if (adjNombre == null) return null;
-        return adjFormato != null && FORMATOS.contains(adjFormato) ? adjFormato : "OTRO";
+    private long insertar(long canal, long autor, String texto, AdjuntosChat.Archivo adj, Long respuesta,
+                          UUID clientId) {
+        return chat.insertarMensaje(canal, autor, "NORMAL", texto, adj == null ? null : adj.nombre(),
+                adj == null ? null : adj.formato(), adj == null ? null : adj.id(), adj == null ? null : adj.peso(),
+                respuesta, clientId);
+    }
+
+    /** Un mensaje solo con archivo avisa con su nombre, como el chat. */
+    private static String cuerpoAviso(String texto, AdjuntosChat.Archivo adj) {
+        return texto.isEmpty() && adj != null ? "Adjunto: " + adj.nombre() : texto;
     }
 
     /** Etiquetas del mismo foro; las "solo moderadores" solo las pone la moderacion. */
