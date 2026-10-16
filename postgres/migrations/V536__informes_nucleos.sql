@@ -1389,3 +1389,59 @@ END;
 $function$;
 COMMENT ON FUNCTION academico_test.fn_informe_planilla_guardar_interno(BIGINT, BIGINT, BIGINT, BIGINT, BIGINT[])
     IS 'INTERNO: Aprueba antes las correcciones de resultado pendientes (Regla 55) de cada estudiante en la asignatura y periodo. Congela la definitiva de UNA asignatura desde la planilla de informes, para el grupo o solo las matriculas indicadas (NULL o vacio = todas), recalcula las metricas del periodo y registra el guardado en el historial con FK_TASIGNATURA puesta, que es lo que lo distingue del guardado del informe completo. Al historial solo entran los estudiantes a los que se les escribio (guardada o actualizada); sin_cambio y sin_proyeccion no cuentan, y si ninguno cambio no se crea cabecera. Es el hermano acotado de fn_informe_periodo_guardar y NO SE PISAN: TASIGNATURA_NOTA es por (matricula, periodo, asignatura), y ambas terminan llamando al mismo recalculo de metricas y al mismo registrador, de modo que el resultado no depende del orden y las dos son idempotentes. El recalculo corre SIEMPRE, incluso en sin_cambio, porque otra asignatura pudo haberse movido desde el ultimo y esa fila las agrega a todas. En sin_proyeccion lo ya guardado NO se borra: quitar un consolidado por una ausencia no es decision de un boton de guardar. Devuelve ademas el promedio y los conteos del periodo ya recalculados, para que la pantalla refresque sin volver a consultar. Escribe con fn_informe_nota_periodo_escribir_interno: con una recuperacion de destino NOTA_FINAL la proyectada es la nueva base y la definitiva se recombina; sin_cambio, NOTA_ANTERIOR y NOTA_GUARDADA se expresan sobre esa base. Sin gate ni validaciones: los aplica fn_informe_planilla_guardar (POST /informes/planilla/guardar). El usuario es para auditoria y para el historial.';
+
+-- Fecha del ultimo guardado de cada (estudiante, periodo): la columna
+-- "Ultima actualizacion" de la tabla de informes.
+CREATE OR REPLACE FUNCTION academico_test.fn_informe_ultima_actualizacion_interno(
+    p_fk_tgrupo              BIGINT,
+    p_fk_periodos_evaluacion BIGINT[] DEFAULT NULL
+)
+RETURNS TABLE (fk_tmatricula BIGINT, fk_tperiodo_evaluacion BIGINT, ultima_actualizacion TIMESTAMPTZ)
+LANGUAGE plpgsql
+STABLE
+AS $function$
+DECLARE
+    c_final CONSTANT BIGINT := -1;
+BEGIN
+    RETURN QUERY
+    WITH mat AS MATERIALIZED (
+        SELECT m.PK_TMATRICULA AS pk
+          FROM academico_test.TMATRICULA m
+         WHERE m.FK_TGRUPO = p_fk_tgrupo
+    ),
+    eventos AS (
+        SELECT ge.FK_TMATRICULA AS mat, g.FK_TPERIODO_EVALUACION AS pe, ge.CREATED_AT AS fecha
+          FROM academico_test.TINFORME_GUARDADO g
+          JOIN academico_test.TINFORME_GUARDADO_ESTUDIANTE ge
+            ON ge.FK_TINFORME_GUARDADO = g.PK_TINFORME_GUARDADO AND ge.ACTIVE = TRUE
+          JOIN mat ON mat.pk = ge.FK_TMATRICULA
+         WHERE g.ACTIVE = TRUE
+           AND (p_fk_periodos_evaluacion IS NULL
+                OR g.FK_TPERIODO_EVALUACION = ANY (p_fk_periodos_evaluacion))
+        UNION ALL
+        SELECT o.FK_TMATRICULA, o.FK_TPERIODO_EVALUACION, COALESCE(o.MODIFIED_AT, o.CREATED_AT)
+          FROM academico_test.TESTUDIANTE_PERIODO_OBSERVACION o
+          JOIN mat ON mat.pk = o.FK_TMATRICULA
+         WHERE p_fk_periodos_evaluacion IS NULL
+            OR o.FK_TPERIODO_EVALUACION = ANY (p_fk_periodos_evaluacion)
+        UNION ALL
+        SELECT o.FK_TMATRICULA, c_final, COALESCE(o.MODIFIED_AT, o.CREATED_AT)
+          FROM academico_test.TESTUDIANTE_ANIO_OBSERVACION o
+          JOIN mat ON mat.pk = o.FK_TMATRICULA
+         WHERE c_final = ANY (p_fk_periodos_evaluacion)
+        UNION ALL
+        SELECT d.FK_TMATRICULA, c_final, COALESCE(d.MODIFIED_AT, d.CREATED_AT)
+          FROM academico_test.TASIGNATURA_DEFINITIVA d
+          JOIN mat ON mat.pk = d.FK_TMATRICULA
+         WHERE c_final = ANY (p_fk_periodos_evaluacion)
+    )
+    -- Las columnas son TIMESTAMP en UTC (la zona del servidor): con zona, el
+    -- navegador la muestra en la hora local y no corrida cinco horas.
+    SELECT e.mat, e.pe, MAX(e.fecha) AT TIME ZONE 'UTC'
+      FROM eventos e
+     GROUP BY e.mat, e.pe;
+END;
+$function$;
+
+COMMENT ON FUNCTION academico_test.fn_informe_ultima_actualizacion_interno(BIGINT, BIGINT[])
+    IS 'INTERNO: la fecha del ultimo guardado de cada (estudiante, periodo) del grupo, para la columna "Ultima actualizacion" de la tabla de informes. Un periodo real toma lo mas reciente entre su consolidacion (TINFORME_GUARDADO_ESTUDIANTE, lo mismo que lee el historial: el informe completo y la planilla de una asignatura) y el guardado de su observacion (TESTUDIANTE_PERIODO_OBSERVACION, el registro narrativo de preescolar, incluida la que la IA deja en BORRADOR y la eliminada, que tambien es un guardado). La fila Final (-1, solo si se pide) toma el comentario del año (TESTUDIANTE_ANIO_OBSERVACION) y la definitiva guardada (TASIGNATURA_DEFINITIVA). Sin ningun guardado no hay fila: la celda queda vacia. Periodos NULL = todos los reales. Sin gate: lo aplica fn_informe_ultima_actualizacion_listar.';

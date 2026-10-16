@@ -1,6 +1,6 @@
 -- V539 — Informes: endpoints de consulta y guardado en un solo sitio.
 --
--- Qué hace: las 14 filas de /informes/* cuyas funciones viven en V535-V538,
+-- Qué hace: las 15 filas de /informes/* cuyas funciones viven en V535-V538,
 -- con upsert que conserva el id y con él los role_query de cada servidor: no
 -- se tocan roles (V496.26 quitó DOCENTE y DIRECTOR_GRUPO de las escrituras).
 -- Las consultas no cambian; el detail de /informes/grupo agrega la C y la R.
@@ -339,3 +339,33 @@ UPDATE public.query q
   FROM public.microservice m
  WHERE m.id_microservice = q.microservice_id AND m.serviceid = 'eval-col'
    AND q.path_template = '/informes/observacion/final/guardar' AND q.http_method = 'POST';
+
+-- POST /informes/ultima-actualizacion
+INSERT INTO public.query (uuid, microservice_id, path_template, http_method, type, execution_mode, out_param_names,
+                          public_end, captcha, cacheable, cache_ttl_seconds, action, style, param_types, detail, query)
+SELECT 'eval-col-informes-ultima-actualizacion-001', m.id_microservice, '/informes/ultima-actualizacion', 'POST', 'postgres', 'SELECT', NULL,
+       'false', 'false', 'false', '60', 'informes-ultima-actualizacion', 'DEFAULT',
+       '{"BODY.PERIODOS":"BIGINT[]","BODY.FK_TGRUPO":"BIGINT"}'::jsonb,
+       'La fecha del ultimo guardado de cada (estudiante, periodo) del grupo, para la columna "Ultima actualizacion" de la tabla de informes: FK_TMATRICULA, FK_TPERIODO_EVALUACION y ULTIMA_ACTUALIZACION. Un periodo real toma su ultima consolidacion (la misma fuente del historial) o el ultimo guardado de su observacion (registro narrativo de preescolar), lo mas reciente; la fila Final (-1 en PERIODOS) el comentario del año o la definitiva guardada. Sin ningun guardado no hay fila. Mismos FK_TGRUPO y PERIODOS que /informes/grupo, y su mismo gate.',
+       $q$SELECT * FROM academico_test.fn_informe_ultima_actualizacion_listar(
+    public.fn_get_academico_usuario_id(:CONTEXT.USER_ID::BIGINT),
+    CAST(:BODY.FK_TGRUPO AS BIGINT),
+    CAST(:BODY.PERIODOS AS BIGINT[])
+);$q$
+  FROM public.microservice m WHERE m.serviceid = 'eval-col'
+ON CONFLICT (microservice_id, path_template, http_method) WHERE path_template IS NOT NULL DO UPDATE
+   SET type = EXCLUDED.type, execution_mode = EXCLUDED.execution_mode, out_param_names = EXCLUDED.out_param_names,
+       public_end = EXCLUDED.public_end, captcha = EXCLUDED.captcha, cacheable = EXCLUDED.cacheable,
+       cache_ttl_seconds = EXCLUDED.cache_ttl_seconds, action = EXCLUDED.action, style = EXCLUDED.style,
+       param_types = EXCLUDED.param_types, detail = EXCLUDED.detail, query = EXCLUDED.query;
+
+-- Lo ve quien ve el listado de informes, al que acompaña.
+INSERT INTO public.role_query (role_id, query_id)
+SELECT rq.role_id, q.id_query
+  FROM public.query q
+  JOIN public.microservice m ON m.id_microservice = q.microservice_id AND m.serviceid = 'eval-col'
+  JOIN public.query listado ON listado.microservice_id = q.microservice_id
+                           AND listado.path_template = '/informes/grupo' AND listado.http_method = 'POST'
+  JOIN public.role_query rq ON rq.query_id = listado.id_query
+ WHERE q.path_template = '/informes/ultima-actualizacion' AND q.http_method = 'POST'
+ON CONFLICT DO NOTHING;
