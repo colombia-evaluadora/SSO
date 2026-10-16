@@ -88,14 +88,15 @@ BEGIN
                FROM academico_test.TGRUPO gr
                JOIN academico_test.TGRADO g ON g.PK_TGRADO = gr.FK_TGRADO
               WHERE gr.PK_TGRUPO = p_fk_tgrupo), lower(COALESCE(v_estado.estado_nombre, 'Cerrado')), p_accion
-            USING ERRCODE = '22023',
+            -- CE422 (BE-8): codigo estable PERIODO_CERRADO para la sincronizacion offline.
+            USING ERRCODE = 'CE422',
                   HINT = 'Reabrir el periodo academico para permitir cambios de asistencia.';
     END IF;
 END;
 $$;
 
 COMMENT ON FUNCTION academico_test.fn_asistencia_validar_periodo_abierto(BIGINT, VARCHAR)
-    IS 'Lanza 22023 si el periodo academico del grupo esta Cerrado. La usan fn_asistencia_registrar_bulk y fn_asistencia_editar (V138).';
+    IS 'Lanza CE422 (HTTP 422 PERIODO_CERRADO) si el periodo academico del grupo esta Cerrado. La usan fn_asistencia_registrar_bulk y fn_asistencia_editar (V138).';
 
 CREATE OR REPLACE FUNCTION academico_test.fn_asistencia_validar_fecha_no_futura(
     p_fecha DATE

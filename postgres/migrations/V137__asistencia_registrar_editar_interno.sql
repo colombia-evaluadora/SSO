@@ -9,6 +9,8 @@
 -- periodo no calificable registrar abre solicitudes (Regla 75, V496.19).
 -- Depende de: TASISTENCIA/TMATRICULA/TARCHIVO/TGRUPO/TGRADO/
 -- TPERIODO_EVALUACION/TLISTA_VALOR (V22), fn_periodo_sede/fn_grupo_periodo (V40).
+-- Offline (BE-5/BE-8): version por registro y CAS opcional por estudiante
+-- (baseVersion -> CE409 con las filas en conflicto); sin periodo -> CE422.
 -- ===========================================================================
 
 SET search_path TO academico_test, public;
@@ -51,6 +53,18 @@ $$;
 COMMENT ON FUNCTION academico_test.fn_asistencia_tipo_pk(NUMERIC)
     IS 'PK_LISTA_VALOR del TIPO_ASISTENCIA con ese VALOR (1,2,3,5,6). Resuelve por (CATEGORIA, VALOR): los pk no son estables entre ambientes. NULL si el valor no existe o esta inactivo. Copia identica de V220, redefinida aqui (V137) para trazabilidad -- la usa fn_asistencia_registrar_bulk_interno / fn_asistencia_editar_interno.';
 
+CREATE OR REPLACE FUNCTION academico_test.fn_asistencia_version(
+    p_modified_at TIMESTAMP,
+    p_created_at  TIMESTAMP
+)
+RETURNS TEXT
+LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
+    SELECT to_char(COALESCE(p_modified_at, p_created_at), 'YYYY-MM-DD"T"HH24:MI:SS.US');
+$$;
+
+COMMENT ON FUNCTION academico_test.fn_asistencia_version(TIMESTAMP, TIMESTAMP)
+    IS 'Version de un registro de TASISTENCIA para concurrencia optimista (escritura offline): MODIFIED_AT o, si nunca se edito, CREATED_AT, como texto ISO con microsegundos. La devuelve el padron de la sesion y la comparan registrar (baseVersion por registro) y editar (BASE_VERSION).';
+
 CREATE OR REPLACE FUNCTION academico_test.fn_asistencia_registrar_bulk_interno(
     p_fk_tgrupo              BIGINT,
     p_fk_tasignatura         BIGINT,
@@ -69,6 +83,7 @@ DECLARE
     v_entrada    JSONB;
     v_invalido   TEXT;
     v_fk_tsede   BIGINT;
+    v_conflictos JSONB;
 BEGIN
     IF (p_registros IS NULL OR jsonb_array_length(COALESCE(p_registros, '[]'::jsonb)) = 0)
        AND p_marcar_todos_valor IS NULL THEN
@@ -81,7 +96,7 @@ BEGIN
             (SELECT format('%s del grado %s', gr.NOMBRE, g.NOMBRE)
                FROM academico_test.TGRUPO gr
                JOIN academico_test.TGRADO g ON g.PK_TGRADO = gr.FK_TGRADO
-              WHERE gr.PK_TGRUPO = p_fk_tgrupo), to_char(p_fecha, 'DD/MM/YYYY') USING ERRCODE = '22023';
+              WHERE gr.PK_TGRUPO = p_fk_tgrupo), to_char(p_fecha, 'DD/MM/YYYY') USING ERRCODE = 'CE422';
     END IF;
 
     -- TARCHIVO.FK_TSEDE es la sede propietaria del archivo (V22): sin esto,
@@ -148,6 +163,35 @@ BEGIN
 
     IF v_invalido IS NOT NULL THEN
         RAISE EXCEPTION '%', v_invalido USING ERRCODE = '23503';
+    END IF;
+
+    -- CAS por estudiante: baseVersion es la version que vio el cliente ('NONE'
+    -- = no habia fila). Si la fila de la sesion cambio, no se pisa nada.
+    SELECT jsonb_agg(jsonb_build_object(
+               'key',           e.fk_matricula::TEXT,
+               'local',         e.tipo,
+               'server',        lv.VALOR,
+               'serverVersion', COALESCE(academico_test.fn_asistencia_version(a.MODIFIED_AT, a.CREATED_AT), 'NONE')))
+      INTO v_conflictos
+      FROM jsonb_array_elements(v_entrada) r
+      CROSS JOIN LATERAL (
+          SELECT (r->>'fkMatricula')::BIGINT       AS fk_matricula,
+                 r->>'tipoAsistencia'              AS tipo,
+                 NULLIF(r->>'baseVersion', '')     AS base
+      ) e
+      LEFT JOIN academico_test.TASISTENCIA a
+             ON a.FK_TMATRICULA = e.fk_matricula AND a.ACTIVE = TRUE AND a.FECHA = p_fecha
+            AND COALESCE(a.FK_TASIGNATURA, 0) = COALESCE(p_fk_tasignatura, 0)
+            AND COALESCE(a.FK_TACTIVIDAD, 0)  = COALESCE(p_fk_tactividad, 0)
+            AND COALESCE(a.BLOQUE, 0)         = COALESCE(p_bloque, 0)
+      LEFT JOIN academico_test.TLISTA_VALOR lv ON lv.PK_LISTA_VALOR = a.FK_TLV_TIPO_ASISTENCIA
+     WHERE e.base IS NOT NULL
+       AND e.base IS DISTINCT FROM COALESCE(academico_test.fn_asistencia_version(a.MODIFIED_AT, a.CREATED_AT), 'NONE');
+
+    IF v_conflictos IS NOT NULL THEN
+        RAISE EXCEPTION 'La asistencia de % estudiante(s) cambió en el servidor mientras estabas sin conexión.',
+            jsonb_array_length(v_conflictos)
+            USING ERRCODE = 'CE409', DETAIL = jsonb_build_object('rows', v_conflictos)::TEXT;
     END IF;
 
     -- Regla 75: en un periodo no calificable no se escribe; corregir y capturar

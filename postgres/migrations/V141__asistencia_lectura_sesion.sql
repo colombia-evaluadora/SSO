@@ -87,7 +87,9 @@ RETURNS TABLE (
     -- Regla 75: si el periodo ya no es calificable, guardar abre una solicitud.
     periodo_calificable          BOOLEAN,
     pk_tsolicitud_aprobacion     BIGINT,
-    cambio_tipo_asistencia_valor INTEGER
+    cambio_tipo_asistencia_valor INTEGER,
+    -- Escritura offline: version del registro (fn_asistencia_version, V137).
+    version_registro             TEXT
 )
 LANGUAGE plpgsql STABLE AS $$
 DECLARE
@@ -148,7 +150,8 @@ BEGIN
                              WHEN '5' THEN 5 WHEN '6' THEN 6 END AS tipo_valor,
                lv.NOMBRE AS tipo_nombre,
                a.OBSERVACION AS observacion, a.FK_SOPORTE_ARCHIVO AS fk_soporte_archivo,
-               arch.NOMBRE AS soporte_nombre
+               arch.NOMBRE AS soporte_nombre,
+               academico_test.fn_asistencia_version(a.MODIFIED_AT, a.CREATED_AT) AS version_registro
           FROM academico_test.TMATRICULA mg
           JOIN academico_test.TASISTENCIA a ON a.FK_TMATRICULA = mg.PK_TMATRICULA
           JOIN academico_test.TLISTA_VALOR lv ON lv.PK_LISTA_VALOR = a.FK_TLV_TIPO_ASISTENCIA
@@ -181,7 +184,8 @@ BEGIN
         count(r.PK_TASISTENCIA) OVER ()::BIGINT,
         v_calificable,
         sp.pk,
-        sp.tipo
+        sp.tipo,
+        r.version_registro
       FROM academico_test.TMATRICULA  m
       JOIN academico_test.TESTUDIANTE es ON es.PK_TESTUDIANTE = m.FK_TESTUDIANTE
       JOIN academico_test.TUSUARIO    u  ON u.PK_TUSUARIO = es.FK_TUSUARIO
@@ -209,7 +213,7 @@ $$;
 
 COMMENT ON FUNCTION academico_test.fn_asistencia_estudiantes_sesion(
     BIGINT, BIGINT, BIGINT, DATE, NUMERIC, BIGINT
-) IS 'Padron de una sesion para "Asistencia manual": una fila por matricula activa del grupo con su estado ACTUAL (NULL si falta tomarlo). Cabecera de sesion (fk_tperiodo_evaluacion, hora_inicio/hora_fin, periodo_calificable) repetida en cada fila. Regla 75: pk_tsolicitud_aprobacion y cambio_tipo_asistencia_valor traen la correccion pendiente del estudiante en esa sesion (tambien la de una captura tardia, cuya fila sigue inactiva); el estado ACTUAL sigue siendo el vigente. Gate: fn_asistencia_assert_puede_ver (Regla 74: el docente solo ve las asignaturas que dicta).';
+) IS 'Padron de una sesion para "Asistencia manual": una fila por matricula activa del grupo con su estado ACTUAL (NULL si falta tomarlo). Cabecera de sesion (fk_tperiodo_evaluacion, hora_inicio/hora_fin, periodo_calificable) repetida en cada fila. Regla 75: pk_tsolicitud_aprobacion y cambio_tipo_asistencia_valor traen la correccion pendiente del estudiante en esa sesion (tambien la de una captura tardia, cuya fila sigue inactiva); el estado ACTUAL sigue siendo el vigente. version_registro: version del registro (fn_asistencia_version) para la concurrencia optimista de la escritura offline. Gate: fn_asistencia_assert_puede_ver (Regla 74: el docente solo ve las asignaturas que dicta).';
 
 CREATE OR REPLACE FUNCTION academico_test.fn_asistencia_asignaturas_sesion(
     p_pk_usuario      BIGINT,
