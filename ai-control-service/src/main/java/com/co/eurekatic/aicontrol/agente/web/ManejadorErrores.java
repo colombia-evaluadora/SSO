@@ -46,6 +46,7 @@ public class ManejadorErrores {
             case ErrorAgente.SinIdentidad _ -> HttpStatus.FORBIDDEN;
             case ErrorAgente.PeticionInvalida _ -> HttpStatus.BAD_REQUEST;
             case ErrorAgente.TurnoEnCurso _ -> HttpStatus.CONFLICT;
+            case ErrorAgente.TurnoCancelado _ -> HttpStatus.CONFLICT;
         };
     }
 

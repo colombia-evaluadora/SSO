@@ -1,5 +1,6 @@
 package com.co.eurekatic.aicontrol.agente.nucleo.turno;
 
+import com.co.eurekatic.aicontrol.agente.comun.ErrorAgente;
 import com.co.eurekatic.aicontrol.agente.comun.UsuarioAgente;
 import com.co.eurekatic.aicontrol.agente.memoria.NotaDeMemoria;
 import com.co.eurekatic.aicontrol.agente.nucleo.AccionPropuesta;
@@ -31,6 +32,7 @@ import java.util.stream.Collectors;
 public class AgenteService {
 
     static final String MENSAJE_SIN_PERMISO = "No tienes permiso para hacer esa acción desde el asistente.";
+    static final String MENSAJE_CANCELADO = "Cancelaste la petición.";
     static final String MENSAJE_DATOS_CONCRETOS = "Para preparar esa acción dime los datos concretos que quieres usar "
             + "(por ejemplo el valor del campo que falta) y la preparo.";
     static final String TEXTO_CONFIRMACION = NotaDeMemoria.PREFIJO_CONFIRMACION + "%s";
@@ -84,13 +86,25 @@ public class AgenteService {
      */
     public RespuestaAgente procesar(UUID conversacionId, UsuarioAgente usuario, String texto, String contextoUiJson,
                                     ObservadorTurno observador) {
-        try (TurnosEnCurso.Turno _ = enCurso.abrir(usuario.userId())) {
-            return procesarReservado(conversacionId, usuario, texto, contextoUiJson, observador);
+        try (TurnosEnCurso.Turno reserva = enCurso.abrir(usuario.userId(), conversacionId)) {
+            return procesarReservado(conversacionId, usuario, texto, contextoUiJson, observador, reserva.senal());
         }
     }
 
+    /**
+     * Corta el turno en curso de la conversacion y libera la reserva del usuario.
+     *
+     * @return false si no habia un turno en marcha en esa conversacion
+     * @throws com.co.eurekatic.aicontrol.agente.comun.ErrorAgente.ConversacionNoEncontrada si no es propia
+     */
+    public boolean cancelar(UUID conversacionId, UsuarioAgente usuario) {
+        conversaciones.verificar(conversacionId, usuario);
+        return enCurso.cancelar(usuario.userId(), conversacionId);
+    }
+
     private RespuestaAgente procesarReservado(UUID conversacionId, UsuarioAgente usuario, String texto,
-                                              String contextoUiJson, ObservadorTurno observador) {
+                                              String contextoUiJson, ObservadorTurno observador,
+                                              SenalCancelacion senal) {
         long inicio = System.nanoTime();
         TrazaTurno traza = TrazaTurno.iniciar(conversacionId, observador);
         conversaciones.activa(conversacionId, usuario);
@@ -110,12 +124,13 @@ public class AgenteService {
                 yield bloqueada.respuesta();
             }
             case Preparacion.Listo listo ->
-                    turno(conversacionId, usuario, listo, contextoUiJson, seudonimos, traza, inicio);
+                    turno(conversacionId, usuario, listo, contextoUiJson, seudonimos, traza, inicio, observador, senal);
         };
     }
 
     private RespuestaAgente turno(UUID conversacionId, UsuarioAgente usuario, Preparacion.Listo listo,
-                                  String contextoUiJson, TablaSeudonimos seudonimos, TrazaTurno traza, long inicio) {
+                                  String contextoUiJson, TablaSeudonimos seudonimos, TrazaTurno traza, long inicio,
+                                  ObservadorTurno observador, SenalCancelacion senal) {
         traza.pasar(EstadoTurno.INTENCION);
         traza.anotar(listo.intencion());
         RegistradorTurno.Inicio arranque = registrador.iniciar(conversacionId, listo.textoNormalizado());
@@ -144,19 +159,28 @@ public class AgenteService {
                 listo.menus(), seudonimos);
         Optional<BorradorAccion> borrador = borradores.cargar(conversacionId);
         String dichoPorLaPersona = registrador.dichoPorLaPersona(conversacionId);
-        ResultadoBucle resultado = bucle.ejecutar(new BucleAgente.Entrada(
-                usuario,
-                conversacionId,
-                arranque.mensajeId(),
-                dichoPorLaPersona,
-                prompts.mensajes(arranque.historial(),
-                        listo.textoNormalizado() + equivalencias(dichoPorLaPersona, seudonimos)
-                                + notaDeBorrador(borrador, listo),
-                        contextoUiJson),
-                listo.callbacks(),
-                contexto,
-                texto -> GuardaDeAfirmaciones.objecion(texto)
-                        .or(() -> preguntaSinConsultar(texto, contexto))));
+        ResultadoBucle resultado;
+        try {
+            resultado = bucle.ejecutar(new BucleAgente.Entrada(
+                    usuario,
+                    conversacionId,
+                    arranque.mensajeId(),
+                    dichoPorLaPersona,
+                    prompts.mensajes(arranque.historial(),
+                            listo.textoNormalizado() + equivalencias(dichoPorLaPersona, seudonimos)
+                                    + notaDeBorrador(borrador, listo),
+                            contextoUiJson),
+                    listo.callbacks(),
+                    contexto,
+                    texto -> GuardaDeAfirmaciones.objecion(texto)
+                            .or(() -> preguntaSinConsultar(texto, contexto)),
+                    observador,
+                    senal));
+        } catch (ErrorAgente.TurnoCancelado cancelado) {
+            // El historial queda con su respuesta: sin ella el siguiente turno ve dos mensajes seguidos de la persona.
+            return cerrar(conversacionId, usuario, new RespuestaAgente.Respuesta(MENSAJE_CANCELADO), Consumo.NINGUNO,
+                    seudonimos, traza, arranque.mensajeId());
+        }
         contexto.borrador().ifPresent(intento -> borradores.guardar(conversacionId, borrador, intento));
         Consumo consumo = new Consumo(resultado.uso(), resultado.modelo(), milisegundosDesde(inicio));
         RespuestaAgente respuesta = switch (resultado) {

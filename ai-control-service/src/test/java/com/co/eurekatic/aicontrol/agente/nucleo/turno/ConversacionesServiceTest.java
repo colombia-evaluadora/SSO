@@ -5,6 +5,7 @@ import com.co.eurekatic.aicontrol.agente.comun.UsuarioAgente;
 import com.co.eurekatic.aicontrol.agente.persistencia.conversacion.ConversacionStore;
 import com.co.eurekatic.aicontrol.agente.persistencia.conversacion.ConversacionStore.Conversacion;
 import com.co.eurekatic.aicontrol.agente.persistencia.conversacion.EstadoConversacion;
+import com.co.eurekatic.aicontrol.agente.persistencia.accion.AccionPendienteStore;
 import com.co.eurekatic.aicontrol.agente.persistencia.mensaje.MensajeStore;
 import com.co.eurekatic.aicontrol.agente.seguridad.seudonimos.AlmacenSeudonimos;
 import org.junit.jupiter.api.BeforeEach;
@@ -34,7 +35,8 @@ class ConversacionesServiceTest {
     @BeforeEach
     void setUp() {
         store = mock(ConversacionStore.class);
-        servicio = new ConversacionesService(store, mock(MensajeStore.class), mock(AlmacenSeudonimos.class));
+        servicio = new ConversacionesService(store, mock(MensajeStore.class), mock(AlmacenSeudonimos.class),
+                mock(AccionPendienteStore.class));
     }
 
     @Test

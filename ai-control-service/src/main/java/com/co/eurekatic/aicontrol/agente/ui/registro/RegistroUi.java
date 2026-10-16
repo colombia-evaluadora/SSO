@@ -39,6 +39,11 @@ public final class RegistroUi {
         return pantallas.stream().filter(p -> menus.containsKey(p.menuCodigo())).toList();
     }
 
+    /** Formularios registrados de menus que el usuario ve. */
+    public List<FormularioRegistrado> formulariosVisibles(Map<String, AccesoMenu> menus) {
+        return formularios.values().stream().filter(f -> menus.containsKey(f.menuCodigo())).toList();
+    }
+
     public Optional<FormularioRegistrado> formulario(String codigo) {
         return Optional.ofNullable(formularios.get(codigo));
     }
