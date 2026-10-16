@@ -35,13 +35,13 @@ WORKDIR /workspace
 
 ENV MAVEN_ARGS="-B -ntp -Dmaven.wagon.http.retryHandler.count=5 -Daether.connector.http.retryHandler.count=5 -Daether.connector.http.retryHandler.serviceUnavailable=429,502,503,504"
 
-COPY --parents pom.xml */pom.xml ./
+COPY --parents pom.xml */pom.xml common/*/pom.xml ./
 RUN test -n "${MODULE}" && test -f "${MODULE}/pom.xml" \
     && mvn -q -pl "${MODULE}" -am dependency:go-offline
 
 # common se copia siempre: lo usan todos menos eurekaserver, y a este solo le
 # cuesta invalidar su cache cuando cambia common.
-COPY common/src common/src
+COPY --parents common/*/src ./
 COPY ${MODULE}/src ${MODULE}/src
 RUN mvn -q -pl "${MODULE}" -am clean package -DskipTests \
     && java -Djarmode=tools -jar "${MODULE}/target/${MODULE}.jar" \

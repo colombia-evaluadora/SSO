@@ -39,11 +39,11 @@ WORKDIR /workspace
 
 # Todos los pom.xml del repo con su ruta: un modulo nuevo no obliga a
 # tocar este fichero (ver docker/java-service.Dockerfile).
-COPY --parents pom.xml */pom.xml ./
+COPY --parents pom.xml */pom.xml common/*/pom.xml ./
 
 RUN mvn -B -ntp -Dmaven.wagon.http.retryHandler.count=5 -Daether.connector.http.retryHandler.count=5 -Daether.connector.http.retryHandler.serviceUnavailable=429,502,503,504 -pl api-gateway -am dependency:go-offline -q
 
-COPY common/src common/src
+COPY --parents common/*/src ./
 COPY api-gateway/src api-gateway/src
 
 # Stage the SPA dist into the gateway's static resources. The
