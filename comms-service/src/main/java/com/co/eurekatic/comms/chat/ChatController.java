@@ -69,8 +69,10 @@ public class ChatController {
     }
 
     @GetMapping("/personas")
-    public Filas<Persona> personas(HttpServletRequest r, @RequestParam(required = false) String q) {
-        return new Filas<>(chat.personas(Usuario.de(r), q));
+    public Filas<Persona> personas(HttpServletRequest r, @RequestParam(required = false) String q,
+                                   @RequestParam(required = false) Integer limite,
+                                   @RequestParam(required = false) Integer desde) {
+        return new Filas<>(chat.personas(Usuario.de(r), q, limite, desde));
     }
 
     @PostMapping("/conversaciones")
