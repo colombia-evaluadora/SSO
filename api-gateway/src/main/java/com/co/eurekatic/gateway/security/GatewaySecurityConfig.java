@@ -260,6 +260,10 @@ public class GatewaySecurityConfig {
                         // saber si hay red antes de tener sesion o con ella
                         // vencida. El resto de /api/eval-col/** sigue con JWT.
                         .pathMatchers(HttpMethod.GET, "/api/eval-col/health").permitAll()
+                        // Handshake del WebSocket de comms-service: el navegador no
+                        // puede mandar Bearer; lo autentica el ticket de un solo uso
+                        // (POST /api/comms/ws-ticket, que si exige JWT).
+                        .pathMatchers(HttpMethod.GET, "/api/comms/ws").permitAll()
                         .pathMatchers("/actuator/health", "/actuator/health/**",
                                 "/actuator/info").permitAll()
                         // OpenAPI aggregator — Swagger UI + merged doc + webjars.

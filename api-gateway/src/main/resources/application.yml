@@ -344,6 +344,38 @@ spring:
               filters:
                 - StripPrefix=1
                 - AddResponseHeader=X-Source, api-gateway
+            # ─── comms-service: tiempo real y chat ───
+            # WebSocket /api/comms/ws?ticket=... (sin Bearer: el ticket de un
+            # solo uso lo autentica dentro del servicio; permitAll en
+            # GatewaySecurityConfig). Va antes de la ruta HTTP de /api/comms.
+            - id: api-comms-ws
+              uri: lb:ws://comms-service
+              order: -2
+              predicates:
+                - Path=/api/comms/ws
+              filters:
+                - StripPrefix=1
+            # POST /api/comms/ws-ticket (Bearer) -> /comms/ws-ticket.
+            - id: api-comms
+              uri: lb://comms-service
+              order: -1
+              predicates:
+                - Path=/api/comms/**
+              filters:
+                - StripPrefix=1
+                - AddResponseHeader=X-Source, api-gateway
+            # Chat: el front lo llama con su cliente de eval-col
+            # (/api/eval-col/comunicaciones/...). order -1 le gana a la ruta
+            # dinamica del catalogo para /api/eval-col/**. StripPrefix=2 deja
+            # /comunicaciones/..., donde escucha el controlador.
+            - id: api-comms-chat
+              uri: lb://comms-service
+              order: -1
+              predicates:
+                - Path=/api/eval-col/comunicaciones/**
+              filters:
+                - StripPrefix=2
+                - AddResponseHeader=X-Source, api-gateway
             # ─── notification-service: bandeja, preferencias y push ───
             # GET /api/notificaciones?cursor&limit&categoria&estado&texto,
             # /contador, /{id}/leida, /leer-todas, /{id}/archivar,
