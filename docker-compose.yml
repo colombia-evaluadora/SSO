@@ -1526,8 +1526,9 @@ services:
     restart: unless-stopped
     logging: *default-logging
     # Sin limite tomaba el 90 % de la RAM del host; bajo-consumo.xml se
-    # queda en el 75 % de este valor.
-    mem_limit: ${CDC_CLICKHOUSE_MEM_LIMIT:-1536m}
+    # queda en el 75 % de este valor. Con 1536m los merges llegaban al tope
+    # en rafagas de 40-80 logins/s y rechazaban inserciones de cdc-worker.
+    mem_limit: ${CDC_CLICKHOUSE_MEM_LIMIT:-2560m}
     security_opt:
       - no-new-privileges:true
     # El entrypoint baja de root al usuario clickhouse y ajusta el dueno de
