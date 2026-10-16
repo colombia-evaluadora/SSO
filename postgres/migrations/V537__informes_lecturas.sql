@@ -1204,3 +1204,48 @@ $function$;
 
 COMMENT ON FUNCTION academico_test.fn_informe_grupo_listar(BIGINT, BIGINT, BIGINT[], CHARACTER VARYING)
     IS 'POST /informes/grupo: listado principal de informes, una fila por (estudiante, periodo) del grupo; el Final se pide metiendo -1 en PERIODOS. Gate INFORMES/VER sobre la sede y jornada del grupo, recorte a grupos propios para quien solo tiene roles de grupo, y delega en fn_informe_grupo_listar_interno, donde esta documentado el contrato de la salida. Lo reutilizan el reporte, la tabla, el formativo y el boletin, que heredan este gate.';
+
+CREATE OR REPLACE FUNCTION academico_test.fn_informe_ultima_actualizacion_listar(
+    p_pk_usuario_solicitante BIGINT,
+    p_fk_tgrupo              BIGINT,
+    p_fk_periodos_evaluacion BIGINT[] DEFAULT NULL
+)
+RETURNS TABLE (fk_tmatricula BIGINT, fk_tperiodo_evaluacion BIGINT, ultima_actualizacion TIMESTAMPTZ)
+LANGUAGE plpgsql
+STABLE
+AS $function$
+DECLARE
+    v_fk_sede    BIGINT;
+    v_fk_jornada BIGINT;
+    v_fk_ee      BIGINT;
+BEGIN
+    SELECT s.PK_TSEDE, gr.FK_TLV_JORNADA, s.FK_TESTABLECIMIENTO
+      INTO v_fk_sede, v_fk_jornada, v_fk_ee
+      FROM academico_test.TGRUPO gr
+      JOIN academico_test.TGRADO gd ON gd.PK_TGRADO = gr.FK_TGRADO
+      JOIN academico_test.TPERIODO_ACADEMICO pa
+        ON pa.PK_TPERIODO_ACADEMICO = gd.FK_TPERIODO_ACADEMICO
+      JOIN academico_test.TSEDE s ON s.PK_TSEDE = pa.FK_TSEDE
+     WHERE gr.PK_TGRUPO = p_fk_tgrupo
+       AND gr.ACTIVE = TRUE;
+
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'No se encontro el grupo solicitado'
+            USING ERRCODE = 'P0002';
+    END IF;
+
+    PERFORM academico_test.fn_assert_permiso_seccion(
+        p_pk_usuario_solicitante, 'INFORMES', 'VER',
+        v_fk_ee, v_fk_sede, v_fk_jornada
+    );
+    PERFORM academico_test.fn_informe_assert_grupo_propio(
+        p_pk_usuario_solicitante, p_fk_tgrupo);
+
+    RETURN QUERY
+    SELECT * FROM academico_test.fn_informe_ultima_actualizacion_interno(
+                      p_fk_tgrupo, p_fk_periodos_evaluacion);
+END;
+$function$;
+
+COMMENT ON FUNCTION academico_test.fn_informe_ultima_actualizacion_listar(BIGINT, BIGINT, BIGINT[])
+    IS 'POST /informes/ultima-actualizacion: la fecha del ultimo guardado de cada (estudiante, periodo) del grupo, aparte del listado principal para no cambiar la forma de /informes/grupo, que reutilizan el reporte y los boletines. Mismo gate que fn_informe_grupo_listar (INFORMES/VER sobre la sede y jornada del grupo y recorte a grupos propios) y delega en fn_informe_ultima_actualizacion_interno, donde esta el contrato.';
