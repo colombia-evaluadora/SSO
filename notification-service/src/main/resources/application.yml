@@ -145,6 +145,21 @@ notif:
   # WARN and disable itself, never block startup. Read by
   # ProviderRegistry.
   fail-on-missing-credentials: false
+  # Rutas de usuario (/notificaciones/**): se verifica la firma del Bearer con
+  # la clave publica del SSO, como ai-control-service. Sin ella esas rutas
+  # responden 503 y el envio por colas sigue igual.
+  jwt:
+    public-key: ${JWT_PUBLIC_KEY:}
+    issuer: sso-postgres
+  # Bandeja de notificaciones (V7).
+  bandeja:
+    cola-eventos: ${NOTIF_COLA_EVENTOS:notif.eventos}
+    zona-por-defecto: ${NOTIF_ZONA_POR_DEFECTO:America/Bogota}
+    retencion-leidas-dias: ${NOTIF_RETENCION_LEIDAS_DIAS:90}
+    retencion-no-leidas-dias: ${NOTIF_RETENCION_NO_LEIDAS_DIAS:180}
+  # Exchange donde comms-service recoge los eventos de tiempo real.
+  realtime:
+    exchange: ${NOTIF_REALTIME_EXCHANGE:comms.realtime}
   # Auto-refresh of provider_config from the DB.
   provider-config:
     refresh-interval-ms: 30000
