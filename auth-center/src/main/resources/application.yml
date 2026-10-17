@@ -176,6 +176,12 @@ sso:
       # independent (e.g. a FLUSHDB scoped to one prefix doesn't
       # affect the other).
       key-prefix: sso:session:user-roles
+      # RoleChangeListener: LISTEN on sso_user_roles_changed, which a
+      # trigger on public.role_users fires on commit, and drop that
+      # email's cached roles. Covers revocations made from SQL
+      # (query-service), not only those made through sso-admin.
+      listener:
+        enabled: ${SSO_SESSION_USER_ROLES_LISTENER_ENABLED:true}
       # Shared secret that gates POST /internal/cache/user-roles/{email}.
       # sso-admin includes it as the X-Session-Cache-Secret header
       # after every role / group binding mutation. MUST be set

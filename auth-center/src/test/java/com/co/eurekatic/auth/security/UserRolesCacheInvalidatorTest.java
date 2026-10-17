@@ -6,10 +6,16 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.dao.QueryTimeoutException;
+import org.springframework.data.redis.core.Cursor;
+import org.springframework.data.redis.core.ScanOptions;
 import org.springframework.data.redis.core.StringRedisTemplate;
 
+import java.util.List;
+
 import static org.assertj.core.api.Assertions.assertThatCode;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -61,6 +67,31 @@ class UserRolesCacheInvalidatorTest {
         invalidator.invalidate("   ");
 
         verify(redis, never()).delete(org.mockito.ArgumentMatchers.anyString());
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void invalidateAllDeletesEveryKeyUnderThePrefix() {
+        Cursor<String> cursor = mock(Cursor.class);
+        when(cursor.hasNext()).thenReturn(true, true, false);
+        when(cursor.next()).thenReturn(
+                "sso:session:user-roles:a@example.com",
+                "sso:session:user-roles:b@example.com");
+        when(redis.scan(any(ScanOptions.class))).thenReturn(cursor);
+
+        invalidator.invalidateAll();
+
+        verify(redis).delete(List.of(
+                "sso:session:user-roles:a@example.com",
+                "sso:session:user-roles:b@example.com"));
+    }
+
+    @Test
+    void invalidateAllSwallowsRedisErrors() {
+        when(redis.scan(any(ScanOptions.class)))
+                .thenThrow(new QueryTimeoutException("redis down"));
+
+        assertThatCode(() -> invalidator.invalidateAll()).doesNotThrowAnyException();
     }
 
     @Test

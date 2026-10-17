@@ -47,11 +47,12 @@
             <artifactId>spring-cloud-starter-netflix-eureka-client</artifactId>
         </dependency>
 
-        <!-- Runtime DB driver; test scope replaces with H2 below. -->
+        <!-- DB driver. Compile scope (not runtime) because RoleChangeListener
+             uses PGConnection.getNotifications for LISTEN/NOTIFY; tests still
+             run on H2 via the datasource URL. -->
         <dependency>
             <groupId>org.postgresql</groupId>
             <artifactId>postgresql</artifactId>
-            <scope>runtime</scope>
         </dependency>
 
         <!-- Backing store for the refresh-token flow (RedisRefreshTokenStore).
